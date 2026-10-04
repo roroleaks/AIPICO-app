@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import PDFDocument from "pdfkit";
 import { validateDeliverableIntegrity } from "@/lib/deliverable-integrity";
 import type { AuditableRef } from "@/lib/relevance";
@@ -22,6 +23,42 @@ interface PdfPayload {
   retainedReferences?: AuditableRef[];
 }
 
+const picoRowSchema = z.object({
+  label: z.string().max(200),
+  value: z.string().max(1000),
+});
+
+const pdfSectionSchema = z.object({
+  heading: z.string().max(200).optional().nullable(),
+  blocks: z.array(z.string().max(10000)),
+});
+
+const auditableRefSchema = z.object({
+  pmid: z.string().max(50).optional().nullable(),
+  title: z.string().max(1000),
+  authors: z.string().max(1000).optional().nullable(),
+  year: z.string().max(50).optional().nullable(),
+  journal: z.string().max(500).optional().nullable(),
+  doi: z.string().max(500).optional().nullable(),
+  url: z.string().max(1000).optional().nullable(),
+  context: z.string().max(20000).optional().nullable(),
+  source: z.string().max(100).optional().nullable(),
+  crossrefId: z.string().max(100).optional().nullable(),
+  openAlexId: z.string().max(100).optional().nullable(),
+});
+
+const pdfPayloadSchema = z.object({
+  docType: z.string().max(100).optional().nullable(),
+  title: z.string().min(1).max(500),
+  meta: z.string().max(500).optional().nullable(),
+  pico: z.array(picoRowSchema).optional().nullable(),
+  outcomes: z.array(z.string().max(500)).optional().nullable(),
+  keywords: z.array(z.string().max(100)).optional().nullable(),
+  sections: z.array(pdfSectionSchema).optional().nullable(),
+  references: z.array(z.string().max(2000)).optional().nullable(),
+  retainedReferences: z.array(auditableRefSchema).optional().nullable(),
+});
+
 const BODY_MAX = 400_000;
 
 export async function POST(req: Request) {
@@ -42,28 +79,16 @@ export async function POST(req: Request) {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return NextResponse.json({ error: "Request body must be a JSON object." }, { status: 400 });
     }
-    const body = parsed as PdfPayload;
-    if (typeof body.title !== "string" || !body.title.trim()) {
-      return NextResponse.json({ error: "Missing document title." }, { status: 400 });
-    }
-    // Type-check the collection fields before they reach the gate or the renderer. Coercing a
-    // caller-supplied object into a reference string, or a bare string into a reference list,
-    // would produce a document whose provenance cannot be verified.
-    for (const key of ["references", "retainedReferences", "sections", "keywords", "outcomes", "pico"] as const) {
-      const v = body[key];
-      if (v !== undefined && v !== null && !Array.isArray(v)) {
-        return NextResponse.json(
-          { error: `Field "${key}" must be an array.` },
-          { status: 400 }
-        );
-      }
-    }
-    if (Array.isArray(body.references) && body.references.some(r => typeof r !== "string")) {
+
+    const parseResult = pdfPayloadSchema.safeParse(parsed);
+    if (!parseResult.success) {
       return NextResponse.json(
-        { error: "Field \"references\" must contain only strings." },
+        { error: "Invalid parameters: " + parseResult.error.issues.map(e => e.message).join(", ") },
         { status: 400 }
       );
     }
+    const body = parseResult.data;
+
     // A caller that asks for a document with neither narrative sections nor references is asking
     // for a titled PDF with no content, which is misleading rather than merely empty. This must
     // not depend on whether `references` was sent as [] or omitted entirely: the two mean the
@@ -85,7 +110,7 @@ export async function POST(req: Request) {
       const integrity = validateDeliverableIntegrity({
         fields: {},
         references: body.references,
-        retainedRecords: Array.isArray(body.retainedReferences) ? body.retainedReferences : [],
+        retainedRecords: Array.isArray(body.retainedReferences) ? (body.retainedReferences as unknown as AuditableRef[]) : [],
         exportReferences: body.references
       });
       if (!integrity.ok) {

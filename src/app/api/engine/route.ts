@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { KB, QUESTION_TYPES, rationalOutcomes, type Analysis } from "@/lib/kb";
 import { ruleAnalyze, ruleClarify, ruleFormulate } from "@/lib/rule-engine";
 // Claim-specific filtering boundary. The engine imports these rather than keeping its own
@@ -619,6 +620,46 @@ function formulated(f: ReturnType<typeof ruleFormulate>): NextResponse {
   );
 }
 
+const analysisZodSchema = z.object({
+  specialty: z.string().max(100).nullable().optional(),
+  specialtyLabel: z.string().max(100).optional(),
+  condition: z.string().max(1000).optional().nullable(),
+  intervention: z.string().max(1000).optional().nullable(),
+  comparator: z.string().max(1000).optional().nullable(),
+  questionType: z.string().max(100).optional().nullable(),
+  framework: z.string().max(100).optional().nullable(),
+  missing: z.array(z.string().max(100)).optional().nullable(),
+  interpretation: z.string().max(2000).optional().nullable(),
+  source: z.string().max(50).optional().nullable(),
+});
+
+const intentGapSchema = z.object({
+  stage: z.enum(["intent", "gap"]),
+  input: z.string().max(2000).optional().nullable(),
+});
+
+const clarifyFormulateSchema = z.object({
+  stage: z.enum(["clarify", "formulate"]),
+  analysis: analysisZodSchema.optional().nullable(),
+  answered: z.record(z.string(), z.string().max(1000)).optional().nullable(),
+});
+
+const commentaryZodSchema = z.object({
+  stage: z.literal("commentary"),
+  topic: z.string().max(2000).optional().nullable(),
+  gapAnalysis: z.object({
+    known: z.array(z.any()).optional().nullable(),
+    uncertain: z.array(z.any()).optional().nullable(),
+  }).optional().nullable(),
+  selectedQuestion: z.string().max(1000).optional().nullable(),
+  outcome: z.string().max(1000).optional().nullable(),
+  outcomes: z.array(z.string().max(1000)).optional().nullable(),
+  picoElements: z.array(z.object({
+    label: z.string().max(200),
+    value: z.string().max(2000),
+  })).optional().nullable(),
+});
+
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
   try {
@@ -626,7 +667,37 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
-  const stage = body.stage as "intent" | "clarify" | "formulate" | "gap" | "commentary";
+
+  const stageSchema = z.object({
+    stage: z.enum(["intent", "clarify", "formulate", "gap", "commentary"]),
+  });
+
+  const baseResult = stageSchema.safeParse(body);
+  if (!baseResult.success) {
+    return NextResponse.json(
+      { error: "Invalid stage parameter: " + baseResult.error.issues.map(e => e.message).join(", ") },
+      { status: 400 }
+    );
+  }
+  const stage = baseResult.data.stage;
+
+  if (stage === "intent" || stage === "gap") {
+    const res = intentGapSchema.safeParse(body);
+    if (!res.success) {
+      return NextResponse.json({ error: "Invalid parameters: " + res.error.issues.map(e => e.message).join(", ") }, { status: 400 });
+    }
+  } else if (stage === "clarify" || stage === "formulate") {
+    const res = clarifyFormulateSchema.safeParse(body);
+    if (!res.success) {
+      return NextResponse.json({ error: "Invalid parameters: " + res.error.issues.map(e => e.message).join(", ") }, { status: 400 });
+    }
+  } else if (stage === "commentary") {
+    const res = commentaryZodSchema.safeParse(body);
+    if (!res.success) {
+      return NextResponse.json({ error: "Invalid parameters: " + res.error.issues.map(e => e.message).join(", ") }, { status: 400 });
+    }
+  }
+
   try {
     if (stage === "commentary") {
       const { topic, gapAnalysis, selectedQuestion, outcome, outcomes, picoElements } = body as {

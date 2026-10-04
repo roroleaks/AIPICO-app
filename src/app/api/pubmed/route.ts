@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 
 // Candidate fallback plus rate-limit backoff can legitimately take longer than one probe.
 export const maxDuration = 60;
@@ -23,9 +24,10 @@ interface ESummaryDoc {
 }
 
 const API_TIMEOUT_MS = 12_000;
-// NCBI allows 3 requests/second without an api_key. Exceeding it returns 429, and a single
-// throttled call previously surfaced as a generic "search failed" to the user.
-const NCBI_MIN_INTERVAL_MS = 400;
+// NCBI allows 3 requests/second without an api_key, or 10 requests/second with one.
+// Exceeding it returns 429, and a single throttled call previously surfaced as a generic "search failed".
+const NCBI_API_KEY = process.env.NCBI_API_KEY || process.env.PUBMED_API_KEY || "";
+const NCBI_MIN_INTERVAL_MS = NCBI_API_KEY ? 100 : 400;
 let lastEutilsAt = 0;
 
 async function throttleEutils() {
@@ -36,9 +38,11 @@ async function throttleEutils() {
 
 async function eutilsFetch(url: string, attempts = 4): Promise<Response> {
   let lastStatus = 0;
+  const apiKeyParam = NCBI_API_KEY ? `&api_key=${NCBI_API_KEY}` : "";
+  const finalUrl = url.includes("?") ? `${url}${apiKeyParam}` : `${url}?${apiKeyParam.slice(1)}`;
   for (let attempt = 0; attempt < attempts; attempt++) {
     await throttleEutils();
-    const res = await fetch(url, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
+    const res = await fetch(finalUrl, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
     if (res.status === 429 || res.status === 503) {
       lastStatus = res.status;
       // Never sleep after the final attempt.
@@ -70,20 +74,37 @@ function toPhrase(v: string | undefined): string {
   return cleaned.includes(" ") ? `"${cleaned}"` : cleaned;
 }
 
+const pubmedSchema = z.object({
+  population: z.string().max(500).optional().nullable(),
+  outcome: z.string().max(500).optional().nullable(),
+  intervention: z.string().max(500).optional().nullable(),
+  comparator: z.string().max(500).optional().nullable(),
+});
+
 export async function POST(req: NextRequest) {
-  let body: Record<string, string | undefined>;
+  let json: unknown;
   try {
-    body = await req.json();
+    json = await req.json();
   } catch {
     // Every error path here used to answer 200, so monitoring and uptime checks saw a
     // permanently healthy endpoint. The client reads `error` from the body either way, so
     // these statuses make the failures observable without changing what the UI renders.
     return NextResponse.json({ results: [], error: "Invalid JSON body" }, { status: 400 });
   }
-  const population = toPhrase(body.population);
-  const outcome = toPhrase(body.outcome);
-  const interventionPhrase = toPhrase(body.intervention);
-  const comparatorPhrase = toPhrase(body.comparator);
+
+  const parseResult = pubmedSchema.safeParse(json);
+  if (!parseResult.success) {
+    return NextResponse.json(
+      { results: [], error: "Invalid parameters: " + parseResult.error.issues.map(e => e.message).join(", ") },
+      { status: 400 }
+    );
+  }
+  const body = parseResult.data;
+
+  const population = toPhrase(body.population || undefined);
+  const outcome = toPhrase(body.outcome || undefined);
+  const interventionPhrase = toPhrase(body.intervention || undefined);
+  const comparatorPhrase = toPhrase(body.comparator || undefined);
   const interventionClause = interventionPhrase
     ? `(${interventionPhrase}[tiab]${comparatorPhrase ? ` OR ${comparatorPhrase}[tiab]` : ""})`
     : "";
