@@ -9,19 +9,16 @@
 
 ## 1. Status
 
-**FAIL — not releasable in its current state.** (Steps 1–6 of 10 complete.)
+**FAIL — not releasable in its current state.** (Steps 1–7 of 10 complete.)
 
 The deterministic evidence core is genuinely well built and verified: the claim-filter →
 evidence-set → finalization → reconciliation → export chain is fully wired from a single
-retained set, all 204 tests pass, and typecheck/lint/build are clean. No secrets are exposed
+retained set, all 208 tests pass, and typecheck/lint/build are clean. No secrets are exposed
 anywhere in the tree or in the entire Git history, and error handling degrades gracefully
 without leaking internals.
 
-**11 open defects** remain, led by:
+**7 open defects** remain, led by:
 
-- **4 MEDIUM** functional defects: a tokenizer that silently splits canonical clinical phrases and
-  degrades evidence recall (F-07), a per-token length cap gap (F-06), and phrase-level alias and
-  CoQ10 normalization defects (F-08, F-09);
 - the desktop build still has **no way to obtain an AI provider key** (F-23), so every install is
   limited to the deterministic evidence list;
 - two GitHub PATs that must be revoked before release (F-21).
@@ -63,6 +60,16 @@ without leaking internals.
   replaced it with the uncertainty boilerplate: on a real commentary it produced 17 stripped
   claims, the same 33-word sentence repeated 7 times in one paragraph, and stray `2026).`
   fragments published in the reader-facing text.
+- **F-06, F-07, F-08, F-09 (was MEDIUM / MEDIUM-HIGH)** — complete parser phrase-splitting,
+  tokenization protection, alias correction inside sub-phrases, and consistent CoQ10 normalization resolved.
+  - F-06: Added an 80-character per-token length limit during keyword validation to reject bloated entries.
+  - F-07: Added lookahead checks in the unrecognized words run loop to avoid swallowing and splitting
+    downstream clinical phrases like "short cervix" and "preterm birth".
+  - F-08: Rewrote greedy phrase loop to match alias keys (like `"vit d"`) as sub-phrases and suggest
+    corrections inline.
+  - F-09: Removed "CoQ10" from `CLINICAL_PHRASES` so it normalizes consistently through the "coq10" alias
+    to `"coenzyme Q10"`.
+  - Added 4 new test suites comprising 6 assertions in `clinical-keywords.test.ts`. All 208 tests pass.
 
 The two audit items previously listed as impossible are now done. The provider returned HTTP 200
 for the first time during step 6, so:
@@ -455,7 +462,7 @@ response and of the whole `src` tree confirms the strings `population of interes
 `the intervention` no longer appear in any generated output — only in comments and in the test that
 asserts their absence. Suite 187 → **188**.
 
-### F-06 — MEDIUM — No per-token keyword length cap
+### F-06 — RESOLVED (was MEDIUM) — No per-token keyword length cap
 
 Input `"z"×4000 + ", short cervix, progesterone, preterm birth"` yields
 `normalizedTokens` lengths `[4000, 12, 12, 13]` with **validation error `null`** — a
@@ -463,9 +470,15 @@ Input `"z"×4000 + ", short cervix, progesterone, preterm birth"` yields
 the parser (only fuzzy-match budgets at L232/235/261).
 **Impact:** query bloat, provider throttling, malformed PICO elements, wasted LLM tokens, and
 a trivial resource-amplification vector since the value is forwarded to literature APIs.
-**Fix:** cap per-token length (~60–80 chars) and reject with the existing message style.
 
-### F-07 — MEDIUM-HIGH — Greedy word-window tokenization splits canonical phrases
+#### Resolution
+Added an 80-character per-token length limit during keyword validation in `validateKeywords`. Any token exceeding 80 characters fails validation with a professional explanatory message:
+`Please limit each keyword or phrase to a maximum of 80 characters. Your current entry contains a term that exceeds this limit.`
+
+#### Verification
+Added regression tests to `src/lib/clinical-keywords.test.ts` verifying that 100-character and 4000-character tokens are successfully rejected with the appropriate message style during validation.
+
+### F-07 — RESOLVED (was MEDIUM-HIGH) — Greedy word-window tokenization splits canonical phrases
 
 `"progesterone cerclage preterm birth short cervix"` →
 `["progesterone cerclage preterm birth short", "cervix"]`, **no validation error**.
@@ -478,9 +491,14 @@ Relatedly, `"a b c d e f g h i"` → `["b c d e f","g h i"]`, reported to the us
 **Impact:** silently corrupted keywords degrade PICO element matching and therefore evidence
 recall — the core value proposition. Comma/dash input is unaffected and the UI does steer users
 to commas, which caps severity at Medium-High rather than High.
-**Fix:** score known multi-word phrases above generic window filling.
 
-### F-08 — MEDIUM — Alias correction only matches whole tokens
+#### Resolution
+Added lookahead checks inside the unrecognized words run loop. When assembling an unrecognized run, the loop now checks if a known multi-word or single-word term starts at the current word `words[i]`. If one starts, the run breaks immediately so that the next iteration of the outer greedy loop can match that known term in its entirety. This prevents greedy unrecognized runs from swallowing and splitting downstream clinical phrases.
+
+#### Verification
+Added regression tests verifying that `"progesterone cerclage preterm birth short cervix"` successfully tokenizes into `["progesterone cerclage", "preterm birth", "short cervix"]`. All pass.
+
+### F-08 — RESOLVED (was MEDIUM) — Alias correction only matches whole tokens
 
 `ALIASES` holds exact keys `"vit d"` (L97) and `"co enzyme q 10"` (L101).
 
@@ -493,14 +511,25 @@ to commas, which caps severity at Medium-High rather than High.
 
 The documented promise (module header L14, L318) holds only for bare tokens. Common real-world
 phrasing silently receives no correction.
-**Fix:** match alias keys as sub-phrases during the phrase scan.
 
-### F-09 — LOW — Inconsistent canonicalization of `CoQ10`
+#### Resolution
+Rewrote the greedy longest phrase match loop to also check if any candidate matches keys in `ALIASES`. This lets the scanner match alias keys as sub-phrases within a larger chunk and suggest corrections inline (e.g. `"vit d"` -> `"vitamin D"`, `"co enzyme q 10"` -> `"coenzyme Q10"`).
+
+#### Verification
+Added regression tests in `src/lib/clinical-keywords.test.ts` verifying that `"vit d deficiency"` and `"co enzyme q 10 supplementation"` successfully suggest their respective canonical forms as aliases. All pass.
+
+### F-09 — RESOLVED (was LOW) — Inconsistent canonicalization of `CoQ10`
 
 `CLINICAL_PHRASES` lists `"CoQ10"` (L82) and `ALIASES` maps `"coq10" → coenzyme Q10` (L105).
 Probe `"CoQ10"` → `normalizedTokens ["CoQ10"]`, **no suggestion**, while bare `"q10"` →
 `q10 → coenzyme Q10`. Two spellings of one vitamin resolve differently, splitting evidence sets
 and PICO matching for no clinical reason.
+
+#### Resolution
+Removed `"CoQ10"` from `CLINICAL_PHRASES` so that `"CoQ10"` is no longer treated as a canonical term. Since `"coq10"` remains in `ALIASES` pointing to `"coenzyme Q10"`, any input of `"CoQ10"` (which normalizes to `"coq10"`) now correctly suggests `"coenzyme Q10"`—achieving complete consistency with bare `"q10"`.
+
+#### Verification
+Added regression tests verifying that both `"CoQ10"` and `"q10"` consistently suggest `"coenzyme Q10"`. All pass.
 
 ### F-10 — RESOLVED (was LOW) — `/api/pubmed` returned every error as HTTP 200
 

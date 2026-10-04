@@ -327,3 +327,67 @@ test("no-literature copy is exactly as specified", () => {
   assert.equal(NO_LITERATURE_MESSAGE, "No literature related to your search found");
   assert.match(NO_LITERATURE_HINT, /Try revising or broadening your keywords/);
 });
+
+test("F-06: per-token keyword length cap of 80 characters is enforced during validation", () => {
+  const longToken = "z".repeat(100);
+  const p = parseClinicalKeywords(`${longToken}, short cervix, progesterone, preterm birth`);
+  assert.equal(p.logicalCount, 4);
+  assert.ok(p.normalizedTokens.includes(longToken));
+  const err = validateKeywords(p);
+  assert.ok(err, "should fail validation due to length");
+  assert.match(err!, /maximum of 80 characters/);
+
+  // A 4000-char token should also fail validation
+  const veryLongToken = "z".repeat(4000);
+  const p2 = parseClinicalKeywords(`${veryLongToken}, short cervix, progesterone, preterm birth`);
+  assert.equal(p2.logicalCount, 4);
+  assert.ok(p2.normalizedTokens.includes(veryLongToken));
+  const err2 = validateKeywords(p2);
+  assert.ok(err2, "should fail validation");
+  assert.match(err2!, /maximum of 80 characters/);
+});
+
+test("F-07: greedy word-window tokenization does not split known phrases", () => {
+  // progesterone cerclage preterm birth short cervix
+  // should yield: progesterone cerclage (unrecognized run), preterm birth (known), short cervix (known)
+  const p = parseClinicalKeywords("progesterone cerclage preterm birth short cervix");
+  assert.equal(p.logicalCount, 3);
+  assert.deepEqual(p.normalizedTokens, ["progesterone cerclage", "preterm birth", "short cervix"]);
+
+  const p2 = parseClinicalKeywords("a b c preterm birth f g");
+  assert.equal(p2.logicalCount, 3);
+  assert.deepEqual(p2.normalizedTokens, ["b c", "preterm birth", "f g"]);
+});
+
+test("F-08: alias correction matches sub-phrases inside larger entries", () => {
+  const p = parseClinicalKeywords("vit d deficiency, short cervix, progesterone, preterm birth");
+  assert.equal(p.logicalCount, 5, p.normalizedTokens.join("|"));
+  assert.deepEqual(p.normalizedTokens, ["vit d", "deficiency", "short cervix", "progesterone", "preterm birth"]);
+  const s = p.corrections.find(c => c.from === "vit d");
+  assert.ok(s, "vit d suggestion must be found");
+  assert.equal(s!.to, "vitamin D");
+
+  const p2 = parseClinicalKeywords("co enzyme q 10 supplementation, short cervix, progesterone, preterm birth");
+  assert.equal(p2.logicalCount, 5, p2.normalizedTokens.join("|"));
+  assert.deepEqual(p2.normalizedTokens, ["co enzyme q 10", "supplementation", "short cervix", "progesterone", "preterm birth"]);
+  const s2 = p2.corrections.find(c => c.from === "co enzyme q 10");
+  assert.ok(s2, "co enzyme q 10 suggestion must be found");
+  assert.equal(s2!.to, "coenzyme Q10");
+});
+
+test("F-09: CoQ10 and q10 canonicalize consistently to coenzyme Q10", () => {
+  // CoQ10 should offer a suggestion to coenzyme Q10 rather than matching as a canonical phrase with no suggestion.
+  const p = parseClinicalKeywords("CoQ10, short cervix, progesterone, preterm birth");
+  assert.equal(p.logicalCount, 4);
+  assert.ok(p.normalizedTokens.includes("CoQ10"));
+  const s = p.corrections.find(c => c.from === "CoQ10");
+  assert.ok(s, "CoQ10 should offer a correction suggestion");
+  assert.equal(s!.to, "coenzyme Q10");
+
+  const p2 = parseClinicalKeywords("q10, short cervix, progesterone, preterm birth");
+  assert.equal(p2.logicalCount, 4);
+  assert.ok(p2.normalizedTokens.includes("q10"));
+  const s2 = p2.corrections.find(c => c.from === "q10");
+  assert.ok(s2, "q10 should offer a correction suggestion");
+  assert.equal(s2!.to, "coenzyme Q10");
+});

@@ -79,7 +79,7 @@ export const CLINICAL_PHRASES: string[] = [
   "selective cerclage", "progesterone supplementation", "neonatal morbidity",
   "gestational age", "small for gestational age", "gestational age at delivery",
   // Interventions and supplements
-  "vitamin D", "vitamin E", "vitamin C", "coenzyme Q10", "CoQ10",
+  "vitamin D", "vitamin E", "vitamin C", "coenzyme Q10",
   "omega-3", "folic acid", "iron supplementation", "tranexamic acid",
   "maternal diabetes", "maternal obesity", "twin pregnancy", "singleton pregnancy",
   "first trimester", "second trimester", "third trimester", "neonatal intensive care",
@@ -355,11 +355,14 @@ export function parseClinicalKeywords(input: string, extraVocab: string[] = []):
       let matched = false;
       for (let len = Math.min(5, words.length - i); len >= 1; len--) {
         const candidate = words.slice(i, i + len);
+        const candidateStr = candidate.join(" ");
         const phrase = phraseFor(candidate);
-        if (phrase) {
+        const alias = ALIASES[candidateStr];
+
+        if (phrase || alias) {
           const typed = candidate.join(" ");
           rawTokens.push(typed);
-          const canonical = display(phrase);
+          const canonical = phrase ? display(phrase) : display(alias);
           if (typed.toLowerCase() === canonical.toLowerCase()) {
             // Identical apart from capitalisation; nothing for the user to decide.
             normalizedTokens.push(canonical);
@@ -385,10 +388,22 @@ export function parseClinicalKeywords(input: string, extraVocab: string[] = []):
       while (i < words.length) {
         const word = words[i];
         if (STOPWORDS.has(word)) break;
-        // A recognised phrase or single recognised token starting here ends the run, so
-        // "amniotic fluid embolism cerclage" splits at "cerclage".
-        if (phraseFor([word])) break;
-        if (knownKeys.has(word)) break;
+
+        if (run.length > 0) {
+          // Stop the run if a known multi-word or single-word term starts here.
+          // This prevents greedy unrecognised runs from swallowing and splitting
+          // down-stream clinical phrases like "short cervix" or "preterm birth".
+          let termStarts = false;
+          for (let len = 1; len <= Math.min(5, words.length - i); len++) {
+            const candidate = words.slice(i, i + len).join(" ");
+            if (knownKeys.has(candidate)) {
+              termStarts = true;
+              break;
+            }
+          }
+          if (termStarts) break;
+        }
+
         run.push(word);
         i++;
         if (run.length >= 5) break;
@@ -486,6 +501,10 @@ export function keywordsToString(keywords: string[]): string {
  * range, how multi-word phrases are counted, accepted separators, and a worked example.
  */
 export function validateKeywords(parsed: ParsedKeywords): string | null {
+  if (parsed.normalizedTokens.some(t => t.length > 80)) {
+    return "Please limit each keyword or phrase to a maximum of 80 characters. Your current entry contains a term that exceeds this limit.";
+  }
+
   const { logicalCount } = parsed;
   if (logicalCount >= MIN_KEYWORDS && logicalCount <= MAX_KEYWORDS) return null;
 
