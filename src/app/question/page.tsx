@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { AnimatedProcessingIndicator } from "@/components/AnimatedProcessingIndicator";
 import { picoOutcomes, rationalOutcomes, type Analysis, type Clarification, type Formulation } from "@/lib/kb";
 import { sget, sset, KEYS } from "@/lib/session";
 import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
@@ -356,12 +357,26 @@ export default function QuestionPage() {
                   )}
                 </>
               )}
-            {busy === "clarify" && <p className="hint">⏳ Thinking…</p>}
+             {busy === "clarify" && <AnimatedProcessingIndicator message="Thinking…" />}
           </section>
         )}
 
-        {busy === "intent" && <section className="card"><p className="hint">⏳ Analyzing your clinical scenario…</p></section>}
-        {busy === "formulate" && <section className="card"><p className="hint">⏳ Formulating your clinical questions…</p></section>}
+        {busy === "intent" && (
+          <section className="card">
+            <AnimatedProcessingIndicator
+              message="Analyzing your clinical scenario…"
+              secondaryMessage="This should take just a moment."
+            />
+          </section>
+        )}
+        {busy === "formulate" && (
+          <section className="card">
+            <AnimatedProcessingIndicator
+              message="Formulating your clinical questions…"
+              secondaryMessage="Refining the PICO parameters against clinical guidelines."
+            />
+          </section>
+        )}
 
         <div className="row"><button className="link" onClick={() => router.push("/")}>← Start over</button></div>
       </main>

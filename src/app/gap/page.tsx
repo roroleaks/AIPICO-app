@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { AnimatedProcessingIndicator } from "@/components/AnimatedProcessingIndicator";
 import { sget, sset, KEYS } from "@/lib/session";
 import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
 import { NO_LITERATURE_MESSAGE, NO_LITERATURE_HINT } from "@/lib/clinical-keywords";
@@ -144,7 +145,12 @@ export default function GapPage() {
 
       <main className="solo">
         {!gap && !error && (
-          <section className="card"><p className="hint">⏳ Mapping the evidence — this usually takes 20–60 seconds…</p></section>
+          <section className="card">
+            <AnimatedProcessingIndicator
+              message="Mapping the evidence"
+              secondaryMessage="Retrieving studies from PubMed, filtering for PICO relevance, and constructing the clinical evidence map. This usually takes 20–60 seconds..."
+            />
+          </section>
         )}
         {error && (
           <section className="card"><div className="advisory">⚠️ {error}</div>

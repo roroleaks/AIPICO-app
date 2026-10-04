@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { AnimatedProcessingIndicator } from "@/components/AnimatedProcessingIndicator";
 import type { Formulation } from "@/lib/kb";
 import { sget, sset, KEYS } from "@/lib/session";
 import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
@@ -511,8 +512,18 @@ ${bibliography}
                 {commentary && <button className="secondary" disabled={!!exporting} onClick={exportCommentaryToPDF}>{exporting === "commentary" ? "⏳ Generating commentary PDF…" : "🖨️ Download Commentary PDF"}</button>}
               </div>
             </div>
-            {!commentary && commentaryLoading && <p className="hint">⏳ Writing your scientific commentary — abstract, keywords, discussion, conclusion and Chicago-style references…</p>}
-            {commentaryLoading && commentary && <p className="hint" style={{ marginTop: 12 }}>⏳ Regenerating commentary and references for the selected PICO option…</p>}
+            {!commentary && commentaryLoading && (
+              <AnimatedProcessingIndicator
+                message="Writing your scientific commentary"
+                secondaryMessage="Drafting background abstract, keywords, introduction, detailed thematic discussion, clinical conclusion, and Chicago-style references from direct evidence..."
+              />
+            )}
+            {commentaryLoading && commentary && (
+              <AnimatedProcessingIndicator
+                message="Regenerating commentary and references"
+                secondaryMessage="Re-evaluating direct evidence and drafting a new commentary for the newly selected PICO option..."
+              />
+            )}
             {commentaryError && !commentary && (
               <>
                 <div className="advisory">⚠️ Commentary generation failed. The AI service may be busy — please retry.</div>
