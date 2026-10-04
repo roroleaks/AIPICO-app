@@ -1,4 +1,4 @@
-import { KB, QUESTION_TYPES, SYNONYMS, rationalOutcomes, type Analysis, type Clarification, type Formulation, type SpecialtyKey } from "./kb";
+import { KB, QUESTION_TYPES, SYNONYMS, rationalOutcomes, type Analysis, type Clarification, type Formulation, type SpecialtyKey } from "./kb.ts";
 
 function normalize(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -85,8 +85,16 @@ export function ruleAnalyze(input: string): Analysis {
 }
 
 export function ruleClarify(analysis: Analysis, answered: Record<string, string>): Clarification {
-  const spec = analysis.specialty ? KB[analysis.specialty] : null;
-  const nextField = analysis.missing.find(f => !answered[f]);
+  // These two functions are the fallback for the AI path, so they must never be the thing that
+  // throws. `analysis` arrives straight from a request body: `{}`, `[]` and `"x"` are all
+  // truthy, reached the old unguarded `analysis.missing.find(...)`, and turned a provider
+  // failure into an unhandled TypeError. Normalize defensively; the route separately rejects
+  // genuinely malformed input with a 400.
+  const a = (analysis || {}) as Partial<Analysis>;
+  const ans = (answered || {}) as Record<string, string>;
+  const spec = a.specialty ? KB[a.specialty] : null;
+  const missing = Array.isArray(a.missing) ? a.missing : [];
+  const nextField = missing.find(f => !ans[f]);
   if (!nextField || !spec) {
     return { done: true, field: null, questionText: "", options: [], allowFreeText: false, source: "rules" };
   }
@@ -105,8 +113,8 @@ export function ruleClarify(analysis: Analysis, answered: Record<string, string>
   let options: string[] = (optionMap[nextField] || []).slice(0, 8);
   let rationale: string | undefined;
   if (nextField === "outcome") {
-    const condition = answered.condition || analysis.condition || "";
-    const logic = rationalOutcomes(condition, analysis.specialty);
+    const condition = ans.condition || a.condition || "";
+    const logic = rationalOutcomes(condition, a.specialty ?? null);
     options = [logic.primary, ...logic.alternatives.filter(o => o !== logic.primary)].slice(0, 8);
     rationale = logic.rationale;
   }
@@ -122,13 +130,15 @@ export function ruleClarify(analysis: Analysis, answered: Record<string, string>
 }
 
 export function ruleFormulate(analysis: Analysis, answered: Record<string, string>): Formulation {
-  const cond = answered.condition || analysis.condition || "the population of interest";
-  const iv = answered.intervention || analysis.intervention || "the intervention";
-  const comp = answered.comparator || analysis.comparator || "no treatment";
-  const out = answered.outcome || "a clinically meaningful outcome";
+  const a = (analysis || {}) as Partial<Analysis>;
+  const ans = (answered || {}) as Record<string, string>;
+  const cond = ans.condition || a.condition || "the population of interest";
+  const iv = ans.intervention || a.intervention || "the intervention";
+  const comp = ans.comparator || a.comparator || "no treatment";
+  const out = ans.outcome || "a clinically meaningful outcome";
   let finalQuestion: string;
   let elements: { label: string; value: string }[];
-  switch (analysis.framework) {
+  switch (a.framework) {
     case "PICO":
       finalQuestion = `In women with ${cond}, does ${iv} compared with ${comp} improve ${out}?`;
       elements = [
@@ -164,7 +174,7 @@ export function ruleFormulate(analysis: Analysis, answered: Record<string, strin
     { name: "Specificity", value: 17 }
   ];
   const advisories: string[] = [];
-  const logic = rationalOutcomes(cond, analysis.specialty ?? null);
+  const logic = rationalOutcomes(cond, a.specialty ?? null);
   if (out.toLowerCase() === logic.primary.toLowerCase()) {
     scores[3] = { name: "Outcome", value: 20 };
   } else if (logic.alternatives.some(o => o.toLowerCase() === out.toLowerCase())) {
@@ -177,7 +187,7 @@ export function ruleFormulate(analysis: Analysis, answered: Record<string, strin
   if (/miscarriage rate|implantation rate|clinical pregnancy rate/.test(out.toLowerCase())) {
     advisories.push("Report pregnancy-related outcomes as live birth or ongoing pregnancy where possible — biochemical endpoints are poor surrogates.");
   }
-  const spec = analysis.specialty ? KB[analysis.specialty] : null;
+  const spec = a.specialty ? KB[a.specialty] : null;
   const altOutcomes = [...(logic.alternatives || []), ...(spec ? spec.outcomesRanked : [])]
     .filter(o => o.toLowerCase() !== out.toLowerCase());
   const variants = [
@@ -188,7 +198,7 @@ export function ruleFormulate(analysis: Analysis, answered: Record<string, strin
     }))
   ].slice(0, 4);
   return {
-    framework: analysis.framework,
+    framework: a.framework as Formulation["framework"],
     elements,
     finalQuestion,
     variants,

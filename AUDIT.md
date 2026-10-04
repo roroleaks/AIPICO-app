@@ -9,19 +9,19 @@
 
 ## 1. Status
 
-**FAIL — not releasable in its current state.** (Steps 1–3 of 10 complete.)
+**FAIL — not releasable in its current state.** (Steps 1–4 of 10 complete.)
 
 The deterministic evidence core is genuinely well built and verified: the claim-filter →
 evidence-set → finalization → reconciliation → export chain is fully wired from a single
-retained set, all 177 tests pass, and typecheck/lint/build are clean. No secrets are exposed
+retained set, all 187 tests pass, and typecheck/lint/build are clean. No secrets are exposed
 anywhere in the tree or in the entire Git history, and error handling degrades gracefully
 without leaking internals.
 
-**15 open defects** remain, led by:
+**13 open defects** remain, led by:
 
-- **7 MEDIUM** functional defects, including bare HTTP 500s from an unguarded fallback (F-03),
-  missing fields reported as provider outages (F-04), content-free PICO output (F-05), and a
-  tokenizer that silently splits canonical clinical phrases and degrades evidence recall (F-07);
+- **5 MEDIUM** functional defects, including content-free PICO output (F-05), a tokenizer that
+  silently splits canonical clinical phrases and degrades evidence recall (F-07), and a
+  per-token length cap gap (F-06);
 - the desktop build still has **no way to obtain an AI provider key** (F-23), so even with the
   bundle now current, every install produces commentary failures;
 - two GitHub PATs that must be revoked before release (F-21).
@@ -32,7 +32,7 @@ without leaking internals.
   `npm audit --omit=dev` now reports **0 vulnerabilities** (was 1 critical + 1 high).
   Full suite re-verified green and every other finding re-confirmed on the new runtime.
 - **F-01 (was HIGH)** — the desktop bundle was stale, shipping a 264-line engine route and
-  none of the evidence-integrity modules. It has been rebuilt from the current tree: all 42
+  none of the evidence-integrity modules. It has been rebuilt from the current tree: all 43
   files verified identical to the repository by SHA-256, the bundled app installs, builds and
   passes its test suite, and it now resolves `next` 16.3.8. A repeatable generator plus an
   SHA-256 staleness guard (wired into `installer/test-installer.ps1`) prevents recurrence.
@@ -43,6 +43,9 @@ without leaking internals.
   the provider-key path no longer report failures as HTTP 200; invalid JSON is a 400; absent and
   empty reference lists are treated alike; and non-string `input` is rejected instead of coerced
   into a fake clinical term. Suite grew 169 → 177 with 8 new hostile-input cases.
+- **F-03, F-04** — the rule-based fallback can no longer throw, and `clarify`/`formulate` now
+  validate their required fields instead of misreporting client errors as provider outages.
+  22/22 HTTP probes pass. Suite grew 177 → 187 with a new `rule-engine.test.ts`.
 
 Two audit criteria could **not** be completed because the production AI provider returned
 HTTP 503 throughout the audit window:
@@ -59,7 +62,7 @@ Per the acceptance rule (no "fully verified" claim while anything material is un
 
 | Check | Command | Result |
 |---|---|---|
-| Unit/integration tests | `npm test` | **169 pass, 0 fail** (1.62 s) |
+| Unit/integration tests | `npm test` | **187 pass, 0 fail** (1.35 s) |
 | Type safety | `npx tsc --noEmit` | exit 0, clean |
 | Lint | `npm run lint` | exit 0, clean |
 | Build | `npm run build` | exit 0, 8 routes (5 static, 3 dynamic) |
@@ -76,16 +79,18 @@ Per the acceptance rule (no "fully verified" claim while anything material is un
 | API method handling | GET/PUT on 3 routes | **405 on all** — correct |
 | API malformed payloads | 25+ probes across 3 routes | 6 defects (F-02…F-05, F-10…F-13) |
 | Live commentary E2E | production ×3 | **NOT RUN — provider 503 (F-19)** |
-| **Desktop bundle parity** | `build-app-source.ps1` | **42/42 files identical by SHA-256** — F-01 fixed |
+| **Desktop bundle parity** | `build-app-source.ps1` | **43/43 files identical by SHA-256** — F-01 fixed |
 | **Desktop bundle install** | `npm install` in extracted zip | 362 packages, exit 0; `next` 16.3.8, `sharp` 0.35.5 |
 | **Desktop bundle build** | `npm run build` in extracted zip | exit 0, all 8 routes |
-| **Desktop bundle tests** | `npm test` in extracted zip | **169 pass, 0 fail** |
+| **Desktop bundle tests** | `npm test` in extracted zip | **187 pass, 0 fail** (re-verified after step 4) |
 | **Staleness guard** | 2 files edited + 1 added, then `-Check` | correctly reported `STALE BUNDLE`, exit 1 |
 | **Line-ending normalization** | `git diff --ignore-cr-at-eol`, `git hash-object` | **empty / blob unchanged** — no content altered |
 | Desktop provider-key path | grep all launcher + installer scripts | **absent — F-23** |
 | **API status contract** | 19 HTTP probes, 3 routes, live server | **19/19 intended status** — F-02, F-10…F-14 |
 | **Provider-key 503** | server started with `.env.local` removed | **503** + rule fallback intact — F-11 |
 | Hostile-input regression | 8 new tests in `deliverable-integrity.test.ts` | suite 169 → **177** |
+| **Fallback/validation probes** | 22 HTTP probes, live server | **22/22 intended status, no empty bodies** — F-03, F-04 |
+| Fallback regression | new `rule-engine.test.ts`, 10 cases | suite 177 → **187** |
 
 ### Confirmed-correct behaviours (no action)
 
@@ -299,11 +304,15 @@ and the 422 remains reserved for well-formed references that no retained record 
 alarming (object-shaped references *with* valid records present, and `fields: null`).
 Suite: 169 → **177**.
 
-### F-03 — MEDIUM — Unprotected nested fallback produces bare HTTP 500 with an empty body
+### F-03 — RESOLVED (was MEDIUM) — Unprotected nested fallback produced a bare HTTP 500 with an empty body
 
-`src/app/api/engine/route.ts` L1024-1037 catches stage failures and falls back to
-`ruleAnalyze` / `ruleClarify` / `ruleFormulate`. The fallback is itself unguarded, so when it
-throws a **second** time the exception escapes the `catch` entirely. Live results:
+The stage `catch` fell back to `ruleAnalyze` / `ruleClarify` / `ruleFormulate` without guarding
+them. `ruleClarify` called `analysis.missing.find(...)` directly, and `missing` is absent for any
+analysis that did not come from the `intent` stage. `{}`, `[]` and `"x"` are all **truthy**, so they
+reached that line and threw a second time, escaping the `catch` entirely. `null` was falsy and so
+never reached it — the discrepancy was pure JS truthiness, not intent.
+
+Live results before the fix:
 
 | Payload | Status | Body |
 |---|---|---|
@@ -313,19 +322,58 @@ throws a **second** time the exception escapes the `catch` entirely. Live result
 | `{"stage":"clarify","analysis":{"specialty":"nope"}}` | **500** | empty |
 | `{"stage":"clarify","analysis":null}` | 503 | proper message |
 
-The `null` vs `{}` difference is pure JS truthiness — an inconsistency, not intent.
-**Impact:** users get a blank 500 with no message and no guidance; alerting sees 500s with
-no diagnostic body. No secret leakage, but the failure is undiagnosable from the client side.
-**Fix:** wrap each fallback call in its own `try/catch` and return the 503 payload.
+#### Resolution — fixed at both layers
 
-### F-04 — MEDIUM — Missing required fields return 503 "AI service unavailable" instead of 400
+Defence in depth, because either layer alone would be incomplete: guarding only the `catch` still
+leaves a fallback that returns a wrong answer instead of failing loudly, and hardening only the
+fallback still leaves a second unhandled failure path in the route.
 
-`{"stage":"clarify"}` and `{"stage":"formulate"}` (no `analysis`) both return
-**503 `The AI service is temporarily unavailable.`** because the fallback guard at L1028/L1031
-requires a truthy `body.analysis`. These are client-side validation errors.
-**Impact:** malformed requests are misreported as provider outages, corrupting availability
-metrics and sending users down the wrong remediation path.
-**Fix:** validate required fields per stage and return 400 with a specific message.
+1. **The fallbacks can no longer throw.** `ruleClarify` and `ruleFormulate` now normalize their
+   inputs (`analysis || {}`, `answered || {}`, `Array.isArray(a.missing)`) instead of trusting the
+   caller's shape. An unknown specialty resolves to `spec = null` and returns a clean
+   `done: true`, which is the correct answer when nothing can be asked.
+2. **Each fallback is guarded independently** in the route's `catch`, so a second failure logs
+   `[engine] rule fallback for "<stage>" also failed:` and degrades to the same structured 503
+   rather than escaping.
+
+`rule-engine.ts` was additionally untestable — it was the only module in `src/lib` importing
+`"./kb"` without an extension, which Node's ESM loader cannot resolve. That is almost certainly why
+it never had a test file. Corrected to `"./kb.ts"`, matching every other module.
+
+#### Verification
+
+22/22 live HTTP probes, all bodies non-empty. Every row of the table above now returns 400 (with a
+named reason) or 200, and **no payload produces a 500 or an empty body**. New
+`src/lib/rule-engine.test.ts` (10 cases) locks in the behaviour; suite 177 → **187**.
+
+### F-04 — RESOLVED (was MEDIUM) — Missing required fields returned 503 "AI service unavailable"
+
+`{"stage":"clarify"}` and `{"stage":"formulate"}` (no `analysis`) both returned
+**503 `The AI service is temporarily unavailable.`** because the fallback guard required a truthy
+`body.analysis`. Client-side validation errors were being filed as provider outages, corrupting
+availability metrics and sending users after the wrong remediation path.
+
+#### Resolution
+
+Added `readAnalysisStage`, applied to the `clarify` and `formulate` branches before any provider
+call, rejecting with 400 and a specific message:
+
+| Condition | Response |
+|---|---|
+| `analysis` absent or `null` | 400 `Stage "<stage>" requires an "analysis" object.` |
+| `analysis` is an array/string/number | 400 `Field "analysis" must be an object, received <type>.` |
+| `analysis.missing` present but not an array | 400 `Field "analysis.missing" must be an array of strings.` |
+| `answered` present but not an object | 400 `Field "answered" must be an object.` |
+| `analysis` structurally valid but clinically empty | 400 `Stage "<stage>" requires an analysis containing clinical content; run the "intent" stage first.` |
+
+The last row closes the route-side half of F-05: an analysis with no specialty, no free-text
+fields and an empty `missing` list cannot produce a meaningful question, so it is rejected rather
+than answered. `answered: null` is still accepted as `{}`, matching the deliberate step-3 decision
+that absent and empty inputs are equivalent.
+
+#### Verification
+
+All 6 payloads in the audit table confirmed over HTTP. 22/22 probes pass. Suite 177 → **187**.
 
 ### F-05 — MEDIUM — Empty analysis silently yields a meaningless clinical question
 
@@ -589,11 +637,19 @@ application from GitHub", which is no longer how distribution works — Inno Set
    and empty reference lists are treated alike; and non-string `input` is rejected rather than
    coerced into a fake clinical term. Verified 19/19 over HTTP against a running server, with the
    provider-key case exercised on a server started without `.env.local`. Suite 169 → 177.
-4. **Fix nested fallback crashes.** (F-03, F-04) Guard the fallback inside the `catch` so a
-   second throw cannot escape as a bare 500 with an empty body, and return 400 rather than 503
-   for missing required fields.
+4. ~~**Fix nested fallback crashes.**~~ **DONE.** (F-03, F-04) The rule-based fallbacks now
+   normalize their inputs and cannot throw, each fallback inside the `catch` is guarded
+   independently so a second failure degrades to a structured 503 instead of escaping as a bare
+   500 with an empty body, and `readAnalysisStage` rejects a missing/malformed/empty `analysis` or
+   a non-object `answered` with 400 and a named reason instead of misreporting it as a provider
+   outage. `rule-engine.ts` was also made importable by Node (`"./kb"` → `"./kb.ts"`), the only
+   module in `src/lib` using an extensionless relative import, which is why it had no test file.
+   Verified 22/22 over HTTP with no empty bodies; new `rule-engine.test.ts`. Suite 177 → 187.
 5. **Reject meaningless or empty PICO analysis.** (F-05) Do not let `ruleFormulate` return 200
-   with placeholder content such as "Women with the population of interest".
+   with placeholder content such as "Women with the population of interest". Note the route half is
+   already closed by the new empty-content 400 in step 4; what remains is the pure-function
+   behaviour for direct callers and for an analysis that has *some* content but not the fields a
+   given question type needs.
 6. **Restore the AI provider or add a deterministic commentary fallback.** (F-19) `commentary`
    is the evidence-critical stage and currently has no fallback; it was returning 503 for every
    request during the audit.
@@ -617,8 +673,8 @@ provisioning are resolved.**
   and 2), and the bundle now provably matches the repository — but F-23 means every install
   fails at the commentary stage for want of a provider key. Blocked by step 6.
 - **Web / Vercel:** the hosted deployment is not directly exposed to the Windows RCE advisory, and
-  the deterministic evidence chain is correctly built, correctly wired, and covered by 169
-  passing tests. It is still not cleared: step 1 is mandatory regardless of host, and steps 3-5
+  the deterministic evidence chain is correctly built, correctly wired, and covered by 187
+  passing tests. It is still not cleared: step 1 is mandatory regardless of host, and steps 5-6
   are real functional defects on the commentary and export paths.
 - **Not recommended at any point:** treating this system as clinically validated. It is an
   evidence-retrieval and drafting aid with strict citation discipline, not a clinical decision

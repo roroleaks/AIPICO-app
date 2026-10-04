@@ -530,6 +530,64 @@ function readFreeText(
   return { ok: true, text: value.slice(0, max) };
 }
 
+/**
+ * `clarify` and `formulate` both require the analysis object produced by `intent`. Without this
+ * check a missing or malformed `analysis` fell through to the catch block and was reported as
+ * "The AI service is temporarily unavailable" (503) — filing a client-side validation error as a
+ * provider outage, which corrupts availability metrics and sends the user after the wrong fix.
+ *
+ * Also rejects an `analysis` that is structurally valid but clinically empty. Answering such a
+ * request produces a confident, content-free clinical question, which is worse than an error.
+ */
+function readAnalysisStage(
+  body: Record<string, unknown>,
+  stage: string
+): { ok: true; analysis: Analysis; answered: Record<string, string> } | { ok: false; response: NextResponse } {
+  const bad = (error: string) => ({
+    ok: false as const,
+    response: NextResponse.json({ error }, { status: 400 })
+  });
+
+  const raw = body.analysis;
+  if (raw === undefined || raw === null) {
+    return bad(`Stage "${stage}" requires an "analysis" object.`);
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return bad(`Field "analysis" must be an object, received ${raw === null ? "null" : Array.isArray(raw) ? "array" : typeof raw}.`);
+  }
+  const a = raw as Partial<Analysis>;
+  if (a.missing !== undefined && !Array.isArray(a.missing)) {
+    return bad('Field "analysis.missing" must be an array of strings.');
+  }
+  const answeredRaw = body.answered;
+  if (
+    answeredRaw !== undefined && answeredRaw !== null &&
+    (typeof answeredRaw !== "object" || Array.isArray(answeredRaw))
+  ) {
+    return bad('Field "answered" must be an object.');
+  }
+
+  const missing = Array.isArray(a.missing) ? a.missing.filter((f): f is string => typeof f === "string") : [];
+  const hasContent = Boolean(
+    a.specialty ||
+    String(a.condition || "").trim() ||
+    String(a.intervention || "").trim() ||
+    String(a.comparator || "").trim() ||
+    missing.length
+  );
+  if (!hasContent) {
+    return bad(
+      `Stage "${stage}" requires an analysis containing clinical content; run the "intent" stage first.`
+    );
+  }
+
+  return {
+    ok: true,
+    analysis: { ...(a as Analysis), missing },
+    answered: (answeredRaw || {}) as Record<string, string>
+  };
+}
+
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
   try {
@@ -1013,7 +1071,9 @@ Respond ONLY with JSON.`, { input, knowledgeBase: kbContext() });
     }
 
     if (stage === "clarify") {
-      const { analysis, answered } = body as { analysis: Analysis; answered: Record<string, string> };
+      const parsed = readAnalysisStage(body, stage);
+      if (!parsed.ok) return parsed.response;
+      const { analysis, answered } = parsed;
       if (KEY && analysis?.specialty && isSpecialty(analysis.specialty)) {
         const outcomeLogic = rationalOutcomes(answered.condition || analysis.condition || "", analysis.specialty);
         const out = await callLLM(
@@ -1034,7 +1094,9 @@ Set done=true with empty strings when everything essential is known.`,
     }
 
     if (stage === "formulate") {
-      const { analysis, answered } = body as { analysis: Analysis; answered: Record<string, string> };
+      const parsed = readAnalysisStage(body, stage);
+      if (!parsed.ok) return parsed.response;
+      const { analysis, answered } = parsed;
       if (KEY && analysis?.specialty && isSpecialty(analysis.specialty)) {
         const outcomeLogic = rationalOutcomes(answered.condition || analysis.condition || "", analysis.specialty);
         const out = await callLLM(
@@ -1059,12 +1121,35 @@ Respond ONLY with JSON.`,
   } catch (e) {
     // Never swallow this silently: an unexplained 503 is impossible to diagnose in production.
     console.error(`[engine] stage "${stage}" failed:`, e);
-    if (stage === "intent") return NextResponse.json(ruleAnalyze(typeof body.input === "string" ? body.input : ""));
-    if (stage === "clarify" && body.analysis) {
-      return NextResponse.json(ruleClarify(body.analysis as Analysis, (body.answered as Record<string, string>) || {}));
+    // The rule-based fallbacks run *inside* this catch, so a failure in a fallback used to
+    // escape it entirely and surface as a bare HTTP 500 with a zero-byte body: no message for the
+    // user and nothing for alerting to read. Each fallback is now guarded on its own and
+    // degrades to the same structured 503, so a double failure is reported honestly instead of
+    // crashing the request.
+    if (stage === "intent") {
+      try {
+        return NextResponse.json(ruleAnalyze(typeof body.input === "string" ? body.input : ""));
+      } catch (fallbackError) {
+        console.error(`[engine] rule fallback for "intent" also failed:`, fallbackError);
+      }
     }
-    if (stage === "formulate" && body.analysis) {
-      return NextResponse.json(ruleFormulate(body.analysis as Analysis, (body.answered as Record<string, string>) || {}));
+    if (stage === "clarify" || stage === "formulate") {
+      const analysis = body.analysis;
+      if (analysis && typeof analysis === "object" && !Array.isArray(analysis)) {
+        try {
+          const answered =
+            body.answered && typeof body.answered === "object" && !Array.isArray(body.answered)
+              ? (body.answered as Record<string, string>)
+              : {};
+          return NextResponse.json(
+            stage === "clarify"
+              ? ruleClarify(analysis as Analysis, answered)
+              : ruleFormulate(analysis as Analysis, answered)
+          );
+        } catch (fallbackError) {
+          console.error(`[engine] rule fallback for "${stage}" also failed:`, fallbackError);
+        }
+      }
     }
     return NextResponse.json(
       { error: "The AI service is temporarily unavailable. Please try again." },
