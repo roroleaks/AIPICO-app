@@ -9,8 +9,7 @@
 
 ## 1. Status
 
-**FAIL — not releasable in its current state.** (Step 1 of 10 complete; the blocking
-High-severity installer parity defect is still open.)
+**FAIL — not releasable in its current state.** (Steps 1–2 of 10 complete.)
 
 The deterministic evidence core is genuinely well built and verified: the claim-filter →
 evidence-set → finalization → reconciliation → export chain is fully wired from a single
@@ -18,19 +17,26 @@ retained set, all 169 tests pass, and typecheck/lint/build are clean. No secrets
 anywhere in the tree or in the entire Git history, and error handling degrades gracefully
 without leaking internals.
 
-**21 open defects** remain, led by:
+**20 open defects** remain, led by:
 
-- **1 HIGH** — the Windows installer ships a stale codebase with no evidence-integrity
-  enforcement, so PC ≠ GitHub ≠ Vercel (F-01);
 - **9 MEDIUM** functional defects, including an export gate that throws instead of refusing
   (F-02), bare HTTP 500s from an unguarded fallback (F-03), and a tokenizer that silently
-  splits canonical clinical phrases and degrades evidence recall (F-07).
+  splits canonical clinical phrases and degrades evidence recall (F-07);
+- the desktop build still has **no way to obtain an AI provider key** (F-23), so even with the
+  bundle now current, every install produces commentary failures;
+- two GitHub PATs that must be revoked before release (F-21).
 
 **Resolved during this audit:**
 
 - **F-22 (was CRITICAL)** — `next` upgraded 16.3.2 → 16.3.8 and `sharp` to 0.35.5.
   `npm audit --omit=dev` now reports **0 vulnerabilities** (was 1 critical + 1 high).
   Full suite re-verified green and every other finding re-confirmed on the new runtime.
+- **F-01 (was HIGH)** — the desktop bundle was stale, shipping a 264-line engine route and
+  none of the evidence-integrity modules. It has been rebuilt from the current tree: all 42
+  files verified identical to the repository by SHA-256, the bundled app installs, builds and
+  passes 169/169 tests, and it now resolves `next` 16.3.8. A repeatable generator plus an
+  SHA-256 staleness guard (wired into `installer/test-installer.ps1`) prevents recurrence.
+  PC now matches GitHub and Vercel at the artifact level.
 
 Two audit criteria could **not** be completed because the production AI provider returned
 HTTP 503 throughout the audit window:
@@ -64,6 +70,13 @@ Per the acceptance rule (no "fully verified" claim while anything material is un
 | API method handling | GET/PUT on 3 routes | **405 on all** — correct |
 | API malformed payloads | 25+ probes across 3 routes | 6 defects (F-02…F-05, F-10…F-13) |
 | Live commentary E2E | production ×3 | **NOT RUN — provider 503 (F-19)** |
+| **Desktop bundle parity** | `build-app-source.ps1` | **42/42 files identical by SHA-256** — F-01 fixed |
+| **Desktop bundle install** | `npm install` in extracted zip | 362 packages, exit 0; `next` 16.3.8, `sharp` 0.35.5 |
+| **Desktop bundle build** | `npm run build` in extracted zip | exit 0, all 8 routes |
+| **Desktop bundle tests** | `npm test` in extracted zip | **169 pass, 0 fail** |
+| **Staleness guard** | 2 files edited + 1 added, then `-Check` | correctly reported `STALE BUNDLE`, exit 1 |
+| **Line-ending normalization** | `git diff --ignore-cr-at-eol`, `git hash-object` | **empty / blob unchanged** — no content altered |
+| Desktop provider-key path | grep all launcher + installer scripts | **absent — F-23** |
 
 ### Confirmed-correct behaviours (no action)
 
@@ -133,30 +146,93 @@ cannot affect the production runtime. **Accepted as documented residual risk.**
 Note: the app does not use the Image Optimization API or `next/og`, which limits practical
 exposure to two of the three original advisories, but the package upgrade was still mandatory.
 
-### F-01 — HIGH — Windows installer ships a stale, unhardened codebase (parity violation)
+### F-01 — RESOLVED (was HIGH) — Windows installer shipped a stale, unhardened codebase (parity violation)
 
-The PC application is **not** the same product as GitHub or Vercel.
+The PC application was **not** the same product as GitHub or Vercel.
 
-`installer/app-source.zip` (19 entries, 100,577 bytes) contains a pre-deterministic build:
+`installer/app-source.zip` (19 entries, 100,577 bytes) contained a pre-deterministic build:
 
-| Artifact | Bundled | Current |
+| Artifact | Was bundled | Was current |
 |---|---|---|
-| `src/app/api/engine/route.ts` | **264 lines** | **982 lines** |
-| `src/app/paper/page.tsx` | **244 lines** | **712 lines** |
+| `src/app/api/engine/route.ts` | **264 lines** | **1,039 lines** |
+| `src/app/paper/page.tsx` | **244 lines** | **744 lines** |
 
-The bundled engine route imports **only** `@/lib/kb` and `@/lib/rule-engine`. It has **no**
+The bundled engine route imported **only** `@/lib/kb` and `@/lib/rule-engine`. It had **no**
 `buildEvidenceSet`, **no** `finalizeClaims`, **no** `reconcileNarrative`, **no**
-`validateDeliverableIntegrity`. Its paper page has no `copyReferences` and no integrity gate.
+`validateDeliverableIntegrity`. Its paper page had no `copyReferences` and no integrity gate.
 
 Missing from the bundle entirely: `src/app/api/pdf/route.ts` (the server PDF route), all six
 evidence-integrity modules (`clinical-input`, `clinical-keywords`, `relevance`, `evidence-set`,
 `claim-finalization`, `deliverable-integrity`), and all 13 `*.test.ts` files.
 
-**Impact:** every desktop install runs an app with no claim filtering and no
-deliverable-integrity gate. Desktop users receive output that the web app would refuse.
-This directly violates the "PC = GitHub = production" requirement.
-**Fix:** regenerate the archive from the current tree (ideally from a git tag or CI artifact)
-and add a CI assertion that the bundled file list equals `git ls-files`.
+**Impact:** every desktop install ran an app with no claim filtering and no
+deliverable-integrity gate. Desktop users received output that the web app would refuse.
+This directly violated the "PC = GitHub = production" requirement.
+
+#### Resolution
+
+Added `installer/build-app-source.ps1` and rebuilt the archive (42 entries, 194,879 bytes).
+
+| Artifact | Bundled now | Current |
+|---|---|---|
+| `src/app/api/engine/route.ts` | **1,039 lines** | **1,039 lines** |
+| `src/app/paper/page.tsx` | **744 lines** | **744 lines** |
+
+All six evidence modules, the `/api/pdf` route and all 13 test files are now present, written
+flat at the archive root (the layout `install-app.ps1` already handles).
+
+Verified by extracting the archive into a clean directory and running exactly what a desktop
+install runs:
+
+| Check | Result |
+|---|---|
+| `npm install --no-audit --no-fund` | 362 packages, exit 0 |
+| `node -e` version probe inside bundle | `next` **16.3.8**, `sharp` **0.35.5** |
+| `npm run build` | compiled + typechecked, all **8 routes**, exit 0 |
+| `npm test` inside the bundle | **169 pass, 0 fail** |
+| leak scan (`.env*`, `node_modules`, `.next`, `*.pem`, `*.key`) | none |
+
+`next` 16.3.8 inside the bundle is the point of this step: because `install-app.ps1` runs
+`npm install` against the bundled lockfile, every desktop install now receives the patched
+Next.js rather than shipping 16.3.2 indefinitely.
+
+Recurrence is now guarded rather than merely fixed:
+
+- `build-app-source.ps1` verifies every bundled file against the tree by **SHA-256** on every
+  run. A name-only comparison would have been useless here, since the stale bundle carried
+  identical paths with older contents.
+- `build-app-source.ps1 -Check` performs that comparison without rewriting the archive and
+  exits 1 on drift; it is wired into `installer/test-installer.ps1` as step [1b].
+- The generator refuses to write an archive that is missing any module the API routes import,
+  and scrubs `.env*`, `*.pem`, `*.key`, `node_modules` and `.next` even if they appear inside a
+  copied directory.
+- Confirmed by fault injection: modifying two source files and adding a third after the fact
+  produced `STALE BUNDLE`, listing `only in tree` and `content differs` per file, exit 1.
+
+Also fixed `installer/test-installer.ps1`, which hardcoded an absolute path to one developer's
+machine and would have failed on any other host or in CI.
+
+#### Line endings had to be pinned for the guard to be meaningful
+
+The SHA-256 guard fired immediately on first run for a reason unrelated to staleness. The
+repository had **no `.gitattributes`** while `core.autocrlf=true`, and the working tree was
+mixed: **9 files CRLF, 46 LF**. Any contributor on Windows would therefore have produced a
+different `app-source.zip` from the same commit than CI or a Linux contributor — the parity
+guarantee would have been unenforceable across machines, which is the exact failure mode F-01
+was about.
+
+Added `.gitattributes` (`* text=auto eol=lf`, with `*.zip`/`*.exe`/`*.ico`/`*.jpg`/`*.png`/…
+declared `binary` so bundles and images are never translated) and normalized the working tree to
+LF. Verified this changed **no content**: `git diff --ignore-cr-at-eol` is empty,
+`git diff --cached` for those paths is empty, and `git hash-object src/lib/kb.ts` still equals
+the committed blob `a4d38451…`. Re-verified afterwards: 169/169 tests, `tsc` clean, lint clean,
+build clean with 8 routes, and the rebuilt bundle again installs (362 packages), builds, and
+passes 169/169 from a clean extraction.
+
+**Residual:** the bundle is rebuilt by hand and committed as a binary, so it can still drift if
+someone edits `src/` and forgets to re-run the generator. The `-Check` guard now makes that
+failure loud at installer-test time, but CI enforcement on the repository is still the stronger
+guarantee and is listed in the release order.
 
 ### F-02 — MEDIUM — Export integrity gate throws on non-string references (500 instead of 422)
 
@@ -321,7 +397,7 @@ markup and detecting `(Author, year)` patterns at intake.
 |---|---|
 | `installer/output/AIPICO-Setup.exe` | 2,437,189 (2.4 MB) |
 | `installer/icon.ico` | 285,478 |
-| `installer/app-source.zip` | 100,577 |
+| `installer/app-source.zip` | 194,879 (was 100,577; rebuilt per F-01) |
 | `launcher/AIPICO.exe` | 33,792 |
 | `launcher/AIPICO-Launcher-GUI.ps1` | 145,489 |
 
@@ -360,17 +436,65 @@ Both must be treated as compromised and revoked. **No repository compromise occu
 exposed values were never committed and never appear in the working tree, reflog, or any of the
 1.18 MB of history. No history rewrite is required.
 
+### F-23 — HIGH — No path for a desktop install to obtain an AI provider key
+
+Found while rebuilding the bundle for F-01. Not previously reported.
+
+`GEMINI_API_KEY` is read by `/api/engine` (F-11), and Vercel supplies it as a project
+environment variable. A desktop install has no equivalent. Searching every launcher and
+installer script for `GEMINI`, `API_KEY`, `apiKey` or `.env` returns exactly one hit, and it is
+unrelated (`AIPICO-Launcher.ps1:92`, reading the machine `Path`):
+
+| Script | Provider key handling |
+|---|---|
+| `installer/install-app.ps1` | none — extracts, `npm install`, `npm run build` |
+| `launcher/AIPICO-Launcher.ps1` | none |
+| `launcher/AIPICO-Launcher-GUI.ps1` | none |
+| `launcher/launch-aipico.ps1` | none |
+
+`app-source.zip` also cannot carry the key, and must not: the generator scrubs `.env*`, and a
+key baked into a redistributable archive would be a worse outcome than the current one.
+
+**Impact:** with the bundle now current, every desktop install reaches `commentary`, finds no
+key, and takes the `!KEY` branch — `NextResponse.json({ error: "AI engine required for commentary
+generation." })` at **HTTP 200**. The paper page then refuses to render because
+`data.title && !data.error` fails. In practice the shipped desktop product cannot generate
+commentary at all, and the failure is silent at the HTTP layer. This compounds F-19: the web
+build is blocked by a 503-ing provider, and the desktop build is blocked unconditionally.
+
+**Fix required before release.** Options, in order of preference:
+
+1. Prompt for a key on first run, store it in Windows Credential Manager, and inject it as a
+   process environment variable for the server. Keeps the key off disk in plaintext and out of
+   the archive.
+2. Per-user `localStorage` key entry in the UI, forwarded per request. Simplest, but a key in
+   browser storage is readable by any script the page loads.
+3. A thin server-side proxy that holds the key and meters per install. Most robust, most work.
+
+Whichever is chosen, the desktop path also needs the deterministic commentary fallback from F-19
+so that a missing or failing provider degrades to rule-based output instead of an error.
+
+`launcher/README-DESKTOP.md` is stale on the same theme: it states the launcher "Downloads the
+application from GitHub", which is no longer how distribution works — Inno Setup now bundles
+`app-source.zip` locally — and it documents no key-provisioning step at all.
+
 ---
 
 ## 4. Corrected release order
 
-**Progress: 1 of 10 complete.**
+**Progress: 2 of 10 complete.**
 
 1. ~~**Upgrade Next.js and sharp.**~~ **DONE.** `next`/`eslint-config-next` → 16.3.8,
    `sharp` → 0.35.5. `npm audit --omit=dev` = 0 vulnerabilities. Suite re-verified green;
    all findings re-confirmed on the new runtime. Residual dev-only `braces` documented. (F-22)
-2. **Regenerate the desktop installer source package.** (F-01 — HIGH) Rebuild
-   `installer/app-source.zip` from the current tree so PC matches GitHub and Vercel.
+2. ~~**Regenerate the desktop installer source package.**~~ **DONE.** (F-01 — was HIGH)
+   `installer/app-source.zip` rebuilt from the current tree: 42 entries, all verified identical
+   to the repository by SHA-256. Bundled app installs, builds all 8 routes and passes 169/169
+   tests, and resolves `next` 16.3.8 / `sharp` 0.35.5. Added
+   `installer/build-app-source.ps1` (generator + `-Check` staleness guard, wired into
+   `installer/test-installer.ps1` as step [1b]) so it cannot silently go stale again.
+   Newly surfaced **F-23** in the process: no desktop install has any way to obtain an AI
+   provider key, which must be fixed in step 6.
 3. **Fix API validation and error-status behavior.** (F-02, F-10, F-11, F-12, F-13, F-14)
    Make the export gate refuse with 422 instead of throwing into 500; stop returning HTTP 200
    for error conditions in `/api/pubmed` and for the missing-engine-config path; map invalid
@@ -396,10 +520,12 @@ exposed values were never committed and never appear in the working tree, reflog
 ## 5. Release recommendation
 
 **Bottom line: the core evidence architecture is promising, but the system is not
-production-ready until the critical security issue, stale installer, provider failure, and API
-robustness problems are resolved.**
+production-ready until the provider failure, API robustness problems, and desktop key
+provisioning are resolved.**
 
-- **Windows installer:** do not distribute. Blocked by steps 1 and 2.
+- **Windows installer:** do not distribute. The security and parity blockers are cleared (steps 1
+  and 2), and the bundle now provably matches the repository — but F-23 means every install
+  fails at the commentary stage for want of a provider key. Blocked by step 6.
 - **Web / Vercel:** the hosted deployment is not directly exposed to the Windows RCE advisory, and
   the deterministic evidence chain is correctly built, correctly wired, and covered by 169
   passing tests. It is still not cleared: step 1 is mandatory regardless of host, and steps 3-5

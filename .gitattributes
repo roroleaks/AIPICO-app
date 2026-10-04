@@ -1,0 +1,23 @@
+# Normalize text files to LF in both the repository and the working tree.
+#
+# This matters for the desktop bundle specifically. installer/build-app-source.ps1 verifies
+# app-source.zip against the working tree by SHA-256, so the bytes it ships must be the bytes
+# everyone else produces. Without this file, core.autocrlf=true on Windows and the default on
+# Linux disagree, and the same commit yields different bundles.
+* text=auto eol=lf
+
+# Bundles, builds and images must never be line-ending translated or text-diffed.
+*.zip binary
+*.exe binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.gif binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# PowerShell scripts are UTF-8 with BOM in the wild; keep them text but LF-terminated.
+*.ps1 text eol=lf
+*.iss text eol=lf

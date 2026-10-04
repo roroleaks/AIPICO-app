@@ -5,7 +5,7 @@ $ErrorActionPreference = "Stop"
 $AppDir  = "$env:LOCALAPPDATA\AIPICO"
 $Port    = 3456
 $ServerUrl = "http://localhost:$Port"
-$ScriptDir = "C:\Users\raouf.RAOUFDESKTOP\Documents\cq-app\installer"
+$ScriptDir = $PSScriptRoot
 
 $script:pass = 0; $script:fail = 0
 function Check([string]$name, [bool]$ok, [string]$extra = "") {
@@ -29,6 +29,12 @@ Copy-Item "$ScriptDir\app-source.zip" $AppDir -Force
 Copy-Item "$ScriptDir\install-app.ps1" $AppDir -Force
 Copy-Item "$ScriptDir\launch-aipico.ps1" $AppDir -Force
 Check "Files copied to {app}" ((Test-Path "$AppDir\app-source.zip") -and (Test-Path "$AppDir\install-app.ps1"))
+
+Write-Output "[1b] Verifying the bundle is not stale..."
+$stale = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ScriptDir\build-app-source.ps1" -Check 2>&1
+$staleExit = $LASTEXITCODE
+$stale | ForEach-Object { Write-Output "  bundle: $_" }
+Check "app-source.zip matches the repository" ($staleExit -eq 0) "exit=$staleExit"
 
 Write-Output "[2] Running install-app.ps1 (npm install + build, may take minutes)..."
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
