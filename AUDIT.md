@@ -9,19 +9,19 @@
 
 ## 1. Status
 
-**FAIL — not releasable in its current state.** (Steps 1–4 of 10 complete.)
+**FAIL — not releasable in its current state.** (Steps 1–5 of 10 complete.)
 
 The deterministic evidence core is genuinely well built and verified: the claim-filter →
 evidence-set → finalization → reconciliation → export chain is fully wired from a single
-retained set, all 187 tests pass, and typecheck/lint/build are clean. No secrets are exposed
+retained set, all 188 tests pass, and typecheck/lint/build are clean. No secrets are exposed
 anywhere in the tree or in the entire Git history, and error handling degrades gracefully
 without leaking internals.
 
-**13 open defects** remain, led by:
+**12 open defects** remain, led by:
 
-- **5 MEDIUM** functional defects, including content-free PICO output (F-05), a tokenizer that
-  silently splits canonical clinical phrases and degrades evidence recall (F-07), and a
-  per-token length cap gap (F-06);
+- **4 MEDIUM** functional defects: a tokenizer that silently splits canonical clinical phrases and
+  degrades evidence recall (F-07), a per-token length cap gap (F-06), and phrase-level alias and
+  CoQ10 normalization defects (F-08, F-09);
 - the desktop build still has **no way to obtain an AI provider key** (F-23), so even with the
   bundle now current, every install produces commentary failures;
 - two GitHub PATs that must be revoked before release (F-21).
@@ -46,6 +46,13 @@ without leaking internals.
 - **F-03, F-04** — the rule-based fallback can no longer throw, and `clarify`/`formulate` now
   validate their required fields instead of misreporting client errors as provider outages.
   22/22 HTTP probes pass. Suite grew 177 → 187 with a new `rule-engine.test.ts`.
+- **F-05** — the app can no longer present a fabricated clinical question. `ruleClarify` was
+  skipping clarification entirely for any specialty outside the knowledge base, which guaranteed
+  `ruleFormulate` would invent content; it now keeps asking with free-text prompts. `ruleFormulate`
+  refuses to state a question without a population and an intervention, the route returns 400
+  naming the missing elements, and the client resumes clarification instead of recomputing the
+  rejected placeholder locally. 14/14 probes pass; no generated output contains the old
+  placeholder wording. Suite grew 187 → 188.
 
 Two audit criteria could **not** be completed because the production AI provider returned
 HTTP 503 throughout the audit window:
@@ -62,7 +69,7 @@ Per the acceptance rule (no "fully verified" claim while anything material is un
 
 | Check | Command | Result |
 |---|---|---|
-| Unit/integration tests | `npm test` | **187 pass, 0 fail** (1.35 s) |
+| Unit/integration tests | `npm test` | **188 pass, 0 fail** (1.36 s) |
 | Type safety | `npx tsc --noEmit` | exit 0, clean |
 | Lint | `npm run lint` | exit 0, clean |
 | Build | `npm run build` | exit 0, 8 routes (5 static, 3 dynamic) |
@@ -82,7 +89,7 @@ Per the acceptance rule (no "fully verified" claim while anything material is un
 | **Desktop bundle parity** | `build-app-source.ps1` | **43/43 files identical by SHA-256** — F-01 fixed |
 | **Desktop bundle install** | `npm install` in extracted zip | 362 packages, exit 0; `next` 16.3.8, `sharp` 0.35.5 |
 | **Desktop bundle build** | `npm run build` in extracted zip | exit 0, all 8 routes |
-| **Desktop bundle tests** | `npm test` in extracted zip | **187 pass, 0 fail** (re-verified after step 4) |
+| **Desktop bundle tests** | `npm test` in extracted zip | **188 pass, 0 fail** (re-verified after step 5) |
 | **Staleness guard** | 2 files edited + 1 added, then `-Check` | correctly reported `STALE BUNDLE`, exit 1 |
 | **Line-ending normalization** | `git diff --ignore-cr-at-eol`, `git hash-object` | **empty / blob unchanged** — no content altered |
 | Desktop provider-key path | grep all launcher + installer scripts | **absent — F-23** |
@@ -91,6 +98,9 @@ Per the acceptance rule (no "fully verified" claim while anything material is un
 | Hostile-input regression | 8 new tests in `deliverable-integrity.test.ts` | suite 169 → **177** |
 | **Fallback/validation probes** | 22 HTTP probes, live server | **22/22 intended status, no empty bodies** — F-03, F-04 |
 | Fallback regression | new `rule-engine.test.ts`, 10 cases | suite 177 → **187** |
+| **No-fabrication probes** | 14 HTTP probes, live server | **14/14 intended status** — F-05 |
+| Placeholder-wording scan | all probe responses + all of `src` | `population of interest` / `the intervention` **0 hits in output** |
+| Unknown-specialty flow | `clarify` with `specialty: null` | asks PICO free-text instead of skipping |
 
 ### Confirmed-correct behaviours (no action)
 
@@ -375,15 +385,65 @@ that absent and empty inputs are equivalent.
 
 All 6 payloads in the audit table confirmed over HTTP. 22/22 probes pass. Suite 177 → **187**.
 
-### F-05 — MEDIUM — Empty analysis silently yields a meaningless clinical question
+### F-05 — RESOLVED (was MEDIUM) — Empty analysis silently yielded a meaningless clinical question
 
-`{"stage":"formulate","analysis":{}}` returns **HTTP 200** with:
-`elements: [{label:"P → Population", value:"Women with the population of interest"}]`.
+`{"stage":"formulate","analysis":{}}` returned **HTTP 200** with
+`elements: [{label:"P → Population", value:"Women with the population of interest"}]`, and
+`ruleFormulate({}, {})` fabricated a placeholder PICO. **Impact:** a content-free question could be
+presented as a formulated clinical question. For a clinical decision-support tool this is a
+quality/safety concern, not just a UX one.
 
-`ruleFormulate({}, {})` does not fail; it fabricates a placeholder PICO.
-**Impact:** a content-free question can be presented as a formulated clinical question.
-For a clinical decision-support tool this is a quality/safety concern, not just a UX one.
-**Fix:** return 400 when `analysis.condition` or `specialty` is absent.
+#### Root cause was upstream of `ruleFormulate`
+
+The placeholder text was a symptom. The reachable path was in `ruleClarify`, which returned
+`done: true` whenever the specialty spec was missing:
+
+```ts
+if (!nextField || !spec) return { done: true, ... };
+```
+
+So for any clinical area outside the knowledge base, clarification was skipped entirely and the flow
+went straight to `ruleFormulate` with nothing collected. The PICO prompts never need a spec — only
+the *suggested options* do — so bailing out here guaranteed the flow would eventually fabricate.
+This is why a route-only 400 would not have fixed it: `src/app/question/page.tsx` treated any
+`formulate` response containing an `error` as a reason to **recompute `ruleFormulate` locally in the
+browser**, reproducing exactly the placeholder the server had just refused.
+
+#### Resolution
+
+1. **`ruleClarify` keeps asking when the specialty is unknown.** It now exits only when there is
+   genuinely nothing left to ask (`!nextField`). Suggested options are `[]` without a spec, and the
+   existing clarify UI renders an empty chip row with the free-text answer still available.
+2. **`ruleFormulate` refuses to fabricate.** `Formulation` gained `complete: boolean` and
+   `missingElements: string[]`. Without a population **and** an intervention it returns
+   `finalQuestion: ""`, no `variants` and no `elements`, naming what the caller still owes.
+   Population and intervention are the two whose placeholders turned a question into a fabricated
+   clinical claim; comparator and outcome keep neutral defaults ("no treatment", "a clinically
+   meaningful outcome"), which are defensible PICO positions rather than inventions.
+3. **The route returns 400** via a new `formulated()` guard, with `missing`, `field` and
+   `questionText` so the caller can resume clarification rather than guess.
+4. **The client honours the refusal.** A 400 naming a field resumes clarification for that element
+   instead of silently recomputing locally, and the same applies if the local fallback refuses.
+
+An invalid-but-truthy specialty such as `"nope"` was also dereferenced as `KB["nope"].outcomeRules`
+inside `rationalOutcomes`, throwing for any analysis that reached formulation. Both functions now
+resolve the specialty against the KB once into a `SpecialtyKey | null`, so an unknown value collapses
+to `null` and takes the generic path. Caught by the new tests, not by inspection.
+
+#### Verification
+
+14/14 live HTTP probes, all intended status. Both refusal cases now name the missing element:
+
+```
+{"stage":"formulate","analysis":{"condition":"PCOS"}}
+400 {"error":"Cannot formulate a clinical question without intervention.",
+     "missing":["intervention"],"field":"intervention", ...}
+```
+
+Clarification now proceeds for unknown specialties instead of skipping. A scan of every probe
+response and of the whole `src` tree confirms the strings `population of interest` and
+`the intervention` no longer appear in any generated output — only in comments and in the test that
+asserts their absence. Suite 187 → **188**.
 
 ### F-06 — MEDIUM — No per-token keyword length cap
 
@@ -645,11 +705,15 @@ application from GitHub", which is no longer how distribution works — Inno Set
    outage. `rule-engine.ts` was also made importable by Node (`"./kb"` → `"./kb.ts"`), the only
    module in `src/lib` using an extensionless relative import, which is why it had no test file.
    Verified 22/22 over HTTP with no empty bodies; new `rule-engine.test.ts`. Suite 177 → 187.
-5. **Reject meaningless or empty PICO analysis.** (F-05) Do not let `ruleFormulate` return 200
-   with placeholder content such as "Women with the population of interest". Note the route half is
-   already closed by the new empty-content 400 in step 4; what remains is the pure-function
-   behaviour for direct callers and for an analysis that has *some* content but not the fields a
-   given question type needs.
+5. ~~**Reject meaningless or empty PICO analysis.**~~ **DONE.** (F-05) `ruleClarify` was skipping
+   clarification entirely whenever the specialty spec was missing, which guaranteed `ruleFormulate`
+   would fabricate a placeholder PICO. It now keeps asking with free-text prompts;
+   `ruleFormulate` refuses to state a question without a population and an intervention and names
+   what is missing; the route returns 400 with `missing`/`field`/`questionText`; and the client
+   resumes clarification rather than recomputing the rejected placeholder in the browser. Both
+   functions now also resolve the specialty against the KB once, so an unknown truthy value no
+   longer throws inside `rationalOutcomes`. Verified 14/14 over HTTP plus a tree-wide scan proving
+   the placeholder wording no longer reaches any output. Suite 187 → 188.
 6. **Restore the AI provider or add a deterministic commentary fallback.** (F-19) `commentary`
    is the evidence-critical stage and currently has no fallback; it was returning 503 for every
    request during the audit.
@@ -673,12 +737,13 @@ provisioning are resolved.**
   and 2), and the bundle now provably matches the repository — but F-23 means every install
   fails at the commentary stage for want of a provider key. Blocked by step 6.
 - **Web / Vercel:** the hosted deployment is not directly exposed to the Windows RCE advisory, and
-  the deterministic evidence chain is correctly built, correctly wired, and covered by 187
-  passing tests. It is still not cleared: step 1 is mandatory regardless of host, and steps 5-6
-  are real functional defects on the commentary and export paths.
+  the deterministic evidence chain is correctly built, correctly wired, and covered by 188
+  passing tests. It is still not cleared: step 1 is mandatory regardless of host, and step 6 is a
+  real functional defect on the commentary path that every user hits.
 - **Not recommended at any point:** treating this system as clinically validated. It is an
   evidence-retrieval and drafting aid with strict citation discipline, not a clinical decision
-  tool — and F-05 shows it can still emit content-free questions.
+  tool — and F-05 showed it could emit content-free questions until step 5, which is a reminder
+  that the remaining unverified paths deserve the same scrutiny.
 
 ## 6. Explicitly not verified
 

@@ -364,4 +364,8 @@ export interface Formulation {
   advisories: string[];
   searchTerms: { population: string; intervention: string; outcome: string };
   source: "ai" | "rules";
+  /** False when the inputs are too thin to state a clinical question honestly. */
+  complete: boolean;
+  /** PICO elements the caller still owes when `complete` is false. */
+  missingElements: string[];
 }

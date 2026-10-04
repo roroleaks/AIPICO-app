@@ -588,6 +588,33 @@ function readAnalysisStage(
   };
 }
 
+/**
+ * A formulation that cannot state a real clinical question is a 400, not a 200 with placeholders
+ * (F-05). The response names the missing PICO elements and the question to ask for the first of
+ * them, so the caller can resume clarification instead of presenting "Women with the population of
+ * interest" to a clinician as though it were a formulated question.
+ */
+function formulated(f: ReturnType<typeof ruleFormulate>): NextResponse {
+  if (f.complete) return NextResponse.json(f);
+  const [first, ...rest] = f.missingElements;
+  const question =
+    first === "condition"
+      ? "What is the clinical problem or population?"
+      : first === "intervention"
+        ? "What intervention are you considering?"
+        : `What is the ${first}?`;
+  return NextResponse.json(
+    {
+      error: `Cannot formulate a clinical question without ${f.missingElements.join(" and ")}.`,
+      missing: f.missingElements,
+      field: first ?? null,
+      questionText: question,
+      otherMissing: rest
+    },
+    { status: 400 }
+  );
+}
+
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
   try {
@@ -1112,9 +1139,9 @@ Using the analysis and clarified answers, produce:
 Respond ONLY with JSON.`,
           { analysis, answered, specialtyKnowledge: analysis.specialty ? KB[analysis.specialty] : null, outcomeLogic }
         );
-        return NextResponse.json({ ...out, source: "ai" });
+        return NextResponse.json({ ...out, source: "ai", complete: true, missingElements: [] });
       }
-      return NextResponse.json(ruleFormulate(analysis, answered));
+      return formulated(ruleFormulate(analysis, answered));
     }
 
     return NextResponse.json({ error: "Unknown stage" }, { status: 400 });
@@ -1141,11 +1168,9 @@ Respond ONLY with JSON.`,
             body.answered && typeof body.answered === "object" && !Array.isArray(body.answered)
               ? (body.answered as Record<string, string>)
               : {};
-          return NextResponse.json(
-            stage === "clarify"
-              ? ruleClarify(analysis as Analysis, answered)
-              : ruleFormulate(analysis as Analysis, answered)
-          );
+          return stage === "clarify"
+            ? NextResponse.json(ruleClarify(analysis as Analysis, answered))
+            : formulated(ruleFormulate(analysis as Analysis, answered));
         } catch (fallbackError) {
           console.error(`[engine] rule fallback for "${stage}" also failed:`, fallbackError);
         }

@@ -92,12 +92,22 @@ export function ruleClarify(analysis: Analysis, answered: Record<string, string>
   // genuinely malformed input with a 400.
   const a = (analysis || {}) as Partial<Analysis>;
   const ans = (answered || {}) as Record<string, string>;
-  const spec = a.specialty ? KB[a.specialty] : null;
+  // Resolve the specialty against the KB once. A truthy but unrecognized value such as "nope"
+  // must collapse to null here, because every downstream KB[...] lookup and rationalOutcomes call
+  // would otherwise dereference undefined.
+  const specKey: SpecialtyKey | null =
+    a.specialty && KB[a.specialty as SpecialtyKey] ? (a.specialty as SpecialtyKey) : null;
+  const spec = specKey ? KB[specKey] : null;
   const missing = Array.isArray(a.missing) ? a.missing : [];
   const nextField = missing.find(f => !ans[f]);
-  if (!nextField || !spec) {
+  if (!nextField) {
     return { done: true, field: null, questionText: "", options: [], allowFreeText: false, source: "rules" };
   }
+  // A missing specialty spec is NOT a reason to stop asking. The old code returned done: true
+  // whenever `spec` was null, so an unrecognised clinical area skipped clarification entirely and
+  // went straight to ruleFormulate with nothing collected - which then fabricated "Women with the
+  // population of interest" as a clinical question. The PICO prompts below need no spec; only the
+  // suggested options do, and an empty option list still leaves the free-text answer available.
   const prompts: Record<string, string> = {
     condition: "What is the clinical problem or population?",
     intervention: "What intervention are you considering?",
@@ -105,16 +115,16 @@ export function ruleClarify(analysis: Analysis, answered: Record<string, string>
     outcome: "What is your primary outcome?"
   };
   const optionMap: Record<string, string[]> = {
-    condition: spec.conditions,
-    intervention: spec.interventions,
-    comparator: ["no treatment / placebo", "usual care", ...spec.interventions.slice(0, 5)],
-    outcome: spec.outcomesRanked
+    condition: spec ? spec.conditions : [],
+    intervention: spec ? spec.interventions : [],
+    comparator: spec ? ["no treatment / placebo", "usual care", ...spec.interventions.slice(0, 5)] : [],
+    outcome: spec ? spec.outcomesRanked : []
   };
   let options: string[] = (optionMap[nextField] || []).slice(0, 8);
   let rationale: string | undefined;
   if (nextField === "outcome") {
     const condition = ans.condition || a.condition || "";
-    const logic = rationalOutcomes(condition, a.specialty ?? null);
+    const logic = rationalOutcomes(condition, specKey);
     options = [logic.primary, ...logic.alternatives.filter(o => o !== logic.primary)].slice(0, 8);
     rationale = logic.rationale;
   }
@@ -132,12 +142,43 @@ export function ruleClarify(analysis: Analysis, answered: Record<string, string>
 export function ruleFormulate(analysis: Analysis, answered: Record<string, string>): Formulation {
   const a = (analysis || {}) as Partial<Analysis>;
   const ans = (answered || {}) as Record<string, string>;
-  const cond = ans.condition || a.condition || "the population of interest";
-  const iv = ans.intervention || a.intervention || "the intervention";
+  const cond = ans.condition || a.condition || "";
+  const iv = ans.intervention || a.intervention || "";
   const comp = ans.comparator || a.comparator || "no treatment";
   const out = ans.outcome || "a clinically meaningful outcome";
+
+  // Without a population and an intervention the switch below emits a fluent, confident question
+  // containing invented content - "In women with the population of interest, does the intervention
+  // compared with no treatment improve a clinically meaningful outcome?" That reads as a clinical
+  // question while asserting nothing, which is worse than an error in a decision-support tool. So
+  // refuse and name the elements the caller still owes, rather than fabricate. Comparator and
+  // outcome keep their neutral defaults: "no treatment" and "a clinically meaningful outcome" are
+  // defensible positions for a PICO, whereas inventing a population is not.
+  const missingElements: string[] = [];
+  if (!cond.trim()) missingElements.push("condition");
+  if (!iv.trim()) missingElements.push("intervention");
+  if (missingElements.length) {
+    return {
+      framework: a.framework as Formulation["framework"],
+      elements: [],
+      finalQuestion: "",
+      variants: [],
+      scores: [],
+      advisories: [],
+      searchTerms: { population: "", intervention: "", outcome: "" },
+      source: "rules",
+      complete: false,
+      missingElements
+    };
+  }
+
   let finalQuestion: string;
   let elements: { label: string; value: string }[];
+  // Resolve the specialty once, against the KB, so an unrecognized truthy value such as "nope"
+  // becomes null here instead of being handed to KB lookups further down.
+  const specKey: SpecialtyKey | null =
+    a.specialty && KB[a.specialty as SpecialtyKey] ? (a.specialty as SpecialtyKey) : null;
+  const spec = specKey ? KB[specKey] : null;
   switch (a.framework) {
     case "PICO":
       finalQuestion = `In women with ${cond}, does ${iv} compared with ${comp} improve ${out}?`;
@@ -174,7 +215,7 @@ export function ruleFormulate(analysis: Analysis, answered: Record<string, strin
     { name: "Specificity", value: 17 }
   ];
   const advisories: string[] = [];
-  const logic = rationalOutcomes(cond, a.specialty ?? null);
+  const logic = rationalOutcomes(cond, specKey);
   if (out.toLowerCase() === logic.primary.toLowerCase()) {
     scores[3] = { name: "Outcome", value: 20 };
   } else if (logic.alternatives.some(o => o.toLowerCase() === out.toLowerCase())) {
@@ -187,7 +228,6 @@ export function ruleFormulate(analysis: Analysis, answered: Record<string, strin
   if (/miscarriage rate|implantation rate|clinical pregnancy rate/.test(out.toLowerCase())) {
     advisories.push("Report pregnancy-related outcomes as live birth or ongoing pregnancy where possible — biochemical endpoints are poor surrogates.");
   }
-  const spec = a.specialty ? KB[a.specialty] : null;
   const altOutcomes = [...(logic.alternatives || []), ...(spec ? spec.outcomesRanked : [])]
     .filter(o => o.toLowerCase() !== out.toLowerCase());
   const variants = [
@@ -205,6 +245,8 @@ export function ruleFormulate(analysis: Analysis, answered: Record<string, strin
     scores,
     advisories,
     searchTerms: { population: cond, intervention: iv, outcome: out },
-    source: "rules"
+    source: "rules",
+    complete: true,
+    missingElements: []
   };
 }

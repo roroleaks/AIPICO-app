@@ -104,6 +104,10 @@ export default function QuestionPage() {
   const formulate = useCallback(async (a: Analysis, ans: Record<string, string>) => {
     setBusy("formulate");
     let f: Formulation | null = null;
+    // A 400 that names missing PICO elements is the server refusing to fabricate a clinical
+    // question (F-05). Falling through to a local ruleFormulate would recompute exactly the
+    // placeholder we just rejected, so resume clarification for the element it names instead.
+    let resume: { field: string; questionText: string } | null = null;
     try {
       try {
         const res = await fetch("/api/engine", {
@@ -112,10 +116,36 @@ export default function QuestionPage() {
         });
         const parsed = await res.json();
         if (parsed && parsed.finalQuestion && !parsed.error) f = parsed;
+        else if (parsed && parsed.error && parsed.field) {
+          resume = { field: parsed.field, questionText: parsed.questionText || "Please clarify." };
+        }
       } catch {}
+      if (resume) {
+        setSelectedOutcomes([]);
+        setClarification({
+          done: false, field: resume.field, questionText: resume.questionText,
+          options: [], allowFreeText: true, source: "rules"
+        });
+        setChatLog(prev => [...prev, { q: resume!.questionText }]);
+        setBusy(null);
+        return;
+      }
       if (!f) {
         const { ruleFormulate } = await import("@/lib/rule-engine");
         f = ruleFormulate(a, ans);
+      }
+      if (!f.finalQuestion) {
+        // The local fallback refused too. Ask for whatever it says is missing rather than
+        // rendering an empty question card.
+        const field = f.missingElements?.[0] || "condition";
+        const questionText = field === "intervention"
+          ? "What intervention are you considering?"
+          : "What is the clinical problem or population?";
+        setSelectedOutcomes([]);
+        setClarification({ done: false, field, questionText, options: [], allowFreeText: true, source: "rules" });
+        setChatLog(prev => [...prev, { q: questionText }]);
+        setBusy(null);
+        return;
       }
       finishAndGo(f, ans);
     } catch {

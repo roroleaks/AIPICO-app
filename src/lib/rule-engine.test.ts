@@ -45,41 +45,86 @@ test("ruleClarify survives an absent or non-array missing list", () => {
   }
 });
 
-test("ruleClarify survives an unknown specialty", () => {
+test("ruleClarify keeps asking when the specialty is unknown (F-05 root cause)", () => {
+  // It used to return done: true here, which skipped clarification entirely and let
+  // ruleFormulate fabricate "Women with the population of interest".
   const r = ruleClarify({ ...FULL, specialty: "nope" } as unknown as Analysis, {});
-  assert.equal(r.done, true);
-});
-
-test("ruleClarify survives absent answered and asked nothing", () => {
-  const r = ruleClarify({ ...FULL, missing: [] } as Analysis, undefined as unknown as Record<string, string>);
-  assert.equal(r.done, true);
-});
-
-test("ruleClarify still asks a real question for a real analysis", () => {
-  const r = ruleClarify(FULL, { condition: "PCOS" });
   assert.equal(r.done, false);
   assert.equal(r.field, "outcome");
-  assert.ok(r.options.length > 0, "expected outcome options");
-  assert.equal(r.source, "rules");
+  assert.equal(r.allowFreeText, true);
+  assert.ok(r.questionText.length > 0);
+  // Outcome suggestions come from the cross-specialty outcome logic, which works without a spec.
+  assert.ok(Array.isArray(r.options));
+
+  // A field with no spec behind it offers no suggestions but must still ask, free text only.
+  const c = ruleClarify(
+    { ...FULL, specialty: null, missing: ["condition"] } as unknown as Analysis,
+    {}
+  );
+  assert.equal(c.done, false);
+  assert.equal(c.field, "condition");
+  assert.deepEqual(c.options, []);
+  assert.equal(c.allowFreeText, true);
 });
 
-test("ruleFormulate survives an empty analysis instead of inventing content", () => {
-  const r = ruleFormulate({} as Analysis, {});
-  // It must return a structurally valid Formulation rather than throwing. The placeholder wording
-  // it falls back to is tracked separately as F-05.
-  assert.equal(typeof r.finalQuestion, "string");
-  assert.ok(r.elements.length > 0);
-  assert.equal(r.source, "rules");
+test("ruleClarify walks every missing field with no specialty spec", () => {
+  const a = { ...FULL, specialty: null, missing: ["condition", "intervention", "comparator", "outcome"] } as unknown as Analysis;
+  const seen: string[] = [];
+  let ans: Record<string, string> = {};
+  for (let i = 0; i < 6; i++) {
+    const r = ruleClarify(a, ans);
+    if (r.done) break;
+    seen.push(r.field as string);
+    ans = { ...ans, [r.field as string]: "answered" };
+  }
+  assert.deepEqual(seen, ["condition", "intervention", "comparator", "outcome"]);
+  assert.equal(ruleClarify(a, ans).done, true, "must terminate once every field is answered");
 });
 
-test("ruleFormulate survives null analysis and null answered", () => {
+test("ruleFormulate refuses to fabricate when population or intervention is missing (F-05)", () => {
+  const cases: [Record<string, string>, Record<string, string>, string[]][] = [
+    [{}, {}, ["condition", "intervention"]],
+    [{ condition: "PCOS" }, {}, ["intervention"]],
+    [{ intervention: "metformin" }, {}, ["condition"]],
+    [{ condition: "   " }, { intervention: "IVF" }, ["condition"]],
+  ];
+  for (const [a, ans, expected] of cases) {
+    const r = ruleFormulate(a as unknown as Analysis, ans);
+    assert.equal(r.complete, false, `should refuse for ${JSON.stringify({ a, ans })}`);
+    assert.deepEqual(r.missingElements, expected);
+    assert.equal(r.finalQuestion, "", "must not emit a question with invented content");
+    assert.deepEqual(r.variants, []);
+    assert.deepEqual(r.elements, []);
+  }
+});
+
+test("ruleFormulate survives null analysis and null answered by refusing, not throwing", () => {
   const r = ruleFormulate(null as unknown as Analysis, null as unknown as Record<string, string>);
-  assert.equal(typeof r.finalQuestion, "string");
-  assert.ok((r.variants || []).length > 0);
+  assert.equal(r.complete, false);
+  assert.equal(r.finalQuestion, "");
+});
+
+test("ruleFormulate states a real question once population and intervention are known", () => {
+  const r = ruleFormulate({ condition: "PCOS" } as unknown as Analysis, { intervention: "metformin" });
+  assert.equal(r.complete, true);
+  assert.deepEqual(r.missingElements, []);
+  assert.match(r.finalQuestion, /PCOS/);
+  assert.match(r.finalQuestion, /metformin/);
+  assert.ok(r.elements.length > 0);
+  assert.ok(r.variants!.length > 0);
+});
+
+test("ruleFormulate never leaks the old placeholder wording", () => {
+  const r = ruleFormulate({ condition: "PCOS" } as unknown as Analysis, { intervention: "metformin", comparator: "placebo" });
+  for (const banned of ["the population of interest", "the intervention"]) {
+    assert.ok(!r.finalQuestion.includes(banned), `finalQuestion must not contain "${banned}"`);
+    assert.ok(!r.elements.some(e => e.value.includes(banned)), `elements must not contain "${banned}"`);
+  }
 });
 
 test("ruleFormulate honours a real analysis", () => {
   const r = ruleFormulate(FULL, { outcome: "live birth" });
+  assert.equal(r.complete, true);
   assert.match(r.finalQuestion, /PCOS/);
   assert.match(r.finalQuestion, /IVF/);
   assert.equal(r.framework, "PICO");
