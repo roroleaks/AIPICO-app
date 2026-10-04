@@ -36,6 +36,12 @@ interface CommentaryPaper {
   /** Citations that matched no retrieved source and were stripped so no unverifiable
    *  attribution reaches the user. Surfaced rather than silently dropped. */
   removedCitations?: string[];
+  /** Whether a model wrote the narrative ("ai") or it was assembled without one ("deterministic"). */
+  source?: "ai" | "deterministic";
+  /** False when `source` is "deterministic": the text below is an evidence list, not a synthesis. */
+  synthesisGenerated?: boolean;
+  /** Server-supplied explanation shown to the user when no synthesis was produced. */
+  notice?: string;
 }
 interface RefAudit {
   pmid: string; title: string; url: string;
@@ -212,6 +218,9 @@ export default function PaperPage() {
                 x => !!x && typeof x.pmid === "string" && typeof x.title === "string"
               ) : undefined,
           noDirectEvidence: typeof data.noDirectEvidence === "boolean" ? data.noDirectEvidence : undefined,
+          source: data.source === "ai" || data.source === "deterministic" ? data.source : undefined,
+          synthesisGenerated: typeof data.synthesisGenerated === "boolean" ? data.synthesisGenerated : undefined,
+          notice: typeof data.notice === "string" ? data.notice : undefined,
           refAudit: curRefAudit(data),
           paperRefAudit: curPaperRefAudit(data),
           citationChecks: curCitationChecks(data),
@@ -518,6 +527,16 @@ ${bibliography}
             )}
             {commentary && (
               <>
+                {commentary.synthesisGenerated === false && (
+                  <div style={{
+                    border: "1px solid #b45309", background: "#fffbeb", color: "#78350f",
+                    borderRadius: 10, padding: "10px 12px", marginBottom: 14, fontSize: ".9rem"
+                  }}>
+                    <strong>Evidence list, not a written synthesis.</strong>{" "}
+                    {commentary.notice
+                      || "No AI provider key is configured for this instance, so the text below was assembled without a language model. It lists and cites the retained records but draws no conclusions from them."}
+                  </div>
+                )}
                 <h2 style={{ marginBottom: 12 }}>{commentary.title}</h2>
                 <p style={{ fontSize: ".9rem", color: "var(--muted)", marginBottom: 16 }}>Keywords: {commentary.keywords.join(", ")}</p>
                 <h3 className="sec-h">Abstract</h3><p>{commentary.abstract}</p>

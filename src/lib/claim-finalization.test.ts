@@ -1,7 +1,7 @@
 ﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { buildEvidenceSet } from "./evidence-set.ts";
-import { finalizeClaims } from "./claim-finalization.ts";
+import { finalizeClaims, splitSentences } from "./claim-finalization.ts";
 import type { AuditableRef, PicoElement } from "./relevance.ts";
 
 const PICO: PicoElement[] = [
@@ -148,3 +148,88 @@ test("finalization is deterministic and idempotent across repeated runs", async 
     assert.deepEqual(again.limitations, first.limitations);
   }
 });
+
+/**
+ * Sentence splitting is on the critical path for citation integrity: `finalizeClaims` judges one
+ * sentence at a time, so a boundary drawn in the wrong place makes a real citation invisible.
+ *
+ * `(Smith et al. 2020)` was split in half at the period in `et al.`, leaving `... agree (Smith et
+ * al.` and the orphaned `2020).` as separate sentences with no citation in either. The surrounding
+ * prose was then rewritten into the uncertainty boilerplate. On a live AI commentary this produced
+ * 17 stripped claims, seven repetitions of the boilerplate in one paragraph, and stray `2026).`
+ * fragments published in the final text.
+ */
+test("splitSentences does not cut a citation in half at 'et al.'", async () => {
+  const sents = splitSentences(
+    "Several trials agree (Smith et al. 2020). Kumar 2026 extended this finding."
+  );
+
+  assert.equal(sents.length, 2, `expected 2 sentences, got ${JSON.stringify(sents)}`);
+  assert.ok(sents[0].includes("(Smith et al. 2020)"), "the citation must survive intact");
+  assert.ok(!sents.some(s => /^\s*\d{4}\)\./.test(s)), "no orphaned year fragment");
+});
+
+test("splitSentences keeps other abbreviations whole", () => {
+  for (const text of [
+    "Rates fell (Kumar 2026), i.e. the effect persisted. It held.",
+    "Progesterone was effective (Zethelius 2026), cf. Fig. 2. Rates fell.",
+    "No. 4 was excluded (Kumar 2026). Rates fell."
+  ]) {
+    const sents = splitSentences(text);
+    assert.ok(!sents.some(s => /^\s*\d{4}[).]/.test(s)), `orphaned fragment in: ${JSON.stringify(sents)}`);
+  }
+});
+
+test("a citation written with 'et al.' is recognised, not orphaned", async () => {
+  const es = await buildEvidenceSet([SUPPORTING]);
+  const withEtAl = "Progesterone reduced preterm birth (Likes et al. 2019).";
+  const res = finalizeClaims({ fields: { discussion: withEtAl }, evidenceSet: es, elements: PICO });
+
+  // Before the fix the citation was split across two sentences, neither of which carried it, so
+  // this correctly-cited and correctly-supported sentence was stripped.
+  assert.deepEqual(res.removedClaims, [], "a supported 'et al.' citation must not be removed");
+  assert.match(res.fields.discussion, /reduced preterm birth/);
+  assert.deepEqual(res.warnings, []);
+});
+
+test("adjacent unsupported sentences do not repeat the boilerplate", async () => {
+  const es = await buildEvidenceSet([SUPPORTING]);
+  const fields = {
+    discussion:
+      "Progesterone reduced preterm birth. " +
+      "Vaginal progesterone improved outcomes. " +
+      "Treatment should be offered routinely. " +
+      "Progesterone was superior to cerclage."
+  };
+  const res = finalizeClaims({ fields, evidenceSet: es, elements: PICO });
+
+  const boilerplate =
+    "Direct evidence supporting this statement was not identified in the retained sources";
+  const occurrences = res.fields.discussion.split(boilerplate).length - 1;
+
+  // Every removal is still reported; only the duplicated prose is collapsed.
+  assert.equal(res.removedClaims.length, 4, "all four unsupported claims are still recorded");
+  assert.equal(res.warnings.length, 4, "all four removals are still reported");
+  assert.equal(occurrences, 1, `boilerplate appeared ${occurrences} times in one field`);
+  assert.equal(res.limitations.length, 1);
+});
+
+test("non-adjacent unsupported sentences keep their own limitation", async () => {
+  const es = await buildEvidenceSet([SUPPORTING]);
+const res = finalizeClaims({
+    fields: {
+      discussion:
+        "Progesterone reduced preterm birth (Likes 2019). " +
+        "Progesterone improved outcomes. " +
+        "Treatment reduced preterm birth before 37 weeks (Likes 2019)."
+    },
+    evidenceSet: es,
+    elements: PICO
+  });
+  // Only consecutive runs collapse: a supported sentence between two unsupported ones separates
+  // them, and replacing both would misrepresent the paragraph.
+assert.equal(res.limitations.length, 1);
+  assert.match(res.fields.discussion, /reduced preterm birth \(Likes 2019\)/);
+  assert.match(res.fields.discussion, /reduced preterm birth before 37 weeks \(Likes 2019\)/);
+});
+

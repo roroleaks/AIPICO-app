@@ -9,21 +9,21 @@
 
 ## 1. Status
 
-**FAIL — not releasable in its current state.** (Steps 1–5 of 10 complete.)
+**FAIL — not releasable in its current state.** (Steps 1–6 of 10 complete.)
 
 The deterministic evidence core is genuinely well built and verified: the claim-filter →
 evidence-set → finalization → reconciliation → export chain is fully wired from a single
-retained set, all 188 tests pass, and typecheck/lint/build are clean. No secrets are exposed
+retained set, all 204 tests pass, and typecheck/lint/build are clean. No secrets are exposed
 anywhere in the tree or in the entire Git history, and error handling degrades gracefully
 without leaking internals.
 
-**12 open defects** remain, led by:
+**11 open defects** remain, led by:
 
 - **4 MEDIUM** functional defects: a tokenizer that silently splits canonical clinical phrases and
   degrades evidence recall (F-07), a per-token length cap gap (F-06), and phrase-level alias and
   CoQ10 normalization defects (F-08, F-09);
-- the desktop build still has **no way to obtain an AI provider key** (F-23), so even with the
-  bundle now current, every install produces commentary failures;
+- the desktop build still has **no way to obtain an AI provider key** (F-23), so every install is
+  limited to the deterministic evidence list;
 - two GitHub PATs that must be revoked before release (F-21).
 
 **Resolved during this audit:**
@@ -53,15 +53,25 @@ without leaking internals.
   naming the missing elements, and the client resumes clarification instead of recomputing the
   rejected placeholder locally. 14/14 probes pass; no generated output contains the old
   placeholder wording. Suite grew 187 → 188.
+- **F-19 (was OPERATIONAL)** — commentary is no longer a hard failure when the writing service is
+  unavailable. The provider recovered during step 6 (200 in 7–19s), which is what finally allowed
+  the live commentary E2E to run at all; the no-key path was separately verified. See F-19 and
+  F-24 below.
+- **F-24 (found and fixed during step 6)** — `splitSentences` cut sentences at the period in
+  `et al.` and in author initials, orphaning `2020).` as its own citation-less sentence. Because
+  `finalizeClaims` judges one sentence at a time, that made correctly-cited prose look uncited and
+  replaced it with the uncertainty boilerplate: on a real commentary it produced 17 stripped
+  claims, the same 33-word sentence repeated 7 times in one paragraph, and stray `2026).`
+  fragments published in the reader-facing text.
 
-Two audit criteria could **not** be completed because the production AI provider returned
-HTTP 503 throughout the audit window:
+The two audit items previously listed as impossible are now done. The provider returned HTTP 200
+for the first time during step 6, so:
 
-- live commentary generation / claim-filtered evidence E2E could not be re-run;
-- PDF export end-to-end could not be exercised with real retained evidence.
+- live commentary generation / claim-filtered evidence E2E has now run against the real provider
+  and against the no-key fallback — see the verification matrix;
+- PDF export end-to-end remains to be exercised with real retained evidence (step 8).
 
-Per the acceptance rule (no "fully verified" claim while anything material is unchecked),
-**full acceptance is not claimed.**
+Full acceptance is still not claimed: steps 7–10 are open and PDF export E2E has not run.
 
 ---
 
@@ -69,7 +79,7 @@ Per the acceptance rule (no "fully verified" claim while anything material is un
 
 | Check | Command | Result |
 |---|---|---|
-| Unit/integration tests | `npm test` | **188 pass, 0 fail** (1.36 s) |
+| Unit/integration tests | `npm test` | **204 pass, 0 fail** (1.44 s) |
 | Type safety | `npx tsc --noEmit` | exit 0, clean |
 | Lint | `npm run lint` | exit 0, clean |
 | Build | `npm run build` | exit 0, 8 routes (5 static, 3 dynamic) |
@@ -85,11 +95,11 @@ Per the acceptance rule (no "fully verified" claim while anything material is un
 | Export gate probes | 6 direct `validateDeliverableIntegrity` calls | 1 High-impact defect (F-02) |
 | API method handling | GET/PUT on 3 routes | **405 on all** — correct |
 | API malformed payloads | 25+ probes across 3 routes | 6 defects (F-02…F-05, F-10…F-13) |
-| Live commentary E2E | production ×3 | **NOT RUN — provider 503 (F-19)** |
+| Live commentary E2E | production ×3 | **PASS — source="ai" (with key); PASS — source="deterministic" (no-key)** — F-19 and F-24 resolved |
 | **Desktop bundle parity** | `build-app-source.ps1` | **43/43 files identical by SHA-256** — F-01 fixed |
 | **Desktop bundle install** | `npm install` in extracted zip | 362 packages, exit 0; `next` 16.3.8, `sharp` 0.35.5 |
 | **Desktop bundle build** | `npm run build` in extracted zip | exit 0, all 8 routes |
-| **Desktop bundle tests** | `npm test` in extracted zip | **188 pass, 0 fail** (re-verified after step 5) |
+| **Desktop bundle tests** | `npm test` in extracted zip | **204 pass, 0 fail** (re-verified after step 6) |
 | **Staleness guard** | 2 files edited + 1 added, then `-Check` | correctly reported `STALE BUNDLE`, exit 1 |
 | **Line-ending normalization** | `git diff --ignore-cr-at-eol`, `git hash-object` | **empty / blob unchanged** — no content altered |
 | Desktop provider-key path | grep all launcher + installer scripts | **absent — F-23** |
@@ -610,14 +620,44 @@ for a public repository.
 
 `CLAUDE.md` is 11 bytes; `AGENTS.md` is 678 bytes. Harmless but misleading.
 
-### F-19 — OPERATIONAL — Production AI provider degraded during the audit; no commentary fallback
+### F-19 — RESOLVED (was OPERATIONAL) — No commentary fallback when AI writing service is unavailable
 
-Every LLM-dependent production call returned
-**503 `The AI service is temporarily unavailable. Please try again.`** throughout the audit
-(confirmed across payload sizes 10 B – 20 KB, so it is not a size issue). The deterministic
-rule-based fallback covers `intent`/`clarify`/`formulate` but **there is no fallback for
-`commentary`**, which is the evidence-critical stage. This is the known free-LLM-fallback gap,
-now confirmed to be a live availability risk rather than a theoretical one.
+Every LLM-dependent production call returned 503 during the initial audit window, and the route
+returned a hard 503 whenever `GEMINI_API_KEY` was missing (which is the default on any desktop or
+self-hosted install). Although a deterministic generator existed at `/api/engine`, it was
+unreachable in exactly the situation it was written for.
+
+Furthermore, that generator was worse than useless in a clinical tool: it asserted findings it
+never read, cited only the first of its eight references, and published the same cervix/progesterone
+keywords for every clinical topic.
+
+#### Resolution
+
+The hard 503 check has been removed. When the provider key is missing or the provider fails:
+1. The system calls `generateDeterministicCommentary` (now extracted to a testable module in `src/lib/deterministic-commentary.ts`).
+2. The generator writes an honest, claims-free description of the search and cites every record it lists.
+3. The response includes `source: "deterministic"`, `synthesisGenerated: false`, and an explicit reader notice.
+4. The paper page displays a warning banner informing the user that this is an evidence list, not an AI synthesis.
+5. All 11 unit-test assertions pass, confirming citation consistency, keyword phrase-matching, and that no findings are fabricated.
+
+#### Verification
+Probes with `GEMINI_API_KEY` hidden now return a clean HTTP 200 with `source="deterministic"`, 3/3 cited references, and no claim warnings from `finalizeClaims`. All 204 tests pass.
+
+### F-24 — RESOLVED (was HIGH) — `splitSentences` cut citations at `et al.` and author initials
+
+Found and fixed during the F-19 implementation. Because `finalizeClaims` judges one sentence at a
+time, any split inside a citation (e.g. at the period in `et al.` or in an initial like `J. Romero`)
+makes the citation invisible to the parser. That made correctly-cited prose look uncited and
+replaced it with the uncertainty boilerplate: on a real AI commentary it produced 17 stripped
+claims, the same 33-word sentence repeated 7 times in one paragraph, and stray `2026).`
+fragments published in the reader-facing text.
+
+#### Resolution
+`splitSentences` has been rewritten to mask known abbreviations and single-letter initials before splitting and restore them afterwards.
+Consecutive identical limitation sentences are also de-duplicated inside `finalizeClaims` so multiple unsupported claims do not result in repeated boilerplate.
+
+#### Verification
+AI commentary probes now cite 3/3 references, and stripped claims dropped 17 → 4 (only genuinely unsupported sentences are removed). The duplicated boilerplate and year fragments are gone. Tested by 5 new unit-test cases in `src/lib/claim-finalization.test.ts` — all pass.
 
 ### F-20 — OPERATIONAL — Deployed commit lags the repository HEAD by one README commit
 

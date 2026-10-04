@@ -50,8 +50,16 @@ try {
     Copy-Item "$tmp\*" $AppDir -Recurse -Force
   }
   # keep launcher scripts fresh (Inno also deploys them; this is a safety net)
-  if (Test-Path (Join-Path $PSScriptRoot "launch-aipico.ps1")) { Copy-Item (Join-Path $PSScriptRoot "launch-aipico.ps1") "$AppDir\launch-aipico.ps1" -Force }
-  if (Test-Path (Join-Path $PSScriptRoot "launch-aipico.vbs")) { Copy-Item (Join-Path $PSScriptRoot "launch-aipico.vbs") "$AppDir\launch-aipico.vbs" -Force }
+  $src1 = Join-Path $PSScriptRoot "launch-aipico.ps1"
+  $dest1 = "$AppDir\launch-aipico.ps1"
+  if ((Test-Path $src1) -and ((Get-Item $src1).FullName -ne (Get-Item $dest1 -ErrorAction SilentlyContinue).FullName)) {
+    Copy-Item $src1 $dest1 -Force
+  }
+  $src2 = Join-Path $PSScriptRoot "launch-aipico.vbs"
+  $dest2 = "$AppDir\launch-aipico.vbs"
+  if ((Test-Path $src2) -and ((Get-Item $src2).FullName -ne (Get-Item $dest2 -ErrorAction SilentlyContinue).FullName)) {
+    Copy-Item $src2 $dest2 -Force
+  }
   Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
   Log "App extracted to $AppDir"
 

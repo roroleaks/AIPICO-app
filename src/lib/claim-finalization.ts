@@ -133,13 +133,46 @@ const LIMITATION =
   "so it is reported here as an unresolved uncertainty rather than a finding.";
 
 /**
+ * Abbreviations whose trailing period does not end a sentence.
+ *
+ * The damaging member of this list is `et al.`: a naive boundary rule splits `(Smith et al. 2020)`
+ * in half, leaving `... agree (Smith et al.` as one sentence and the orphaned `2020).` as the next.
+ * Neither half contains a citation, so `extractInTextCites` finds nothing and `finalizeClaims`
+ * judges the surrounding prose uncited and rewrites it into the uncertainty boilerplate. On a real
+ * AI commentary this produced 17 stripped claims, seven repetitions of the same boilerplate
+ * sentence in one paragraph, and stray `2026).` fragments left standing in the published text.
+ */
+const ABBREVIATION =
+  /\b(?:et\s+al|e\.g|i\.e|cf|vs|Fig|Figs|Tab|No|Dr|Prof|Mr|Mrs|Ms|St|Jr|Sr|approx)\.(?=\s|$)/gi;
+
+/**
+ * Author initials. `(Agustin Conde Agudelo and Roberto J. Romero 2015)` was split at the period in
+ * `J.`, stranding `Romero 2015).` as its own citation-less sentence, so the surrounding prose was
+ * rewritten and the fragment was published in the final text.
+ */
+const AUTHOR_INITIAL = /\b[A-Z]\.(?=\s)/g;
+
+/**
  * Sentence splitting that does not cut on a decimal point, a citation bracket or an abbreviation.
  */
 export function splitSentences(text: string): string[] {
-  return (text || "")
+  // Mask abbreviation periods before splitting and restore them afterwards. Splitting first would
+  // leave the fragments unrecoverable, because the boundary that cut the citation in half is
+  // indistinguishable from a real sentence end once the text has been split.
+  const abbreviations: string[] = [];
+  const mask = (match: string) => {
+    abbreviations.push(match);
+    return `\u0000${abbreviations.length - 1}\u0000`;
+  };
+  const masked = String(text ?? "")
+    .replace(ABBREVIATION, mask)
+    .replace(AUTHOR_INITIAL, mask);
+
+  return masked
     .split(/(?<=[.!?])["')\]]?\s+(?=[A-Z0-9"“(])/)
     .map(s => s.trim())
-    .filter(s => s.length > 0);
+    .filter(s => s.length > 0)
+    .map(s => s.replace(/\u0000(\d+)\u0000/g, (_, i: string) => abbreviations[Number(i)] ?? ""));
 }
 
 /**
@@ -216,8 +249,15 @@ export function finalizeClaims(input: ClaimFinalizationInput): ClaimFinalization
       removedClaims.push(sentence);
       warnings.push(`Unsupported claim removed from ${field}: ${reason}`);
       claims.push({ field, text: sentence, citationKeys, supported: false, reason });
-      kept.push(LIMITATION);
-      limitations.push(LIMITATION);
+      // Several consecutive unsupported sentences in one field all map to the same boilerplate.
+      // Pushing it for each of them produced a paragraph that repeated the identical 33-word
+      // sentence up to seven times, which reads as a rendering fault and buries the surviving
+      // content. The claims and warnings still record every removal; only the duplicated prose is
+      // collapsed, and only when it is directly adjacent.
+      if (kept[kept.length - 1] !== LIMITATION) {
+        kept.push(LIMITATION);
+        limitations.push(LIMITATION);
+      }
     }
     fields[field] = kept.join(" ").replace(/\s{2,}/g, " ").trim();
   }

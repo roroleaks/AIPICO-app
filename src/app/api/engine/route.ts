@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { KB, QUESTION_TYPES, rationalOutcomes, type Analysis } from "@/lib/kb";
 import { ruleAnalyze, ruleClarify, ruleFormulate } from "@/lib/rule-engine";
 // Claim-specific filtering boundary. The engine imports these rather than keeping its own
@@ -14,6 +14,10 @@ import {
   type PicoElement,
   type RefAudit
 } from "@/lib/relevance";
+// The no-key / provider-failure fallback lives in a module rather than inline in this route so it
+// can be unit tested: the previous inline version shipped unverified, which is how it kept
+// emitting hardcoded keywords and a fabricated "supports the evaluated comparison" claim.
+import { generateDeterministicCommentary } from "@/lib/deterministic-commentary";
 import { buildEvidenceSet } from "@/lib/evidence-set";
 import type { AuditableRef } from "@/lib/relevance";
 import { finalizeClaims } from "@/lib/claim-finalization";
@@ -533,7 +537,7 @@ function readFreeText(
 /**
  * `clarify` and `formulate` both require the analysis object produced by `intent`. Without this
  * check a missing or malformed `analysis` fell through to the catch block and was reported as
- * "The AI service is temporarily unavailable" (503) — filing a client-side validation error as a
+ * "The AI service is temporarily unavailable" (503) � filing a client-side validation error as a
  * provider outage, which corrupts availability metrics and sends the user after the wrong fix.
  *
  * Also rejects an `analysis` that is structurally valid but clinically empty. Answering such a
@@ -629,16 +633,12 @@ export async function POST(req: NextRequest) {
         topic?: string; gapAnalysis?: { known?: unknown[]; uncertain?: unknown[] };
         selectedQuestion?: string; outcome?: string; outcomes?: Array<unknown>; picoElements?: Array<{ label?: unknown; value?: unknown }>;
       };
-      if (!KEY) {
-        // 200 was wrong here: the request was valid and the work was not attempted, so a
-        // health check or any other consumer could not distinguish a configured instance from
-        // a broken one. The desktop installer has no way to supply a key at all (audit F-23),
-        // so this is the response every desktop install receives for this stage.
-        return NextResponse.json(
-          { error: "AI engine required for commentary generation." },
-          { status: 503 }
-        );
-      }
+      // NOTE: there is deliberately no `if (!KEY) return 503` here. That guard made the
+      // deterministic fallback below unreachable whenever no key was configured, which is the
+      // situation of every desktop install (F-23) - so the evidence-critical stage failed outright
+      // even though retrieval, claim filtering and citation integrity all work without a provider.
+      // Absence of a key now selects the deterministic path further down, and the response reports
+      // which path produced it.
       const outcomesArr = Array.isArray(outcomes)
         ? outcomes.filter((o): o is string => typeof o === "string").map(o => o.trim()).filter(Boolean)
         : [];
@@ -731,40 +731,6 @@ export async function POST(req: NextRequest) {
       // The model is asked for a self-consistent draft: every listed reference cited, every
       // citation resolvable. When it is not, one corrective retry names the offending
       // citations rather than shipping a commentary whose reference list it does not support.
-function generateDeterministicCommentary(opts: {
-  selectedQuestion: string;
-  outcomesText: string;
-  pool: PubMedRef[];
-  elements: PicoElement[];
-}): Record<string, unknown> {
-  const pool = opts.pool.slice(0, 8);
-  const refs = pool.map(r => {
-    const year = String(r.year || "").trim() || "2020";
-    const auth = r.authors || "Unknown";
-    const parts = auth.replace(/,/g, " ").split(/\s+/).filter(Boolean);
-    const first = parts[0] || "Study";
-    const second = parts[1] || "A";
-    const cleanDoi = r.doi ? r.doi.replace(/^https?:\/\/doi\.org\//i, "") : "";
-    const doi = cleanDoi ? " doi:" + cleanDoi : "";
-    return first + ", " + second + ". " + year + ". \"" + r.title + ".\" " + (r.journal || "Journal") + doi;
-  });
-  const first = pool[0];
-  const firstYear = first?.year || "2020";
-  const firstAuth = (first?.authors || "Study").replace(/,/g, " ").split(/\s+/).filter(Boolean)[0] || "Study";
-  const discussion = pool.length
-    ? "This commentary focuses on " + opts.outcomesText.toLowerCase() + ". Current evidence (e.g., " + firstAuth + " " + firstYear + ") supports the evaluated comparison in this clinical context. The included studies directly address the specified PICO and outcomes."
-    : "No direct evidence is available for " + opts.outcomesText.toLowerCase() + ".";
-  return {
-    title: "Systematic commentary on " + opts.selectedQuestion.slice(0, 80),
-    abstract: "Background: " + opts.selectedQuestion + ". Methods: Evidence synthesis of filtered studies. Results: Relevant studies were identified addressing the selected outcomes. Conclusion: The available evidence informs the question as specified.",
-    keywords: ["short cervix", "progesterone", "cerclage", "preterm birth"],
-    introduction: "Clinical significance and rationale are considered for the specified question.",
-    discussion,
-    conclusion: "The synthesized evidence relates directly to the stated outcomes.",
-    references: refs
-  };
-}
-      
       const basePrompt = `You are an expert medical writer specializing in Obstetrics and Gynecology.
 
 
@@ -775,7 +741,7 @@ RESEARCH QUESTION: ${String(selectedQuestion || topic || "")}
 SELECTED OUTCOMES: ${outcomesText}
 
 HARD RULES${strictOutcomes ? " (mandatory)" : ""}:
-${strictOutcomes ? `- Discuss ONLY the selected outcomes as target outcomes for this paper. Do NOT introduce any unselected outcome as a target outcome â€” this includes keywords, abstract, discussion, and conclusion.
+${strictOutcomes ? `- Discuss ONLY the selected outcomes as target outcomes for this paper. Do NOT introduce any unselected outcome as a target outcome — this includes keywords, abstract, discussion, and conclusion.
 - Secondary or exploratory outcomes may be mentioned only when clearly labeled as contextual evidence (e.g., begin the sentence with "As a secondary consideration, ..."), never as a target outcome of the paper.
 - keywords must be derived ONLY from the selected outcomes, the patient population, and the intervention. Never include an outcome keyword that was not selected.
 - The title must explicitly name the primary target of the paper, anchored to the first selected outcome.
@@ -792,7 +758,9 @@ ${strictOutcomes ? `- Discuss ONLY the selected outcomes as target outcomes for 
 - Every in-text citation MUST reproduce the EXACT last name and EXACT publication year of one of the provided references (e.g., (Likes 2019) or Likes et al. 2019 only if a reference from Likes is in the pool). Never cite an author or year not present in the referencePool.
 - Cite using the FIRST author's surname exactly as it appears at the start of the listed reference, paired with the listed publication year. Cite EACH listed reference at least once in the discussion; do not list a reference you never cite in the text.
 - The referencePool has ALREADY been filtered for claim-specific relevance: every record in it directly addresses the Population AND (Intervention or Comparator) AND the SELECTED OUTCOMES. Records from other conditions, cancer trials, or basic-science work are not present and must never be cited or listed.
-- Cite and list references ONLY from the provided referencePool.`;
+- Cite and list references ONLY from the provided referencePool.
+- Every sentence that asserts an effect, a magnitude, a mechanism or a recommendation MUST carry its own in-text citation, not just one citation per paragraph. Sentences are judged one at a time: a sentence that asserts something and cites nothing is deleted and replaced with a statement that direct evidence was not identified, so an uncited assertive sentence never reaches the reader.
+- Do not state an effect size, percentage, p-value or confidence interval unless the cited record reports that number. Write only what the cited records support.`;
       const promptPayload = {
         topic, gapAnalysis, selectedQuestion, outcome: outcomesText, referencePool: poolForPrompt
       };
@@ -803,21 +771,42 @@ ${strictOutcomes ? `- Discuss ONLY the selected outcomes as target outcomes for 
       // citations rather than shipping a commentary whose reference list it does not support.
       // The loop stops at the first self-consistent draft, so a good first pass costs one call.
 let commentary: Record<string, unknown>;
-      try {
-        commentary = await callLLM(`${basePrompt}\n${responseShape}`, promptPayload, 2);
-      } catch (e) {
-        console.error("[engine] LLM commentary generation failed, using deterministic fallback:", e);
+      // Provenance is reported to the client. A deterministic evidence list and a model-written
+      // synthesis are very different things to hand a clinician, and the response previously gave
+      // no way to tell them apart (`source` came back undefined for both).
+      let commentarySource: "ai" | "deterministic";
+      if (!KEY) {
+        commentarySource = "deterministic";
         commentary = generateDeterministicCommentary({
           selectedQuestion: String(selectedQuestion || topic || ""),
           outcomesText,
-          pool: evidenceSet.retainedRecords as PubMedRef[],
+          reason: "no AI provider key is configured for this instance",
+          pool: evidenceSet.retainedRecords as AuditableRef[],
           elements
         });
+      } else {
+        try {
+          commentary = await callLLM(`${basePrompt}\n${responseShape}`, promptPayload, 2);
+          commentarySource = "ai";
+        } catch (e) {
+          console.error("[engine] LLM commentary generation failed, using deterministic fallback:", e);
+          commentarySource = "deterministic";
+          commentary = generateDeterministicCommentary({
+            selectedQuestion: String(selectedQuestion || topic || ""),
+            outcomesText,
+            reason: "the AI writing service did not respond",
+            pool: evidenceSet.retainedRecords as AuditableRef[],
+            elements
+          });
+        }
       }
       let curated = curateModelRefs(commentary);
       let citationChecks = checkCitations(String(commentary.discussion || ""), curated.references);
       let repairs = 0;
-      while ((citationChecks.orphans.length || citationChecks.uncited.length) && repairs < 2) {
+      // Only a model-produced draft can be repaired by asking the model again. A deterministic
+      // draft is already built to cite every record it lists, so retrying would just burn two
+      // provider calls that cannot succeed.
+      while (commentarySource === "ai" && (citationChecks.orphans.length || citationChecks.uncited.length) && repairs < 2) {
         repairs++;
           try {
             commentary = await callLLM(
@@ -947,6 +936,14 @@ const noDirectEvidence = directPool.length === 0;
       }
       return NextResponse.json({
         ...commentary,
+        source: commentarySource,
+        synthesisGenerated: commentarySource === "ai",
+        ...(commentarySource === "deterministic"
+          ? {
+              notice:
+                "No AI provider key is configured, so this is a deterministic evidence list rather than a written synthesis. No findings are asserted."
+            }
+          : {}),
         fetchedReferences: curatedRecords,
         additionalEvidence,
         contextualReferences: contextualPool,
@@ -1132,7 +1129,7 @@ Using the analysis and clarified answers, produce:
 - framework: the question framework name
 - elements: array of {label, value} for each framework element (PICO/PICOT/PECO/diagnostic)
 - finalQuestion: ONE polished, answerable clinical question sentence (the recommended default)
-- variants: EXACTLY 4 alternative formulations of the question, each {question, rationale} where rationale (one short sentence) explains the different clinical angle â€” vary by primary outcome, population detail, or comparator. Variant 1 may equal finalQuestion.
+- variants: EXACTLY 4 alternative formulations of the question, each {question, rationale} where rationale (one short sentence) explains the different clinical angle — vary by primary outcome, population detail, or comparator. Variant 1 may equal finalQuestion.
 - scores: array of {name, value} scoring each element 0-20 plus Specificity (max total = number of items x 20). Score the outcome element HIGHEST (18-20) when it matches the recommended primary outcome.
 - advisories: array of short warnings; if the selected outcome is not the most patient-centered for the condition, flag it and recommend "${outcomeLogic.primary}" (rationale: ${outcomeLogic.rationale}).
 - searchTerms: {population, intervention, outcome} optimized for PubMed searching.
