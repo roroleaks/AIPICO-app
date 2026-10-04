@@ -1,5 +1,9 @@
 # AI PICO Launcher - Clinical Question Assistant
 # (c) Dr Raouf Roshdy 2026 - All rights reserved
+[CmdletBinding()]
+param(
+  [switch]$ConfigureKey
+)
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -130,6 +134,62 @@ if (-not (Test-Path "$AppDir\.next")) {
   Write-Ok "Application built"
 } else {
   Write-Ok "Build found"
+}
+
+# Step 4b: Configure Gemini API Key (Optional)
+$envFile = "$AppDir\.env.local"
+$hasKey = $false
+if (Test-Path $envFile) {
+  $envContent = Get-Content $envFile
+  if ($envContent -match "GEMINI_API_KEY=\S+") {
+    $hasKey = $true
+  }
+}
+
+if ($ConfigureKey) {
+  Write-Step "Reconfiguring Gemini API Key..."
+  Write-Host "  Current key status: $(if ($hasKey) { 'Configured' } else { 'Not configured' })"
+  $key = Read-Host "  Please enter your new GEMINI_API_KEY (leave empty to keep current or clear)"
+  $key = $key.Trim()
+  if ($key) {
+    "GEMINI_API_KEY=$key" | Out-File $envFile -Encoding utf8
+    Write-Ok "Gemini API key updated in .env.local"
+  } else {
+    if ($hasKey) {
+      $clearChoice = Read-Host "  Clear current key and run in deterministic mode? (Y/N)"
+      if ($clearChoice -match "^[Yy]") {
+        if (Test-Path $envFile) { Remove-Item $envFile -Force }
+        Write-Ok "Gemini API key cleared. Running in deterministic mode."
+      } else {
+        Write-Info "Key left unchanged."
+      }
+    } else {
+      Write-Info "No key entered."
+    }
+  }
+} elseif (-not $hasKey) {
+  Write-Step "Checking AI Commentary configuration..."
+  Write-Info "No Gemini API key is configured. AI-written commentary will be disabled,"
+  Write-Info "and the app will run in deterministic fallback mode (honest evidence lists)."
+  Write-Host ""
+  $choice = Read-Host "  Do you want to configure a Gemini API key now? (Y/N)"
+  if ($choice -match "^[Yy]") {
+    Write-Host ""
+    $key = Read-Host "  Please enter your GEMINI_API_KEY (e.g. AIzaSy...)"
+    $key = $key.Trim()
+    if ($key) {
+      "GEMINI_API_KEY=$key" | Out-File $envFile -Encoding utf8
+      Write-Ok "Gemini API key saved to .env.local"
+    } else {
+      Write-Info "Empty key entered. Continuing in deterministic mode."
+    }
+  } else {
+    Write-Info "Continuing in deterministic mode. You can configure the key later by running:"
+    Write-Info "  launcher\AIPICO-Launcher.ps1 -ConfigureKey"
+  }
+} else {
+  Write-Step "Checking AI Commentary configuration..."
+  Write-Ok "Gemini API key configuration found"
 }
 
 # Step 5: Start server
