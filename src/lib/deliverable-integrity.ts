@@ -41,17 +41,27 @@ export interface DeliverableIntegrityResult {
   /** Emitted deliverable references absent from the retained evidence set. */
   extraExportReferences: string[];
   duplicateCitationKeys: string[];
+  /**
+   * Entries the caller supplied with the wrong type. The gate reports these instead of
+   * throwing, because it is the last server-side check before a durable, citable artifact is
+   * produced and it receives an untrusted request body verbatim.
+   */
+  malformedReferences: string[];
   warnings: EvidenceWarning[];
 }
 
 /** Canonical key of a reference *string*, independent of which record happens to match it. */
 function referenceKey(ref: string): string {
-  const doi = normalizeDoi((String(ref).match(/10\.\d{4,9}\/[^\s"'<>,;)\]]+/i) || [])[0] || "");
+  // Defensive: this key is also reached from the duplicate-detection loop, which walks the
+  // caller's array before any element guard has run. Coercing here means a non-string can
+  // never reach foldName, which assumes a real string.
+  const raw = String(ref);
+  const doi = normalizeDoi((raw.match(/10\.\d{4,9}\/[^\s"'<>,;)\]]+/i) || [])[0] || "");
   if (doi) return `doi:${doi}`;
-  const pmid = (String(ref).match(/\bPMID:?\s*(\d{6,9})\b/i) || [])[1]
-    || (/pubmed\.ncbi\.nlm\.nih\.gov\/(\d{6,9})/.exec(String(ref)) || [])[1];
+  const pmid = (raw.match(/\bPMID:?\s*(\d{6,9})\b/i) || [])[1]
+    || (/pubmed\.ncbi\.nlm\.nih\.gov\/(\d{6,9})/.exec(raw) || [])[1];
   if (pmid) return `pmid:${pmid}`;
-  return `str:${foldName(ref).slice(0, 80)}`;
+  return `str:${foldName(raw).slice(0, 80)}`;
 }
 
 /**
@@ -103,11 +113,43 @@ function referenceIsBackedBy(ref: string, retained: AuditableRef[]): boolean {
 }
 
 export function validateDeliverableIntegrity(input: DeliverableIntegrityInput): DeliverableIntegrityResult {
-  const fields = input.fields || {};
-  const narrative = Object.keys(fields).map(n => fields[n] || "").join(" ");
-  const references = Array.isArray(input.references) ? input.references : [];
-  const retained = Array.isArray(input.retainedRecords) ? input.retainedRecords : [];
-  const exportReferences = Array.isArray(input.exportReferences) ? input.exportReferences : [];
+  // This gate is reachable directly from an HTTP request body, so it must not assume its input
+  // is well formed. Every list and record field is normalized first: a caller that posts
+  // `references: [{citation: "Smith 2020"}]` gets a structured refusal naming the offending
+  // entry, rather than an exception that surfaces as an opaque HTTP 500. The refusal still
+  // happens, because a malformed entry is exactly the case where the caller cannot be trusted
+  // to have assembled the reference list from retained evidence.
+  const inp = (input || {}) as DeliverableIntegrityInput;
+  const malformedReferences: string[] = [];
+
+  const describe = (v: unknown): string =>
+    v === null ? "null" : Array.isArray(v) ? "array" : typeof v;
+
+  const asStrings = (list: unknown, label: string): string[] => {
+    if (list === undefined || list === null) return [];
+    if (!Array.isArray(list)) {
+      malformedReferences.push(`${label} must be an array of strings, received ${describe(list)}`);
+      return [];
+    }
+    const out: string[] = [];
+    list.forEach((v, i) => {
+      if (typeof v === "string") { out.push(v); return; }
+      malformedReferences.push(`${label}[${i}] must be a string, received ${describe(v)}`);
+    });
+    return out;
+  };
+
+  const fields: Record<string, string> = {};
+  for (const [k, v] of Object.entries((inp.fields || {}) as Record<string, unknown>)) {
+    if (typeof v === "string") { fields[k] = v; continue; }
+    malformedReferences.push(`fields.${k} must be a string, received ${describe(v)}`);
+  }
+  const narrative = Object.keys(fields).map(n => fields[n]).join(" ");
+  const references = asStrings(inp.references, "references");
+  const exportReferences = asStrings(inp.exportReferences, "exportReferences");
+  const retained: AuditableRef[] = (
+    Array.isArray(inp.retainedRecords) ? inp.retainedRecords : []
+  ).filter((r): r is AuditableRef => !!r && typeof r === "object");
 
   const unsupportedCitations: string[] = [];
   const seenUnsupported = new Set<string>();
@@ -157,7 +199,8 @@ export function validateDeliverableIntegrity(input: DeliverableIntegrityInput): 
     uncitedReferences.length === 0 &&
     unresolvedReferences.length === 0 &&
     extraExportReferences.length === 0 &&
-    duplicateCitationKeys.length === 0;
+    duplicateCitationKeys.length === 0 &&
+    malformedReferences.length === 0;
 
   return {
     ok,
@@ -167,6 +210,7 @@ export function validateDeliverableIntegrity(input: DeliverableIntegrityInput): 
     unresolvedReferences,
     extraExportReferences,
     duplicateCitationKeys,
+    malformedReferences,
     warnings: []
   };
 }

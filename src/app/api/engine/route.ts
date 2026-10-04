@@ -506,6 +506,30 @@ const isSpecialty = (s: unknown): s is keyof typeof KB =>
 // Relevance, citation and audit logic now lives in @/lib/relevance (imported above) so the
 // claim-specific filter is unit-testable and shared by the engine, the UI and exports.
 
+/**
+ * `input` carries clinician free text. Coercing it with String() turned a JSON number or object
+ * into a plausible-looking clinical phrase - `{"stage":"intent","input":123}` returned
+ * `intervention: "123"` with HTTP 200 - which then flowed into literature queries and the session
+ * store as though a clinician had typed it. Reject the wrong type instead of inventing a term.
+ */
+function readFreeText(
+  value: unknown,
+  field: string,
+  max = 2000
+): { ok: true; text: string } | { ok: false; response: NextResponse } {
+  if (value === undefined || value === null) return { ok: true, text: "" };
+  if (typeof value !== "string") {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: `Field "${field}" must be a string.` },
+        { status: 400 }
+      )
+    };
+  }
+  return { ok: true, text: value.slice(0, max) };
+}
+
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
   try {
@@ -521,7 +545,14 @@ export async function POST(req: NextRequest) {
         selectedQuestion?: string; outcome?: string; outcomes?: Array<unknown>; picoElements?: Array<{ label?: unknown; value?: unknown }>;
       };
       if (!KEY) {
-        return NextResponse.json({ error: "AI engine required for commentary generation." });
+        // 200 was wrong here: the request was valid and the work was not attempted, so a
+        // health check or any other consumer could not distinguish a configured instance from
+        // a broken one. The desktop installer has no way to supply a key at all (audit F-23),
+        // so this is the response every desktop install receives for this stage.
+        return NextResponse.json(
+          { error: "AI engine required for commentary generation." },
+          { status: 503 }
+        );
       }
       const outcomesArr = Array.isArray(outcomes)
         ? outcomes.filter((o): o is string => typeof o === "string").map(o => o.trim()).filter(Boolean)
@@ -856,7 +887,9 @@ refAudit: directPool.map(r => auditRef(r, elements)),
     }
 
     if (stage === "gap") {
-      const topic = String(body.input || "").slice(0, 2000);
+      const parsedTopic = readFreeText(body.input, "input");
+      if (!parsedTopic.ok) return parsedTopic.response;
+      const topic = parsedTopic.text;
       if (!KEY) {
         return NextResponse.json({
           topic,
@@ -952,7 +985,9 @@ Respond ONLY with valid JSON, no preamble or commentary.`,
     }
 
     if (stage === "intent") {
-      const input = String(body.input || "").slice(0, 2000);
+      const parsedInput = readFreeText(body.input, "input");
+      if (!parsedInput.ok) return parsedInput.response;
+      const input = parsedInput.text;
       if (KEY) {
         const out = await callLLM(
           `You are a clinical intent recognition engine for Obstetrics and Gynecology.
@@ -1024,7 +1059,7 @@ Respond ONLY with JSON.`,
   } catch (e) {
     // Never swallow this silently: an unexplained 503 is impossible to diagnose in production.
     console.error(`[engine] stage "${stage}" failed:`, e);
-    if (stage === "intent") return NextResponse.json(ruleAnalyze(String(body.input || "")));
+    if (stage === "intent") return NextResponse.json(ruleAnalyze(typeof body.input === "string" ? body.input : ""));
     if (stage === "clarify" && body.analysis) {
       return NextResponse.json(ruleClarify(body.analysis as Analysis, (body.answered as Record<string, string>) || {}));
     }

@@ -75,7 +75,10 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ results: [], error: "Invalid JSON body" });
+    // Every error path here used to answer 200, so monitoring and uptime checks saw a
+    // permanently healthy endpoint. The client reads `error` from the body either way, so
+    // these statuses make the failures observable without changing what the UI renders.
+    return NextResponse.json({ results: [], error: "Invalid JSON body" }, { status: 400 });
   }
   const population = toPhrase(body.population);
   const outcome = toPhrase(body.outcome);
@@ -97,7 +100,9 @@ export async function POST(req: NextRequest) {
     outcome || population || strictTerm
   ].filter(Boolean).filter((t, i, a) => a.indexOf(t) === i);
 
-  if (!candidates.length) return NextResponse.json({ results: [], error: "Provide at least one search term." });
+  if (!candidates.length) {
+    return NextResponse.json({ results: [], error: "Provide at least one search term." }, { status: 400 });
+  }
 
   try {
     let term = strictTerm;
@@ -137,6 +142,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ results, term });
   } catch (e) {
     console.error("[pubmed] search failed:", e);
-    return NextResponse.json({ results: [], error: "PubMed search failed" });
+    // 502: the request was well formed, the upstream dependency was not reachable. Reporting
+    // this as 200 told callers the search succeeded and returned zero results, which reads as
+    // "no evidence exists" rather than "the search could not run" - a distinction that matters
+    // a great deal in an evidence-synthesis tool.
+    return NextResponse.json({ results: [], error: "PubMed search failed" }, { status: 502 });
   }
 }

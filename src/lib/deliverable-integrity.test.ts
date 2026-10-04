@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateDeliverableIntegrity } from "./deliverable-integrity.ts";
+import {
+  validateDeliverableIntegrity,
+  type DeliverableIntegrityInput
+} from "./deliverable-integrity.ts";
 import { formatReference, type AuditableRef } from "./relevance.ts";
 
 const RECORDS: AuditableRef[] = [
@@ -166,4 +169,95 @@ test("accepts the same set whichever field order the caller supplies", () => {
   assert.equal(a.ok, b.ok);
   assert.deepEqual(a.orphanCitations, b.orphanCitations);
   assert.deepEqual(a.uncitedReferences, b.uncitedReferences);
+});
+
+// --- Malformed input contract (audit F-02) ---------------------------------
+//
+// /api/pdf passes the untrusted request body straight into this gate, so the gate is reachable
+// with whatever shape a caller sends. Each case below previously threw `ref.trim is not a
+// function` or similar and surfaced as an opaque HTTP 500. The requirement is that it refuses
+// with a structured, named reason and never throws.
+
+test("refuses object-shaped references instead of throwing", () => {
+  const r = validateDeliverableIntegrity({
+    fields: {},
+    references: [{ citation: "Smith 2020 fake" }] as unknown as string[],
+    retainedRecords: RECORDS
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.malformedReferences.length, 1);
+  assert.match(r.malformedReferences[0], /^references\[0\] must be a string, received object$/);
+});
+
+test("refuses malformed references even when valid records accompany them", () => {
+  const r = validateDeliverableIntegrity({
+    fields: {},
+    references: [REF_A, { nope: true }, null, 42] as unknown as string[],
+    retainedRecords: RECORDS
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.malformedReferences.length, 3);
+  assert.match(r.malformedReferences[0], /references\[1\] .* received object$/);
+  assert.match(r.malformedReferences[1], /references\[2\] .* received null$/);
+  assert.match(r.malformedReferences[2], /references\[3\] .* received number$/);
+});
+
+test("refuses malformed exportReferences", () => {
+  const r = validateDeliverableIntegrity({
+    fields: {},
+    references: [REF_A],
+    retainedRecords: RECORDS,
+    exportReferences: [REF_A, { citation: "Smith 2020" }] as unknown as string[]
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.malformedReferences[0], /^exportReferences\[1\] must be a string/);
+});
+
+test("accepts a non-array references value as absent rather than crashing", () => {
+  const r = validateDeliverableIntegrity({
+    fields: { abstract: "No citations here." },
+    references: "not an array" as unknown as string[],
+    retainedRecords: RECORDS
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.malformedReferences[0], /^references must be an array of strings, received string$/);
+});
+
+test("survives null fields and absent retainedRecords", () => {
+  const r = validateDeliverableIntegrity({
+    fields: null as unknown as Record<string, string>,
+    references: [REF_A],
+    retainedRecords: undefined as unknown as AuditableRef[]
+  });
+  // No narrative travels with it, so "uncited" cannot be judged, but the reference has no
+  // retained record behind it and must be reported as unresolved rather than throwing.
+  assert.equal(r.ok, false);
+  assert.deepEqual(r.unresolvedReferences, [REF_A]);
+  assert.deepEqual(r.malformedReferences, []);
+});
+
+test("survives a completely absent input object", () => {
+  const r = validateDeliverableIntegrity(undefined as unknown as DeliverableIntegrityInput);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.malformedReferences, []);
+});
+
+test("drops non-object retainedRecords without failing the whole call", () => {
+  const r = validateDeliverableIntegrity({
+    fields: { abstract: "Progesterone helps (Berghella 2026)." },
+    references: [REF_A],
+    retainedRecords: [RECORDS[0], null, "x"] as unknown as AuditableRef[]
+  });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.malformedReferences, []);
+});
+
+test("reports non-string narrative field values", () => {
+  const r = validateDeliverableIntegrity({
+    fields: { abstract: "ok", discussion: 7 } as unknown as Record<string, string>,
+    references: [REF_A],
+    retainedRecords: RECORDS
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.malformedReferences[0], /^fields\.discussion must be a string, received number$/);
 });

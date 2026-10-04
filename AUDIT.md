@@ -9,19 +9,19 @@
 
 ## 1. Status
 
-**FAIL — not releasable in its current state.** (Steps 1–2 of 10 complete.)
+**FAIL — not releasable in its current state.** (Steps 1–3 of 10 complete.)
 
 The deterministic evidence core is genuinely well built and verified: the claim-filter →
 evidence-set → finalization → reconciliation → export chain is fully wired from a single
-retained set, all 169 tests pass, and typecheck/lint/build are clean. No secrets are exposed
+retained set, all 177 tests pass, and typecheck/lint/build are clean. No secrets are exposed
 anywhere in the tree or in the entire Git history, and error handling degrades gracefully
 without leaking internals.
 
-**20 open defects** remain, led by:
+**15 open defects** remain, led by:
 
-- **9 MEDIUM** functional defects, including an export gate that throws instead of refusing
-  (F-02), bare HTTP 500s from an unguarded fallback (F-03), and a tokenizer that silently
-  splits canonical clinical phrases and degrades evidence recall (F-07);
+- **7 MEDIUM** functional defects, including bare HTTP 500s from an unguarded fallback (F-03),
+  missing fields reported as provider outages (F-04), content-free PICO output (F-05), and a
+  tokenizer that silently splits canonical clinical phrases and degrades evidence recall (F-07);
 - the desktop build still has **no way to obtain an AI provider key** (F-23), so even with the
   bundle now current, every install produces commentary failures;
 - two GitHub PATs that must be revoked before release (F-21).
@@ -34,9 +34,15 @@ without leaking internals.
 - **F-01 (was HIGH)** — the desktop bundle was stale, shipping a 264-line engine route and
   none of the evidence-integrity modules. It has been rebuilt from the current tree: all 42
   files verified identical to the repository by SHA-256, the bundled app installs, builds and
-  passes 169/169 tests, and it now resolves `next` 16.3.8. A repeatable generator plus an
+  passes its test suite, and it now resolves `next` 16.3.8. A repeatable generator plus an
   SHA-256 staleness guard (wired into `installer/test-installer.ps1`) prevents recurrence.
   PC now matches GitHub and Vercel at the artifact level.
+- **F-02, F-10, F-11, F-12, F-13, F-14** — all six API-contract defects fixed and verified over
+  HTTP against a running server, 19/19 probes returning the intended status. The export gate now
+  refuses malformed input with a named reason instead of throwing into a 500; `/api/pubmed` and
+  the provider-key path no longer report failures as HTTP 200; invalid JSON is a 400; absent and
+  empty reference lists are treated alike; and non-string `input` is rejected instead of coerced
+  into a fake clinical term. Suite grew 169 → 177 with 8 new hostile-input cases.
 
 Two audit criteria could **not** be completed because the production AI provider returned
 HTTP 503 throughout the audit window:
@@ -77,6 +83,9 @@ Per the acceptance rule (no "fully verified" claim while anything material is un
 | **Staleness guard** | 2 files edited + 1 added, then `-Check` | correctly reported `STALE BUNDLE`, exit 1 |
 | **Line-ending normalization** | `git diff --ignore-cr-at-eol`, `git hash-object` | **empty / blob unchanged** — no content altered |
 | Desktop provider-key path | grep all launcher + installer scripts | **absent — F-23** |
+| **API status contract** | 19 HTTP probes, 3 routes, live server | **19/19 intended status** — F-02, F-10…F-14 |
+| **Provider-key 503** | server started with `.env.local` removed | **503** + rule fallback intact — F-11 |
+| Hostile-input regression | 8 new tests in `deliverable-integrity.test.ts` | suite 169 → **177** |
 
 ### Confirmed-correct behaviours (no action)
 
@@ -234,7 +243,7 @@ someone edits `src/` and forgets to re-run the generator. The `-Check` guard now
 failure loud at installer-test time, but CI enforcement on the repository is still the stronger
 guarantee and is listed in the release order.
 
-### F-02 — MEDIUM — Export integrity gate throws on non-string references (500 instead of 422)
+### F-02 — RESOLVED (was MEDIUM) — Export integrity gate threw on non-string references (500 instead of 422)
 
 `validateDeliverableIntegrity` has no element type-guard and no internal `try/catch`.
 `references.filter(r => !referenceIsBackedBy(r, retained))` (L143) and `referenceKey(ref)`
@@ -259,8 +268,36 @@ unhandled `TypeError` that escapes to the route's outer catch and returns a gene
 violations are indistinguishable from transient failures in monitoring, and the user is told to
 retry a request that will never succeed. The legitimate client is unaffected because
 `paper/page.tsx` sends `references: string[]` (L22) — this is a trust-boundary defect.
-**Fix:** coerce/validate elements to strings and treat anything unresolvable as
-`ok:false`; wrap the gate body in `try/catch` returning a structured failure.
+
+#### Resolution
+
+The throw originated in `referenceKey`, which reached `foldName(ref)` with the **raw** array
+element rather than a string; the duplicate-detection loop reaches it before any element guard
+runs.
+
+- `referenceKey` now coerces with `String(ref)` first, so no non-string can reach `foldName`.
+- `validateDeliverableIntegrity` normalizes its whole input before doing any work: `fields`
+  keeps only string values, `references`/`exportReferences` keep only strings, and
+  `retainedRecords` keeps only objects. Anything rejected is reported in a new
+  `malformedReferences: string[]` result field naming the exact path and received type, e.g.
+  `references[1] must be a string, received object`.
+- `ok` now requires `malformedReferences.length === 0`, so a malformed list is refused rather
+  than silently accepted on the strength of its valid neighbours.
+- The gate accepts a wholly absent `input` object instead of throwing.
+
+The route distinguishes the two refusal reasons, so a caller learns which mistake it made:
+
+```
+POST /api/pdf  {"title":"T","references":[{"citation":"Smith 2020 fake"}]}
+  -> 400 {"error":"Field \"references\" must contain only strings."}
+```
+
+Note the shape check in the route now runs before the gate, so the common case is a precise 400
+and the 422 remains reserved for well-formed references that no retained record supports.
+
+8 new tests cover the hostile-input contract, including the two cases the audit found most
+alarming (object-shaped references *with* valid records present, and `fields: null`).
+Suite: 169 → **177**.
 
 ### F-03 — MEDIUM — Unprotected nested fallback produces bare HTTP 500 with an empty body
 
@@ -347,37 +384,87 @@ Probe `"CoQ10"` → `normalizedTokens ["CoQ10"]`, **no suggestion**, while bare 
 `q10 → coenzyme Q10`. Two spellings of one vitamin resolve differently, splitting evidence sets
 and PICO matching for no clinical reason.
 
-### F-10 — LOW — `/api/pubmed` returns every error as HTTP 200
+### F-10 — RESOLVED (was LOW) — `/api/pubmed` returned every error as HTTP 200
 
-All three error paths (L78 invalid JSON, L100 no search term, L140 search failed) return
+All three error paths (invalid JSON, no search term, search failed) returned
 `NextResponse.json({ results: [], error: ... })` with the default **200**. Verified: 3/3 error
 probes returned 200. **Impact:** monitoring sees 100% success; clients must inspect the body.
 The client does handle it, so this is a contract/observability defect, not a user-visible break.
 
-### F-11 — LOW — Configuration failure returns HTTP 200
+**Fix applied:** 400 for invalid JSON and for a request with no usable search term, and **502**
+for an upstream failure — the request was well formed, NCBI was not reachable. 502 specifically
+matters here: reporting that as 200 told callers the search succeeded and returned zero results,
+which reads as "no evidence exists" rather than "the search could not run". In an
+evidence-synthesis tool that is a serious distinction to lose.
 
-`src/app/api/engine/route.ts` L523-525: when `GEMINI_API_KEY` is unset, the commentary stage
-returns `NextResponse.json({ error: "AI engine required..." })` with **status 200**.
-**Impact:** mitigated — `paper/page.tsx` checks `data.title && !data.error` — but the status is
-semantically wrong and would break any other consumer or uptime check.
+```
+POST /api/pubmed  {oops   -> 400 {"results":[],"error":"Invalid JSON body"}
+POST /api/pubmed  {}      -> 400 {"results":[],"error":"Provide at least one search term."}
+```
 
-### F-12 — LOW — `/api/pdf` maps invalid JSON to HTTP 500
+The 200 responses for genuine successes and for a legitimate zero-hit search are unchanged, so
+`question/page.tsx` (which reads `.results` without inspecting status) is unaffected.
 
-L29-33 reads `req.text()` then calls `JSON.parse(raw)` with no `try/catch`, so malformed JSON
-throws to the outer catch → **500 "PDF generation failed. Please retry."** A client error is
+### F-11 — RESOLVED (was LOW) — Configuration failure returned HTTP 200
+
+`src/app/api/engine/route.ts`: when `GEMINI_API_KEY` is unset, the commentary stage returned
+`NextResponse.json({ error: "AI engine required..." })` with **status 200**. **Impact:**
+mitigated — `paper/page.tsx` checks `data.title && !data.error` — but the status was semantically
+wrong and would break any other consumer or uptime check.
+
+**Fix applied:** **503**. Verified against a server started with `.env.local` removed, so the
+branch was genuinely exercised rather than short-circuited by a configured key:
+
+```
+POST /api/engine  {"stage":"commentary","topic":"short cervix"}
+  -> 503 {"error":"AI engine required for commentary generation."}
+POST /api/engine  {"stage":"intent","input":"ohss pcos ivf"}
+  -> 200 (deterministic rule fallback still serves the stages that have one)
+```
+
+This is the exact response every desktop install receives for this stage, because no launcher
+supplies a key (F-23). The distinction is now visible to a health check rather than hidden in a
+200.
+
+### F-12 — RESOLVED (was LOW) — `/api/pdf` mapped invalid JSON to HTTP 500
+
+The route read `req.text()` then called `JSON.parse(raw)` with no `try/catch`, so malformed JSON
+threw to the outer catch → **500 "PDF generation failed. Please retry."** A client error was
 reported as a server error. Verified live.
 
-### F-13 — LOW — Inconsistent empty-reference handling in `/api/pdf`
+**Fix applied:** `JSON.parse` is wrapped and returns **400 "Invalid JSON body."** A non-object
+top level (array, `null`, number) is also rejected as **400 "Request body must be a JSON
+object."** — the old code would have accepted `[]` and produced a titled PDF.
 
-`{"title":"T","references":[]}` → **400 "No references available to export."** (correct),
-but `{"title":"T"}` with the key **absent** bypasses the L41 guard and produces a titled PDF
-with no content. The code comment (L38-40) treats an absent key as "evidence-map style export",
-which conflates *no references* with *no sections*.
+### F-13 — RESOLVED (was LOW) — Inconsistent empty-reference handling in `/api/pdf`
 
-### F-14 — LOW — No type validation on `input`
+`{"title":"T","references":[]}` returned 400 correctly, but `{"title":"T"}` with the key
+**absent** bypassed the guard and produced a titled PDF with no content. The old comment treated
+an absent key as "evidence-map style export", conflating *no references* with *no sections*.
 
-`{"stage":"intent","input":123}` → HTTP 200 with `intervention: "123"`. `String(body.input)`
-coerces a number into a clinical term. An object input is silently coerced too.
+**Fix applied:** the decision now rests on whether there is anything to render, not on how the
+caller spelled the field — refuse when there are neither references nor sections. Exports that
+legitimately carry no references, such as the evidence map, have sections and still succeed.
+
+```
+POST /api/pdf  {"title":"T","references":[]}                                -> 400
+POST /api/pdf  {"title":"T"}                                                 -> 400
+POST /api/pdf  {"title":"T","sections":[{"heading":"H","blocks":["..."]}]}  -> 200 (PDF)
+```
+
+### F-14 — RESOLVED (was LOW) — No type validation on `input`
+
+`{"stage":"intent","input":123}` returned HTTP 200 with `intervention: "123"`. `String(body.input)`
+coerced a number into a clinical term. An object input was silently coerced too.
+
+**Fix applied:** a `readFreeText` helper rejects a present-but-non-string `input` with **400
+`Field "input" must be a string.`** for both the `intent` and `gap` stages, and the catch-path
+fallback no longer coerces. Verified: `input:123` and `input:{"a":1}` both return 400, while
+`input:""` still returns 200 — an empty question is a legitimate state the UI depends on.
+Collection fields on `/api/pdf` (`references`, `retainedReferences`, `sections`, `keywords`,
+`outcomes`, `pico`) are likewise type-checked before reaching the gate or the renderer, since
+coercing a caller-supplied object into a reference string would produce a document whose
+provenance cannot be verified.
 
 ### F-15 — LOW — Raw markup and fabricated citations accepted as keywords
 
@@ -482,7 +569,7 @@ application from GitHub", which is no longer how distribution works — Inno Set
 
 ## 4. Corrected release order
 
-**Progress: 2 of 10 complete.**
+**Progress: 3 of 10 complete.**
 
 1. ~~**Upgrade Next.js and sharp.**~~ **DONE.** `next`/`eslint-config-next` → 16.3.8,
    `sharp` → 0.35.5. `npm audit --omit=dev` = 0 vulnerabilities. Suite re-verified green;
@@ -495,10 +582,13 @@ application from GitHub", which is no longer how distribution works — Inno Set
    `installer/test-installer.ps1` as step [1b]) so it cannot silently go stale again.
    Newly surfaced **F-23** in the process: no desktop install has any way to obtain an AI
    provider key, which must be fixed in step 6.
-3. **Fix API validation and error-status behavior.** (F-02, F-10, F-11, F-12, F-13, F-14)
-   Make the export gate refuse with 422 instead of throwing into 500; stop returning HTTP 200
-   for error conditions in `/api/pubmed` and for the missing-engine-config path; map invalid
-   JSON to 400; make empty-reference handling consistent; validate payload field types.
+3. ~~**Fix API validation and error-status behavior.**~~ **DONE.**
+   (F-02, F-10, F-11, F-12, F-13, F-14) The export gate now refuses malformed input with a named
+   reason instead of throwing into a 500; `/api/pubmed` returns 400/502 rather than 200 on
+   failure; the missing-provider-key path returns 503; invalid or non-object JSON is 400; absent
+   and empty reference lists are treated alike; and non-string `input` is rejected rather than
+   coerced into a fake clinical term. Verified 19/19 over HTTP against a running server, with the
+   provider-key case exercised on a server started without `.env.local`. Suite 169 → 177.
 4. **Fix nested fallback crashes.** (F-03, F-04) Guard the fallback inside the `catch` so a
    second throw cannot escape as a bare 500 with an empty body, and return 400 rather than 503
    for missing required fields.

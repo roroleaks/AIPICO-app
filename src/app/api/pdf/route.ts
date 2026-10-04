@@ -30,17 +30,50 @@ export async function POST(req: Request) {
     if (!raw || raw.length > BODY_MAX) {
       return NextResponse.json({ error: "Payload too large or empty." }, { status: 400 });
     }
-    const body: PdfPayload = JSON.parse(raw);
-    if (!body.title || !String(body.title).trim()) {
+    // Malformed JSON is a client error. Letting JSON.parse throw into the outer catch reported
+    // it as HTTP 500 "PDF generation failed", which told the caller to retry a request that
+    // could never succeed and buried the real cause in server logs.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return NextResponse.json({ error: "Request body must be a JSON object." }, { status: 400 });
+    }
+    const body = parsed as PdfPayload;
+    if (typeof body.title !== "string" || !body.title.trim()) {
       return NextResponse.json({ error: "Missing document title." }, { status: 400 });
     }
-    // A caller that explicitly asks for a references-only export with none available is
-    // asking for a document that would be misleadingly empty. Refuse instead of emitting
-    // a titled PDF with no content. (Exports that legitimately have no references section,
-    // such as the evidence map, omit the key entirely and are unaffected.)
-    if (Array.isArray(body.references) && body.references.length === 0 && !body.sections?.length) {
+    // Type-check the collection fields before they reach the gate or the renderer. Coercing a
+    // caller-supplied object into a reference string, or a bare string into a reference list,
+    // would produce a document whose provenance cannot be verified.
+    for (const key of ["references", "retainedReferences", "sections", "keywords", "outcomes", "pico"] as const) {
+      const v = body[key];
+      if (v !== undefined && v !== null && !Array.isArray(v)) {
+        return NextResponse.json(
+          { error: `Field "${key}" must be an array.` },
+          { status: 400 }
+        );
+      }
+    }
+    if (Array.isArray(body.references) && body.references.some(r => typeof r !== "string")) {
       return NextResponse.json(
-        { error: "No references available to export." },
+        { error: "Field \"references\" must contain only strings." },
+        { status: 400 }
+      );
+    }
+    // A caller that asks for a document with neither narrative sections nor references is asking
+    // for a titled PDF with no content, which is misleading rather than merely empty. This must
+    // not depend on whether `references` was sent as [] or omitted entirely: the two mean the
+    // same thing to the reader, so they are treated the same way here. Exports that legitimately
+    // have no references, such as the evidence map, carry sections and are unaffected.
+    const hasReferences = Array.isArray(body.references) && body.references.length > 0;
+    const hasSections = Array.isArray(body.sections) && body.sections.length > 0;
+    if (!hasReferences && !hasSections) {
+      return NextResponse.json(
+        { error: "No references or sections available to export." },
         { status: 400 }
       );
     }
@@ -58,7 +91,9 @@ export async function POST(req: Request) {
       if (!integrity.ok) {
         return NextResponse.json(
           {
-            error: "Export refused: references did not match the validated evidence set.",
+            error: integrity.malformedReferences.length
+              ? "Export refused: the reference list contained malformed entries."
+              : "Export refused: references did not match the validated evidence set.",
             integrity
           },
           { status: 422 }
