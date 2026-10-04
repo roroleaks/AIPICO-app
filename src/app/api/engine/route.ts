@@ -19,6 +19,8 @@ import {
 // can be unit tested: the previous inline version shipped unverified, which is how it kept
 // emitting hardcoded keywords and a fabricated "supports the evaluated comparison" claim.
 import { generateDeterministicCommentary } from "@/lib/deterministic-commentary";
+// Confidence gate for LLM output evaluation and deterministic fallback telemetry
+import { evaluateConfidence, shouldUseDeterministicFallback, createTelemetryEvent, DEFAULT_CONFIDENCE_CONFIG } from "@/lib/confidence-gate";
 import { buildEvidenceSet } from "@/lib/evidence-set";
 import type { AuditableRef } from "@/lib/relevance";
 import { finalizeClaims } from "@/lib/claim-finalization";
@@ -846,6 +848,7 @@ let commentary: Record<string, unknown>;
       // synthesis are very different things to hand a clinician, and the response previously gave
       // no way to tell them apart (`source` came back undefined for both).
       let commentarySource: "ai" | "deterministic";
+      const commentaryStartTime = Date.now();
       if (!KEY) {
         commentarySource = "deterministic";
         commentary = generateDeterministicCommentary({
@@ -870,6 +873,70 @@ let commentary: Record<string, unknown>;
             elements
           });
         }
+      }
+      
+      // Evaluate LLM output through confidence gate when AI path was attempted
+      // If confidence gates fail, gracefully fall back to deterministic output
+      if (commentarySource === "ai") {
+        const confidenceResult = evaluateConfidence(
+          commentary,
+          evidenceSet,
+          elements,
+          { ...DEFAULT_CONFIDENCE_CONFIG, llmAvailable: !!KEY }
+        );
+        
+        // Telemetry logging for LLM vs deterministic path tracking
+        const telemetry = createTelemetryEvent(confidenceResult.telemetry, {
+          stage: "commentary",
+          question: selectedQuestion,
+          outcomes: outcomesText,
+          fallbackTriggered: false,
+          processingTimeMs: Date.now() - commentaryStartTime
+        });
+        console.log("[engine] [telemetry]", JSON.stringify(telemetry));
+        
+        // If confidence gates fail, gracefully fall back to deterministic output
+        if (shouldUseDeterministicFallback(confidenceResult)) {
+          console.warn("[engine] Confidence gates failed, falling back to deterministic:", confidenceResult.fallbackReason);
+          commentarySource = "deterministic";
+          commentary = generateDeterministicCommentary({
+            selectedQuestion: String(selectedQuestion || topic || ""),
+            outcomesText,
+            reason: confidenceResult.fallbackReason || "AI output failed confidence validation",
+            pool: evidenceSet.retainedRecords as AuditableRef[],
+            elements
+          });
+          
+          // Log fallback telemetry
+          const fallbackTelemetry = createTelemetryEvent({
+            pathUsed: "deterministic",
+            fallbackTriggered: true,
+            failedGates: confidenceResult.gates.filter(g => !g.passed).length,
+            llmAvailable: true
+          }, {
+            stage: "commentary",
+            question: selectedQuestion,
+            fallbackReason: confidenceResult.fallbackReason,
+            processingTimeMs: Date.now() - commentaryStartTime
+          });
+          console.log("[engine] [telemetry] [fallback]", JSON.stringify(fallbackTelemetry));
+        }
+      } else {
+        // Deterministic path telemetry
+        const fallbackReason = !KEY ? "no_key" : "llm_failure";
+        const telemetry = createTelemetryEvent({
+          pathUsed: "deterministic",
+          fallbackTriggered: true,
+          failedGates: 0,
+          llmAvailable: !!KEY
+        }, {
+          stage: "commentary",
+          question: selectedQuestion,
+          outcomes: outcomesText,
+          fallbackReason,
+          processingTimeMs: Date.now() - commentaryStartTime
+        });
+        console.log("[engine] [telemetry]", JSON.stringify(telemetry));
       }
       let curated = curateModelRefs(commentary);
       let citationChecks = checkCitations(String(commentary.discussion || ""), curated.references);
