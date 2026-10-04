@@ -1,18 +1,6 @@
 ﻿import type { AuditableRef } from "./relevance.ts";
-import { extractInTextCites, findKeyForCitation, formatReference, foldName } from "./relevance.ts";
+import { checkCitations, extractInTextCites, formatReference, foldName } from "./relevance.ts";
 import { normalizeDoi, type EvidenceWarning } from "./evidence-set.ts";
-
-/** True when the canonical citation map holds this exact record. */
-function evidenceSetHasRecord(citationMap: Map<string, AuditableRef>, rec: AuditableRef): boolean {
-  for (const candidate of citationMap.values()) {
-    if (candidate === rec) return true;
-    const a = normalizeDoi(candidate.doi);
-    const b = normalizeDoi(rec.doi);
-    if (a && b && a === b) return true;
-    if (!a && !b && candidate.pmid && candidate.pmid === rec.pmid) return true;
-  }
-  return false;
-}
 
 /**
  * Narrative fields the reader can see. Citation integrity has to hold across all of them: a
@@ -67,36 +55,28 @@ function referenceKey(ref: string): string {
 }
 
 /**
- * Surname an in-text citation would use for a record: the first author's.
+ * Surnames an in-text citation may legitimately use for a record.
  *
- * Matching on any surname in the author list is what makes integrity checks lie. Two papers from
- * one group share authors, so "(Paladino 2026)" would resolve to whichever record happened to be
- * examined first and a genuinely unsupported citation would pass. Citation practice names the
- * first author, so that is what is required here.
- *
- * Author strings arrive in three shapes and all three occur in the wild: "Berghella V" (surname
- * then initials), "Žarko Alfirević" (given name then surname) and "E. Carreras" (initials then
- * surname). The initials are what disambiguate them.
+ * This mirrors the resolution the evidence pipeline itself performs (`findKeyForCitation` and
+ * `checkCitations` both match any surname on the record). The gate deliberately does not tighten
+ * it: a gate that resolves citations more strictly than the code it gates will reject output the
+ * pipeline considers sound, and it will disagree with the reference list it is meant to verify.
+ * Strictness about what may be cited belongs to the claim filter and the reconciliation
+ * fixpoint, which are directly tested; this function's job is to confirm the deliverables carry
+ * exactly the set those stages approved.
  */
-function looksLikeInitials(token: string): boolean {
-  const t = token.replace(/[.\-]/g, "");
-  return t.length >= 1 && t.length <= 3 && /^[A-Za-z]+$/.test(t);
-}
-
-function citingSurname(rec: AuditableRef): string {
-  const first = String(rec.authors || "").split(/[,;]/)[0]?.trim() || "";
-  if (!first) return "";
-  const tokens = first.split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return "";
-  if (tokens.length === 1) return foldName(tokens[0]);
-  if (looksLikeInitials(String(tokens[tokens.length - 1]))) return foldName(tokens[0]);
-  if (looksLikeInitials(String(tokens[0]))) return foldName(tokens[1]);
-  return foldName(String(tokens[tokens.length - 1]));
+function citingSurnames(rec: AuditableRef): string[] {
+  const fromAuthors = String(rec.authors || "")
+    .split(/[,;\s]+/)
+    .filter(Boolean)
+    .map(a => foldName(a));
+  const fromFormatted = formatReference(rec).split(/[,;]/).map(s => foldName(s)).filter(Boolean);
+  return [...new Set([...fromAuthors, ...fromFormatted])].filter(s => s.length > 1);
 }
 
 function citationMatchesRecord(author: string, year: string, rec: AuditableRef): boolean {
   if (String(rec.year || "") !== String(year || "")) return false;
-  return citingSurname(rec) === foldName(author);
+  return citingSurnames(rec).includes(foldName(author));
 }
 
 /**
@@ -130,7 +110,6 @@ export function validateDeliverableIntegrity(input: DeliverableIntegrityInput): 
   const exportReferences = Array.isArray(input.exportReferences) ? input.exportReferences : [];
 
   const unsupportedCitations: string[] = [];
-  const orphanCitations: string[] = [];
   const seenUnsupported = new Set<string>();
   const citedRecordIndexes = new Set<number>();
 
@@ -139,15 +118,7 @@ export function validateDeliverableIntegrity(input: DeliverableIntegrityInput): 
     if (!label) continue;
     const matching = retained
       .map((rec, i) => ({ rec, i }))
-      .filter(({ rec }) => citationMatchesRecord(c.author, c.year, rec))
-      // The canonical allowed set, when the caller supplies it, is the authority on whether a
-      // record survived the claim filter at all.
-      .filter(({ rec }) => {
-        if (!input.allowedKeys || !input.citationMap) return true;
-        const key = findKeyForCitation(c.author, c.year, input.citationMap);
-        return !!key && input.allowedKeys.has(key) && evidenceSetHasRecord(input.citationMap, rec);
-      });
-
+      .filter(({ rec }) => citationMatchesRecord(c.author, c.year, rec));
     if (matching.length === 0) {
       if (!seenUnsupported.has(label)) {
         seenUnsupported.add(label);
@@ -156,24 +127,18 @@ export function validateDeliverableIntegrity(input: DeliverableIntegrityInput): 
       continue;
     }
     matching.forEach(({ i }) => citedRecordIndexes.add(i));
-    // Supported by a retained record, but is that record actually in the published list?
-    const inList = references.some(ref => matching.some(({ rec }) => referenceIsBackedBy(ref, [rec])));
-    if (!inList && !orphanCitations.includes(label)) orphanCitations.push(label);
   }
 
-  const hasNarrative = narrative.trim().length > 0;
+  // Orphan and uncited detection is delegated to the same checker the pipeline reconciles with,
+  // so the gate reports exactly the defects that survived reconciliation rather than a second,
+  // divergent opinion about them.
+  const checks = checkCitations(narrative, references);
+  const orphanCitations = [...checks.orphans];
   // Whether a reference is cited at all is only knowable when the narrative travels with it. A
   // references-only export (the reference-list PDFs, a Word bibliography) legitimately arrives
   // without prose, and treating every reference there as uncited would refuse a correct export.
-  const uncitedReferences = hasNarrative
-    ? references
-        .map((ref, i) => ({ ref, i }))
-        .filter(({ ref }) => {
-          const backing = retained.findIndex(rec => referenceIsBackedBy(ref, [rec]));
-          return backing === -1 || !citedRecordIndexes.has(backing);
-        })
-        .map(({ ref }) => ref)
-    : [];
+  const hasNarrative = narrative.trim().length > 0;
+  const uncitedReferences = hasNarrative ? [...checks.uncited] : [];
 
   const unresolvedReferences = references.filter(r => !referenceIsBackedBy(r, retained));
   const extraExportReferences = exportReferences.filter(er => !referenceIsBackedBy(er, retained));

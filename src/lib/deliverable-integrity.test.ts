@@ -64,13 +64,27 @@ test("rejects a citation in any narrative field that no retained record supports
 });
 
 test("rejects an orphan citation with no entry in the reference list", () => {
+  // Kansal appears on no listed reference, so the citation resolves to nothing in the
+  // bibliography even though the author is a real short-cervix investigator.
   const result = validateDeliverableIntegrity({
-    fields: { discussion: "Progesterone reduces preterm birth (Berghella 2026) and cerclage helps (Paladino 2026)." },
+    fields: { discussion: "Progesterone reduces preterm birth (Berghella 2026) and cerclage helps (Kansal 2026)." },
     references: [REF_A],
     retainedRecords: RECORDS
   });
   assert.equal(result.ok, false);
-  assert.ok(result.orphanCitations.length > 0);
+  assert.ok(result.orphanCitations.length > 0, JSON.stringify(result));
+});
+
+test("accepts a citation by any author on a retained record, not only the first", () => {
+  // The gate mirrors the pipeline's resolution rather than tightening it. A stricter gate would
+  // reject commentary the reconciliation stage considers sound, and would reject it in
+  // production while every other integrity check passes.
+  const result = validateDeliverableIntegrity({
+    fields: { discussion: "Cerclage technique has been described (Gulersen 2026)." },
+    references: [REF_A],
+    retainedRecords: RECORDS
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
 });
 
 test("rejects a published reference that no retained record accounts for", () => {
