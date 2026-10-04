@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { KB, type Analysis, type Clarification, type Formulation } from "@/lib/kb";
+import { picoOutcomes, rationalOutcomes, type Analysis, type Clarification, type Formulation } from "@/lib/kb";
 import { sget, sset, KEYS } from "@/lib/session";
+import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
 
 export default function QuestionPage() {
   const router = useRouter();
@@ -12,19 +13,35 @@ export default function QuestionPage() {
   const [clarification, setClarification] = useState<Clarification | null>(null);
   const [chatLog, setChatLog] = useState<{ q?: string; a?: string }[]>([]);
   const [freeText, setFreeText] = useState("");
+  const [selectedOutcomes, setSelectedOutcomes] = useState<string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>("intent");
   const analysisRef = useRef<Analysis | null>(null);
 
+  const gapPath = useMemo(() => { try { return !!sget<unknown>(KEYS.gap); } catch { return false; } }, []);
+
   useEffect(() => { analysisRef.current = analysis; }, [analysis]);
 
-  const normalizeClarify = (c: any, a: Analysis): Clarification => {
+  interface RawClarify {
+    done?: unknown;
+    field?: unknown;
+    questionText?: unknown;
+    options?: unknown;
+    source?: unknown;
+  }
+
+  const normalizeClarify = useCallback((c: RawClarify, a: Analysis): Clarification => {
     const done = c?.done === true || String(c?.done ?? "").toLowerCase() === "true";
     const field = typeof c?.field === "string" && c.field ? c.field : "outcome";
-    let options = Array.isArray(c?.options) ? c.options.filter((o: unknown) => typeof o === "string" && o.trim()) : [];
+    let options = Array.isArray(c?.options)
+      ? c.options.filter((o): o is string => typeof o === "string" && o.trim().length > 0)
+      : [];
+    // De-duplicate: a repeated option would collide as a React key.
+    options = Array.from(new Set(options.map(o => o.trim())));
+    const rationale = field === "outcome" ? rationalOutcomes(a.condition, a.specialty).rationale : undefined;
     if (!options.length && !done) {
-      const spec = a.specialty ? KB[a.specialty] : null;
-      options = spec ? spec.outcomesRanked.slice(0, 6) : ["live birth rate", "symptom relief"];
+      const logic = rationalOutcomes(a.condition, a.specialty);
+      options = [logic.primary, ...logic.alternatives.filter(o => o !== logic.primary)].slice(0, 6);
     }
     return {
       done,
@@ -32,21 +49,59 @@ export default function QuestionPage() {
       questionText: typeof c?.questionText === "string" && c.questionText ? c.questionText : "Please specify:",
       options,
       allowFreeText: true,
-      source: c?.source === "ai" ? "ai" : "rules"
+      source: c?.source === "ai" ? "ai" : "rules",
+      rationale
     };
-  };
+  }, []);
 
-  const finishAndGo = (f: Formulation, ans: Record<string, string>) => {
-    f.scores = Array.isArray(f.scores) ? f.scores : [{ name: "Overall", value: 15 }];
-    f.elements = Array.isArray(f.elements) ? f.elements : [];
-    f.advisories = Array.isArray(f.advisories) ? f.advisories : [];
-    if (f.variants && !Array.isArray(f.variants)) delete (f as any).variants;
+  const finishAndGo = useCallback((f: Formulation, ans: Record<string, string>) => {
+    const str = (v: unknown): string => (typeof v === "string" ? v : "");
+    const normElement = (v: unknown): { label: string; value: string } | null => {
+      const o = v as { label?: unknown; value?: unknown };
+      if (!o || typeof o !== "object") return null;
+      const label = str(o.label) || "Element";
+      const value = str(o.value);
+      return value ? { label, value } : null;
+    };
+    const normScore = (v: unknown): { name: string; value: number } | null => {
+      const o = v as { name?: unknown; value?: unknown };
+      const name = str(o?.name);
+      const value = typeof o?.value === "number" ? o.value : Number(str(o.value)) || 0;
+      return name ? { name, value } : null;
+    };
+    const normVariant = (v: unknown): { question: string; rationale: string } | null => {
+      const o = v as { question?: unknown; rationale?: unknown };
+      const question = str(o?.question);
+      return question ? { question, rationale: str(o?.rationale) } : null;
+    };
+    const normAdvisory = (v: unknown): string => {
+      if (typeof v === "string" && v.trim()) return v;
+      const o = v as { warning?: unknown; recommendation?: unknown; rationale?: unknown };
+      if (o && typeof o === "object") {
+        const bits = [
+          str(o.warning),
+          o.recommendation ? `Recommended: ${str(o.recommendation)}` : "",
+          str(o.rationale)
+        ].filter(Boolean);
+        return bits.join(" ");
+      }
+      return "";
+    };
+    f.scores = Array.isArray(f.scores)
+      ? f.scores.map(normScore).filter((s): s is { name: string; value: number } => !!s) : [];
+    if (!f.scores.length) f.scores = [{ name: "Overall", value: 15 }];
+    f.elements = Array.isArray(f.elements)
+      ? f.elements.map(normElement).filter((e): e is { label: string; value: string } => !!e) : [];
+    f.advisories = Array.isArray(f.advisories)
+      ? f.advisories.map(normAdvisory).filter(Boolean) : [];
+    f.variants = Array.isArray(f.variants)
+      ? f.variants.map(normVariant).filter((v): v is { question: string; rationale: string } => !!v) : [];
     sset(KEYS.formulation, f);
     sset("cq_outcome", ans.outcome || "");
     router.push("/paper");
-  };
+  }, [router]);
 
-  const formulate = async (a: Analysis, ans: Record<string, string>) => {
+  const formulate = useCallback(async (a: Analysis, ans: Record<string, string>) => {
     setBusy("formulate");
     let f: Formulation | null = null;
     try {
@@ -67,11 +122,11 @@ export default function QuestionPage() {
       const { ruleFormulate } = await import("@/lib/rule-engine");
       finishAndGo(ruleFormulate(a, ans), ans);
     }
-  };
+  }, [finishAndGo]);
 
-  const runClarifyLoop = async (a: Analysis, ans: Record<string, string>, log: { q?: string; a?: string }[]) => {
+  const runClarifyLoop = useCallback(async (a: Analysis, ans: Record<string, string>, log: { q?: string; a?: string }[]) => {
     setBusy("clarify");
-    let raw: any = null;
+    let raw: RawClarify | null = null;
     try {
       const res = await fetch("/api/engine", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -85,15 +140,26 @@ export default function QuestionPage() {
       setNotice("AI is busy — continuing in offline mode.");
     }
     const nc = normalizeClarify(raw, a);
-    if (log.length >= 1) { nc.done = true; nc.field = null; }
+    if (gapPath && log.length === 0) {
+      const pico = sget<string>(KEYS.question) || "";
+      const knownLogic = picoOutcomes(pico, a.condition, a.specialty);
+      nc.done = false;
+      nc.field = "outcome";
+      nc.questionText = "Which outcomes should the evidence commentary target?";
+      nc.options = [knownLogic.primary, ...knownLogic.alternatives.filter(o => o !== knownLogic.primary)].slice(0, 6);
+      nc.source = "rules";
+      nc.rationale = knownLogic.rationale;
+    } else if (log.length >= 1) { nc.done = true; nc.field = null; }
     if (nc.done && log.length === 0) {
-      const spec = a.specialty ? KB[a.specialty] : null;
+      const knownLogic = rationalOutcomes(a.condition, a.specialty);
       nc.done = false;
       nc.field = "outcome";
       nc.questionText = "What is your primary clinical outcome of interest?";
-      nc.options = spec ? spec.outcomesRanked.slice(0, 6) : ["live birth rate", "ongoing pregnancy rate", "symptom relief"];
+      nc.options = [knownLogic.primary, ...knownLogic.alternatives.filter(o => o !== knownLogic.primary)].slice(0, 6);
       nc.source = "rules";
+      nc.rationale = knownLogic.rationale;
     }
+    setSelectedOutcomes([]);
     setClarification(nc);
     setBusy(null);
     if (nc.done) {
@@ -101,30 +167,46 @@ export default function QuestionPage() {
     } else {
       setChatLog([...log, { q: nc.questionText }]);
     }
-  };
+  }, [formulate, normalizeClarify, gapPath]);
 
-  const answer = async (field: string, value: string) => {
+  const answer = useCallback(async (field: string, value: string) => {
     try {
       if (!field || !value) return;
       const base = analysisRef.current;
       if (!base) { setNotice("Session lost — please go back to Step 1."); return; }
       const ans = { ...answered, [field]: value };
       setAnswered(ans);
-      setChatLog(log => {
-        const copy = [...log];
-        if (copy.length) copy[copy.length - 1] = { ...copy[copy.length - 1], a: value };
-        return copy;
-      });
-      await runClarifyLoop(base, ans, chatLog);
-    } catch (e: any) {
-      setNotice(`Answer failed: ${e?.message || e}`);
+      // Build the log once and pass that same value onward. Passing the stale
+      // `chatLog` closure made runClarifyLoop overwrite the just-recorded answer.
+      const nextLog = chatLog.length
+        ? [...chatLog.slice(0, -1), { ...chatLog[chatLog.length - 1], a: value }]
+        : chatLog;
+      setChatLog(nextLog);
+      await runClarifyLoop(base, ans, nextLog);
+    } catch (e) {
+      setNotice(`Answer failed: ${e instanceof Error ? e.message : String(e)}`);
     }
-  };
+  }, [answered, runClarifyLoop, chatLog]);
+
+  const submitSelectedOutcomes = useCallback(() => {
+    const extra = freeText.trim();
+    // The 2-outcome cap must also cover free text, otherwise the button says
+    // "2 outcome(s)" while submitting three.
+    const vals = Array.from(new Set([...selectedOutcomes, ...(extra ? [extra] : [])])).slice(0, 2);
+    if (!vals.length) return;
+    sset(KEYS.outcomes, vals);
+    setFreeText("");
+    setSelectedOutcomes([]);
+    answer("outcome", vals.join(" and "));
+  }, [selectedOutcomes, freeText, answer]);
 
   useEffect(() => {
     const question = sget<string>(KEYS.question);
-    const input = sget<string>(KEYS.input);
-    const text = question || input;
+    // Prefer the normalized keyword string written at Step 1; fall back to the structured
+    // payload (and finally to a legacy raw string) so older sessions still resolve.
+    const normalized = sget<string>(KEYS.inputText);
+    const stored = readSessionInput(sget<unknown>(KEYS.input));
+    const text = question || normalized || (stored ? sessionSearchText(stored) : "");
     if (!text) { router.replace("/"); return; }
     (async () => {
       let a: Analysis | null = null;
@@ -139,7 +221,7 @@ export default function QuestionPage() {
         const { ruleAnalyze } = await import("@/lib/rule-engine");
         a = ruleAnalyze(text);
         if (!a.specialty) {
-          setNotice("This could not be mapped to OB/GYN or Infertility. Go back and rephrase.");
+          setNotice("This could not be mapped to an Obstetrics & Gynecology context. Go back and rephrase.");
           setBusy(null);
           return;
         }
@@ -149,13 +231,13 @@ export default function QuestionPage() {
       analysisRef.current = a;
       await runClarifyLoop(a, {}, []);
     })();
-  }, [router]);
+  }, [router, runClarifyLoop]);
 
   return (
     <div className="wrap">
       <header className="hdr">
-        <h1>💬 Step 3 · Interactive Clarification</h1>
-        <p>A few targeted questions turn uncertainty into an answerable PICO</p>
+        <h1>{gapPath ? "🎯 Step 3 · Choose Your Outcomes" : "💬 Step 3 · Interactive Clarification"}</h1>
+        <p>{gapPath ? "Pick the 1–2 outcomes the evidence commentary should target" : "A few targeted questions turn uncertainty into an answerable PICO"}</p>
       </header>
 
       <main className="solo">
@@ -182,27 +264,66 @@ export default function QuestionPage() {
             ))}
 {clarification && !clarification.done && busy !== "clarify" && (
                 <>
-                  <div className="chips">
-                    {clarification.options.map(o => (
-                      <button key={o} className="chip" onClick={() => {
-                        const field = clarification.field || "outcome";
-                        answer(field, o);
-                      }}>{o}</button>
-                    ))}
-                  </div>
-                  <div className="row" style={{ marginTop: 10 }}>
-                    <input
-                      className="free-input"
-                      value={freeText}
-                      onChange={e => setFreeText(e.target.value)}
-                      onKeyDown={e => { if (e.key === "Enter" && freeText.trim()) answer(clarification.field || "outcome", freeText.trim()); }}
-                      placeholder="Or type your own answer…"
-                    />
-                    <button className="primary" disabled={!freeText.trim()}
-                      onClick={() => answer(clarification.field || "outcome", freeText.trim())}>
-                      Answer ➜
-                    </button>
-                  </div>
+                  {clarification.field === "outcome" ? (
+                    <>
+                      <p className="hint">{clarification.questionText}</p>
+                      <div className="chips">
+                        {clarification.options.map(o => {
+                          const sel = selectedOutcomes.includes(o);
+                          const full = selectedOutcomes.length >= 2 && !sel;
+                          return (
+                            <button key={o} className={`chip ${sel ? "chip-on" : ""}`} disabled={full}
+                              onClick={() => {
+                                setSelectedOutcomes(prev =>
+                                  prev.includes(o) ? prev.filter(x => x !== o)
+                                    : prev.length >= 2 ? prev : [...prev, o]);
+                              }}>{o}</button>
+                          );
+                        })}
+                      </div>
+                      {clarification.rationale && (
+                        <p className="hint" style={{ marginTop: 10 }}>💡 {clarification.rationale}</p>
+                      )}
+                      <div className="row" style={{ marginTop: 10 }}>
+                        <input
+                          className="free-input"
+                          value={freeText}
+                          onChange={e => setFreeText(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter" && freeText.trim()) submitSelectedOutcomes(); }}
+                          placeholder="Or type another outcome…"
+                        />
+                        <button className="primary" disabled={!selectedOutcomes.length && !freeText.trim()}
+                          onClick={submitSelectedOutcomes}>
+                          Continue with {Math.min(selectedOutcomes.length + (freeText.trim() ? 1 : 0), 2)} outcome(s) ➜
+                        </button>
+                      </div>
+                      <p className="hint" style={{ marginTop: 6 }}>Pick up to 2 outcomes — the commentary will be written to match them.</p>
+                    </>
+                  ) : (
+                    <>
+                      <div className="chips">
+                        {clarification.options.map(o => (
+                          <button key={o} className="chip" onClick={() => {
+                            const field = clarification.field || "outcome";
+                            answer(field, o);
+                          }}>{o}</button>
+                        ))}
+                      </div>
+                      <div className="row" style={{ marginTop: 10 }}>
+                        <input
+                          className="free-input"
+                          value={freeText}
+                          onChange={e => setFreeText(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter" && freeText.trim()) answer(clarification.field || "outcome", freeText.trim()); }}
+                          placeholder="Or type your own answer…"
+                        />
+                        <button className="primary" disabled={!freeText.trim()}
+                          onClick={() => answer(clarification.field || "outcome", freeText.trim())}>
+                          Answer ➜
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
             {busy === "clarify" && <p className="hint">⏳ Thinking…</p>}

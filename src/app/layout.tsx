@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Clinical Question Assistant — OB/GYN & Infertility",
+  title: "Clinical Question Assistant — Obs/Gyn",
   description:
-    "AI-assisted formulation of answerable clinical questions in Obstetrics, Gynecology and Infertility",
+    "AI-assisted formulation of answerable clinical questions in Obstetrics and Gynecology (Obs/Gyn)",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

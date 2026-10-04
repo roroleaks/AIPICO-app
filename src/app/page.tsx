@@ -1,17 +1,128 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { sset, KEYS } from "@/lib/session";
+import {
+  parseInput,
+  toSessionInput,
+  sessionSearchText,
+  validateKeywords,
+  keywordCountHint,
+  resolveCorrections,
+  correctionKey,
+  readSessionInput
+} from "@/lib/clinical-input";
+import type { KeywordCorrection, CorrectionRecord } from "@/lib/clinical-input";
+import type { ClinicalInput } from "@/lib/clinical-input";
+
+// sessionStorage is browser-only, so it cannot be read while rendering on the server.
+// useSyncExternalStore is the one way to read it without either a hydration mismatch or a
+// setState-in-effect: React renders the server snapshot during hydration and the stored
+// snapshot immediately after, so the first paint matches the server HTML exactly.
+//
+// The cache is keyed on the raw JSON string, not the parsed value. `sget` parses on every
+// call, so keying on its result returned a fresh object each time and React saw an unstable
+// snapshot; keying on the string keeps the identity stable until the stored value changes.
+let cachedRaw: string | null = null;
+let cachedValue: ClinicalInput | null = null;
+function sessionInputSnapshot(): ClinicalInput | null {
+  if (typeof window === "undefined") return null;
+  let raw: string | null = null;
+  try {
+    raw = window.sessionStorage.getItem(KEYS.input);
+  } catch {
+    raw = null;
+  }
+  if (raw !== cachedRaw) {
+    cachedRaw = raw;
+    cachedValue = raw ? readSessionInput(JSON.parse(raw)) : null;
+  }
+  return cachedValue;
+}
+const serverSnapshot = (): null => null;
+const serverModeSnapshot = (): "formulate" => "formulate";
+const subscribeToNothing = () => () => {};
+// Stable empty array so the memoized parse is not recomputed on every render.
+const EMPTY_DECISIONS: CorrectionRecord[] = [];
+// Same stability requirement as the input: the restored mode must keep one identity, and it
+// must be read through the same snapshot path or the first client render differs from the
+// server HTML when the stored mode is "gap".
+let cachedModeRaw: string | null = null;
+let cachedModeValue: "formulate" | "gap" = "formulate";
+function sessionModeSnapshot(): "formulate" | "gap" {
+  if (typeof window === "undefined") return "formulate";
+  let raw: string | null = null;
+  try {
+    raw = window.sessionStorage.getItem(KEYS.mode);
+  } catch {
+    raw = null;
+  }
+  if (raw !== cachedModeRaw) {
+    cachedModeRaw = raw;
+    cachedModeValue = raw === "gap" ? "gap" : "formulate";
+  }
+  return cachedModeValue;
+}
 
 export default function Home() {
   const router = useRouter();
-  const [input, setInput] = useState("");
-  const [mode, setMode] = useState<"formulate" | "gap">("formulate");
+  const restored = useSyncExternalStore(subscribeToNothing, sessionInputSnapshot, serverSnapshot);
+  const restoredMode = useSyncExternalStore(subscribeToNothing, sessionModeSnapshot, serverModeSnapshot);
+  // Until the user types, the field shows the restored text; `draft` takes over afterwards so
+  // editing never gets overwritten by the stored value.
+  const [draft, setDraft] = useState<string | null>(null);
+  const input = draft ?? restored?.rawInput ?? "";
+  const setInput = useCallback((v: string) => setDraft(v), []);
+  const [modeDraft, setModeDraft] = useState<"formulate" | "gap" | null>(null);
+  const mode = modeDraft ?? restoredMode;
+  const setMode = useCallback((v: "formulate" | "gap") => setModeDraft(v), []);
+  const [tagError, setTagError] = useState<string | null>(null);
+  // Every suggestion the user has decided, applied or kept. Keyed decisions are what stop a
+  // suggestion reappearing when the input is reparsed, the component rerenders, or the page is
+  // reloaded. Restored decisions come from the session audit trail.
+  const [decided, setDecided] = useState<CorrectionRecord[] | null>(null);
+  const decisions = useMemo(
+    () => decided ?? restored?.corrections ?? EMPTY_DECISIONS,
+    [decided, restored]
+  );
+
+  // Validate as the user types so the count and message stay live, but never block typing.
+  const parsed = useMemo(
+    () => resolveCorrections(parseInput(input), decisions),
+    [input, decisions]
+  );
+  const countHint = keywordCountHint(parsed);
+  const validationMessage = validateKeywords(parsed);
+  const canSubmit = validationMessage === null;
+
+  // The professional message must be reachable even though navigation is blocked, so it is
+  // shown live while typing rather than only after a submit the disabled button prevents.
+  const liveMessage = input.trim() ? validationMessage : null;
+  const alertMessage = tagError || liveMessage;
+
+  const decide = (c: KeywordCorrection, decision: CorrectionRecord["decision"]) => {
+    const key = correctionKey(c);
+    const record: CorrectionRecord = { ...c, decision };
+    const at = decisions.findIndex(p => correctionKey(p) === key);
+    const next = at >= 0 ? decisions.map(p => (correctionKey(p) === key ? record : p)) : [...decisions, record];
+    setDecided(next);
+    // Persist immediately: a decision the user cannot see they made until they start the
+    // search would otherwise be lost on reload.
+    const current = resolveCorrections(parseInput(input), next);
+    sset(KEYS.input, toSessionInput(current, input));
+    sset(KEYS.inputText, sessionSearchText(toSessionInput(current, input)));
+    setTagError(null);
+  };
 
   const start = () => {
-    if (!input.trim()) return;
-    sset(KEYS.input, input.trim());
+    const current = resolveCorrections(parseInput(input), decisions);
+    const err = validateKeywords(current);
+    if (err) { setTagError(err); return; }
+    setTagError(null);
+    sset(KEYS.input, toSessionInput(current, input));
+    sset(KEYS.inputText, sessionSearchText(toSessionInput(current, input)));
     sset(KEYS.mode, mode);
     router.push(mode === "gap" ? "/gap" : "/question");
   };
@@ -29,11 +140,11 @@ export default function Home() {
           </div>
           <div className="hdr-center">
             <h1>From Clinical Uncertainty to Answerable Questions</h1>
-            <p>AI-Assisted Clinical Question Formulation \u2014 Obstetrics, Gynecology & Infertility</p>
+            <p>AI-Assisted Clinical Question Formulation · Obs/Gyn</p>
           </div>
           <div className="hdr-right">
             <span className="author-name">
-              <img src="/dr-raouf.jpg" alt="Dr Raouf Roshdy" className="author-photo" />
+              <Image src="/dr-raouf.jpg" alt="Dr Raouf Roshdy" className="author-photo" width={72} height={72} />
               Dr Raouf Roshdy
             </span>
           </div>
@@ -66,27 +177,61 @@ export default function Home() {
 
           {mode === "formulate" ? (
             <>
-              <span className="pill">📝 Step 1 \u00B7 Clinical Input</span>
-              <p className="hint">Type a clinical uncertainty exactly as it comes to mind.</p>
-              <textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="e.g., recurrent implantation failure aspirin IVF" rows={4} />
+              <span className="pill">📝 Step 1 · Clinical Input</span>
+              <p className="hint">Enter 4–6 clinically meaningful keywords or phrases. Multi-word phrases count as one keyword. Separate terms with commas, dashes, semicolons, or new lines.</p>
+              <textarea
+                aria-label="Clinical keywords"
+                value={input}
+                onChange={(e) => { setInput(e.target.value); setTagError(null); }}
+                placeholder="e.g., short cervix, progesterone, cerclage, preterm birth, cervical length"
+                rows={4}
+              />
             </>
           ) : (
             <>
-              <span className="pill">🕳️ Find Gap \u00B7 Evidence Mapping</span>
-              <p className="hint">Enter a topic \u2014 the AI maps established knowledge, contested evidence, and true research gaps.</p>
-              <textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="e.g., coenzyme Q10 and endometriosis" rows={4} />
+              <span className="pill">🕳️ Find Gap · Evidence Mapping</span>
+              <p className="hint">Enter 4–6 clinically meaningful keywords or phrases. Multi-word phrases count as one keyword. The system searches the OB/GYN literature and maps 4 established, 4 conflicting and 4 evidence-gap areas.</p>
+              <textarea
+                aria-label="Clinical keywords"
+                value={input}
+                onChange={(e) => { setInput(e.target.value); setTagError(null); }}
+                placeholder="e.g., endometriosis, live birth rate, IVF, aspirin, recurrent implantation failure"
+                rows={4}
+              />
             </>
           )}
 
+          {countHint && (
+            <p className={`count-hint${!canSubmit ? " count-bad" : " count-ok"}`} aria-live="polite">{countHint}</p>
+          )}
+
+          {parsed.corrections.length > 0 && (
+            <div className="advisory" role="status" aria-live="polite" style={{ marginTop: 10 }}>
+              {parsed.corrections.map(c => (
+                <div key={`${c.from}-${c.to}`} className="correction-row">
+                  <span>Suggested correction: “{c.from}” → “{c.to}”. Apply correction?</span>
+                  <span className="row" style={{ marginTop: 6 }}>
+                    <button className="mini-btn" onClick={() => decide(c, "applied")}>Apply</button>
+                    <button className="mini-btn" onClick={() => decide(c, "kept")}>Keep “{c.from}”</button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {alertMessage && (
+            <div className="advisory" role="alert" aria-live="polite" style={{ marginTop: 10 }}>⚠️ {alertMessage}</div>
+          )}
+
           <div className="row">
-            <button className="primary" onClick={start} disabled={!input.trim()}>
-              {mode === "formulate" ? "🔍 Start formulation \u2192" : "\u{1F5FA} Map the evidence \u2192"}
+            <button className="primary" onClick={start} disabled={!input.trim() || !canSubmit}>
+              {mode === "formulate" ? "🔍 Start formulation →" : "🗺 Map the evidence →"}
             </button>
           </div>
         </section>
       </main>
 
-      <footer>Version 3.0 \u2014 modular steps \u00B7 Educational tool: always verify formulated questions clinically.<br />Copyright\u00A9RaoufRoshdy2026</footer>
+      <footer>Version 3.0 — modular steps · Educational tool: always verify formulated questions clinically.<br />Copyright©RaoufRoshdy2026</footer>
     </div>
   );
 }

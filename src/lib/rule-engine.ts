@@ -1,4 +1,4 @@
-import { KB, QUESTION_TYPES, SYNONYMS, type Analysis, type Clarification, type Formulation, type SpecialtyKey } from "./kb";
+import { KB, QUESTION_TYPES, SYNONYMS, rationalOutcomes, type Analysis, type Clarification, type Formulation, type SpecialtyKey } from "./kb";
 
 function normalize(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -21,7 +21,7 @@ function matchIn(text: string, list: string[]): string[] {
   const norm = normalize(text);
   const found: string[] = [];
   for (const raw of list) {
-    let t = NORM_SYNONYMS[singular(normalize(raw))] || NORM_SYNONYMS[normalize(raw)] || normalize(singular(raw));
+    const t = NORM_SYNONYMS[singular(normalize(raw))] || NORM_SYNONYMS[normalize(raw)] || normalize(singular(raw));
     if (t.length >= 4 && norm.includes(t)) {
       found.push(canonical(raw));
     }
@@ -29,15 +29,24 @@ function matchIn(text: string, list: string[]): string[] {
   return [...new Set(found)];
 }
 
+const FERTILITY_CUES = ["ivf", "icsi", "iui", "infertil", "conception", "fertility", "embryo", "oocyte", "sperm", "ovul", "amh", "implantation", "blastocyst", "recurrent pregnancy loss", "miscarriage"];
+
 export function ruleAnalyze(input: string): Analysis {
   const lower = input.toLowerCase();
-  let bestSpec: SpecialtyKey | null = null;
+  let best: SpecialtyKey[] = [];
   let bestHits = 0;
   for (const key of Object.keys(KB) as SpecialtyKey[]) {
-    const hits = matchIn(lower, KB[key].conditions).length + matchIn(lower, KB[key].interventions).length;
-    if (hits > bestHits) { bestHits = hits; bestSpec = key; }
+    const hits = matchIn(lower, KB[key].conditions).length * 2 + matchIn(lower, KB[key].interventions).length;
+    if (hits > bestHits) { bestHits = hits; best = [key]; }
+    else if (hits === bestHits && hits > 0) best.push(key);
   }
-  if (!bestSpec || bestHits === 0) {
+  let specKey: SpecialtyKey | null = null;
+  if (bestHits > 0) {
+    if (best.length === 1) specKey = best[0];
+    else if (FERTILITY_CUES.some(w => lower.includes(w))) specKey = best.includes("infertility") ? "infertility" : best[0];
+    else specKey = best.includes("gynecology") ? "gynecology" : (best.includes("obstetrics") ? "obstetrics" : best[0]);
+  }
+  if (!specKey) {
     return {
       specialty: null, specialtyLabel: "Unknown", condition: "", intervention: "",
       comparator: "", questionType: "Therapy / Prevention", framework: "PICO",
@@ -46,7 +55,7 @@ export function ruleAnalyze(input: string): Analysis {
       source: "rules"
     };
   }
-  const spec = KB[bestSpec];
+  const spec = KB[specKey];
   const conds = matchIn(lower, spec.conditions);
   const ivs = matchIn(lower, spec.interventions);
   const diagWords = ["diagnos", "ultrasound", "mri", "accuracy", "test"];
@@ -62,7 +71,7 @@ export function ruleAnalyze(input: string): Analysis {
   missing.push("outcome");
 
   return {
-    specialty: bestSpec,
+    specialty: specKey,
     specialtyLabel: spec.label,
     condition: conds[conds.length - 1] || "",
     intervention: ivs[ivs.length - 1] || "",
@@ -93,13 +102,22 @@ export function ruleClarify(analysis: Analysis, answered: Record<string, string>
     comparator: ["no treatment / placebo", "usual care", ...spec.interventions.slice(0, 5)],
     outcome: spec.outcomesRanked
   };
+  let options: string[] = (optionMap[nextField] || []).slice(0, 8);
+  let rationale: string | undefined;
+  if (nextField === "outcome") {
+    const condition = answered.condition || analysis.condition || "";
+    const logic = rationalOutcomes(condition, analysis.specialty);
+    options = [logic.primary, ...logic.alternatives.filter(o => o !== logic.primary)].slice(0, 8);
+    rationale = logic.rationale;
+  }
   return {
     done: false,
     field: nextField,
     questionText: prompts[nextField] || `Please specify: ${nextField}`,
-    options: (optionMap[nextField] || []).slice(0, 8),
+    options,
     allowFreeText: true,
-    source: "rules"
+    source: "rules",
+    rationale
   };
 }
 
@@ -142,15 +160,26 @@ export function ruleFormulate(analysis: Analysis, answered: Record<string, strin
     { name: "Population", value: cond ? 18 : 8 },
     { name: "Intervention/Exposure", value: iv ? 19 : 10 },
     { name: "Comparator", value: comp ? 18 : 12 },
-    { name: "Outcome", value: /live birth|mortality|symptom relief/.test(out) ? 20 : /ongoing/.test(out) ? 18 : 14 },
+    { name: "Outcome", value: 14 },
     { name: "Specificity", value: 17 }
   ];
   const advisories: string[] = [];
-  if (/^pregnancy$|pregnancy rate/i.test(out)) {
-    advisories.push('"Pregnancy" may be insufficiently specific. Consider live birth or ongoing pregnancy as the primary outcome.');
+  const logic = rationalOutcomes(cond, analysis.specialty ?? null);
+  if (out.toLowerCase() === logic.primary.toLowerCase()) {
+    scores[3] = { name: "Outcome", value: 20 };
+  } else if (logic.alternatives.some(o => o.toLowerCase() === out.toLowerCase())) {
+    scores[3] = { name: "Outcome", value: 17 };
+    advisories.push(`'${out}' is a reasonable outcome, but '${logic.primary}' is the most patient-centered for this scenario.`);
+  } else {
+    scores[3] = { name: "Outcome", value: scores[3].value };
+    advisories.push(`'${out}' is not the most appropriate outcome for this scenario. Consider '${logic.primary}' — ${logic.rationale.replace(/\.$/, "")}.`);
+  }
+  if (/miscarriage rate|implantation rate|clinical pregnancy rate/.test(out.toLowerCase())) {
+    advisories.push("Report pregnancy-related outcomes as live birth or ongoing pregnancy where possible — biochemical endpoints are poor surrogates.");
   }
   const spec = analysis.specialty ? KB[analysis.specialty] : null;
-  const altOutcomes = (spec ? spec.outcomesRanked : []).filter(o => o.toLowerCase() !== out.toLowerCase()).slice(0, 3);
+  const altOutcomes = [...(logic.alternatives || []), ...(spec ? spec.outcomesRanked : [])]
+    .filter(o => o.toLowerCase() !== out.toLowerCase());
   const variants = [
     { question: finalQuestion, rationale: "Recommended default — uses your chosen outcome." },
     ...altOutcomes.map(o => ({

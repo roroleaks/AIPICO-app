@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { sget, sset, KEYS } from "@/lib/session";
+import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
+import { NO_LITERATURE_MESSAGE, NO_LITERATURE_HINT } from "@/lib/clinical-keywords";
 
 interface Reference { pmid: string; title: string; authors: string; year: string; journal: string; doi?: string; url: string }
 interface PointWithRefs { point: string; references: Reference[] }
@@ -14,14 +16,27 @@ interface GapResult {
   note?: string;
 }
 
+/** True when the map carries neither evidence points nor usable reference records. */
+function isEmptyResult(g: GapResult): boolean {
+  const points = [...(g.known || []), ...(g.uncertain || [])];
+  const hasPoints = points.some(p => (p.point || "").trim().length > 0);
+  const hasRefs = points.some(p => (p.references || []).length > 0);
+  return !hasPoints && !hasRefs;
+}
+
 export default function GapPage() {
   const router = useRouter();
   const [gap, setGap] = useState<GapResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [exporting, setExporting] = useState<"known" | "uncertain" | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const mapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const input = sget<string>(KEYS.input);
+    const normalized = sget<string>(KEYS.inputText);
+    const stored = readSessionInput(sget<unknown>(KEYS.input));
+    const input = normalized || (stored ? sessionSearchText(stored) : "");
     if (!input) { router.replace("/"); return; }
     (async () => {
       try {
@@ -29,74 +44,89 @@ export default function GapPage() {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ stage: "gap", input })
         });
-        setGap(await res.json());
+        // Surface the server's own diagnostic instead of replacing it with a generic string.
+        if (!res.ok) {
+          const body = await res.json().catch(() => null as { error?: string } | null);
+          setError(body?.error || `The evidence mapping service returned an error (${res.status}). Please try again.`);
+          return;
+        }
+        const data: GapResult & { error?: string } = await res.json();
+        if (data?.error && !Array.isArray(data.known)) {
+          setError(data.error);
+        } else {
+          setGap(data);
+        }
       } catch {
         setError("The evidence mapping service did not respond. Please go back and retry.");
       }
     })();
   }, [router]);
 
-  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const cleanMd = (s: string) =>
-    esc(s.replace(/\\n/g, " "))
-      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-      .replace(/\*(.+?)\*/g, "<em>$1</em>")
-      .replace(/^#{1,6}\s+(.+)$/gm, "<h3>$1</h3>")
-      .replace(/[*_#`~\\]/g, "");
-
-  const chicagoRefHtml = (r: Reference) => {
-    const bits = [
-      r.authors ? `${esc(r.authors)}.` : "",
+  const chicagoPlain = (r: Reference) => {
+    const url = r.url || `https://pubmed.ncbi.nlm.nih.gov/${r.pmid}/`;
+    return [
+      r.authors ? `${r.authors}.` : "",
       r.year ? `${r.year}.` : "",
-      `"${esc(r.title.replace(/\.$/, ""))}."`,
-      r.journal ? `<em>${esc(r.journal)}</em>.` : "",
-      r.doi ? `doi:${esc(r.doi)}` : ""
-    ].filter(Boolean);
-    return `${bits.join(" ")} <a href="https://pubmed.ncbi.nlm.nih.gov/${r.pmid}/">https://pubmed.ncbi.nlm.nih.gov/${r.pmid}/</a>`;
+      `"${r.title.replace(/\.$/, "")}."`,
+      r.journal ? `${r.journal}.` : "",
+      r.doi ? `doi:${r.doi}` : ""
+    ].filter(Boolean).join(" ") + ` ${url}`;
   };
 
-  const printHTML = (bodyHtml: string, title: string) => {
-    const w = window.open("", "_blank", "width=800,height=900");
-    if (!w) { alert("Please allow pop-ups to export PDF."); return; }
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>
-@page { size: A4; margin: 22mm 20mm; }
-body { font-family: Georgia, 'Times New Roman', serif; color:#1c2430; font-size:11.5pt; line-height:1.65; margin:0; }
-h1 { font-family:'Segoe UI',Arial,sans-serif; color:#0f6b6b; font-size:19pt; text-align:center; margin:0 0 6pt; }
-h2 { font-family:'Segoe UI',Arial,sans-serif; color:#0f6b6b; font-size:13pt; border-bottom:1.5px solid #0f6b6b; padding-bottom:3pt; margin:20pt 0 8pt; }
-.doc-type { text-align:center; font-family:'Segoe UI',Arial,sans-serif; letter-spacing:2px; text-transform:uppercase; font-size:9pt; color:#8a95a0; margin-top:14pt; }
-.meta { text-align:center; color:#6a7580; font-size:9.5pt; font-style:italic; margin-bottom:18pt; }
-p { text-align: justify; margin:0 0 9pt; }
-.item { margin-bottom:16pt; page-break-inside:avoid; }
-.refs-mini { margin:6pt 0 0; padding-left:14pt; }
-.refs-mini li { font-size:9.5pt; color:#444d58; margin-bottom:4pt; line-height:1.45; }
-.refs-mini li a { color:#0f6b6b; word-break:break-all; }
-footer { margin-top:30pt; border-top:1px solid #ccd3da; padding-top:8pt; display:flex; justify-content:space-between; color:#8a95a0; font-size:8.5pt; font-style:italic; }
-@media print { footer { position:fixed; bottom:0; left:0; right:0; } }
-</style></head><body>${bodyHtml}
-<footer><span>Clinical Question Assistant — Copyright©RaoufRoshdy2026</span><span>${new Date().toLocaleDateString()}</span></footer>
-</body></html>`);
-    w.document.close();
-    w.focus();
-    setTimeout(() => w.print(), 400);
+  const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "document";
+
+  const dlPdf = async (payload: Record<string, unknown>, name: string, kind: "known" | "uncertain") => {
+    setExporting(kind);
+    setExportError(null);
+    try {
+      const res = await fetch("/api/pdf", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        let msg = "PDF generation failed. Please retry.";
+        try { const j = await res.json(); if (j && j.error) msg = j.error; } catch { /* keep default */ }
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      if (!blob.size || blob.type !== "application/pdf") throw new Error("Unexpected response from PDF service.");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (e) {
+      setExportError("⚠️ PDF export failed: " + (e instanceof Error ? e.message : "unknown error"));
+    } finally {
+      setExporting(null);
+    }
   };
 
   const exportEvidencePDF = (section: "known" | "uncertain") => {
     if (!gap) return;
     const isKnown = section === "known";
     const items: PointWithRefs[] = (isKnown ? gap.known : gap.uncertain) || [];
+    // Never emit a misleading document when the section holds nothing to report.
+    if (!items.length) {
+      setExportError(`There are no ${isKnown ? "established-evidence" : "conflicting-evidence"} records to export.`);
+      return;
+    }
     const title = isKnown ? "Established Knowledge" : "Conflicting / Low-Quality Evidence";
-    const body = `
-<h1>${esc(gap.topic)}</h1>
-<div class="doc-type">${title} · Evidence Map</div>
-<div class="meta">Generated ${new Date().toLocaleDateString()} · Obstetrics, Gynecology &amp; Infertility</div>
-${items.map((item, idx) => `
-<div class="item">
-<h2>${idx + 1}. ${isKnown ? "Established point" : "Contested area"}</h2>
-<p>${cleanMd(item.point)}</p>
-${item.references.length ? `<p style="margin-bottom:4pt;"><strong>Supporting literature:</strong></p>
-<ol class="refs-mini">${item.references.map(r => `<li>${chicagoRefHtml(r)}</li>`).join("")}</ol>` : ""}
-</div>`).join("")}`;
-    printHTML(body, title);
+    const sections = items.map((item, i) => ({
+      heading: `${i + 1}. ${isKnown ? "Established point" : "Contested area"}`,
+      blocks: item.references.length
+        ? [item.point, "Supporting literature: " + item.references.map(chicagoPlain).join(" ")]
+        : [item.point]
+    }));
+    dlPdf({
+      docType: `${title} · Evidence Map`,
+      title: gap.topic,
+      meta: `Generated ${new Date().toLocaleDateString()} · Obstetrics & Gynecology${gap.specialty ? ` · ${gap.specialty}` : ""}`,
+      sections
+    }, slug(gap.topic) + "-evidence-map.pdf", section);
   };
 
   const refine = (q: string) => {
@@ -121,13 +151,28 @@ ${item.references.length ? `<p style="margin-bottom:4pt;"><strong>Supporting lit
             <button className="primary" onClick={() => router.push("/")}>← Back to start</button></section>
         )}
 
-        {gap && (
+        {gap && isEmptyResult(gap) && (
+          <section className="card">
+            <span className="pill">🗺️ Evidence Map · {gap.topic}</span>
+            <div className="empty-state" role="alert" aria-live="polite">
+              <p className="empty-title">{NO_LITERATURE_MESSAGE}</p>
+              <p className="hint">{NO_LITERATURE_HINT}</p>
+            </div>
+            {gap.note && <div className="advisory">⚠️ {gap.note}</div>}
+            <div className="row">
+              <button className="primary" onClick={() => router.push("/")}>← Revise your keywords</button>
+            </div>
+          </section>
+        )}
+
+        {gap && !isEmptyResult(gap) && (
           <section className="card" ref={mapRef}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <span className="pill">🗺️ Evidence Map · {gap.topic}</span>
               <div className="row">
-                <button className="secondary" onClick={() => exportEvidencePDF("known")}>📄 Established Knowledge (PDF)</button>
-                <button className="secondary" onClick={() => exportEvidencePDF("uncertain")}>📄 Conflicting Evidence (PDF)</button>
+                {exportError && <div className="advisory">{exportError}</div>}
+                <button className="secondary" disabled={!!exporting || !gap.known?.length} title={!gap.known?.length ? "No established-evidence records to export" : undefined} onClick={() => exportEvidencePDF("known")}>{exporting === "known" ? "⏳ Generating PDF…" : "📄 Established Knowledge (PDF)"}</button>
+                <button className="secondary" disabled={!!exporting || !gap.uncertain?.length} title={!gap.uncertain?.length ? "No conflicting-evidence records to export" : undefined} onClick={() => exportEvidencePDF("uncertain")}>{exporting === "uncertain" ? "⏳ Generating PDF…" : "📄 Conflicting Evidence (PDF)"}</button>
               </div>
             </div>
             {gap.note && <div className="advisory">⚠️ {gap.note}</div>}
@@ -142,7 +187,7 @@ ${item.references.length ? `<p style="margin-bottom:4pt;"><strong>Supporting lit
                       {!!k.references?.length && (
                         <div className="refs">{k.references.map((r, j) => (
                           <a key={j} href={r.url} target="_blank" rel="noopener noreferrer" className="ref-link">
-                            [{r.year}] {r.authors}. {r.title}. {r.journal}. {r.doi ? `DOI: ${r.doi}` : `PMID: ${r.pmid}`}
+                            [{r.year}] {r.authors}. {r.title}. {r.journal}.{r.pmid ? ` PMID: ${r.pmid}.` : ""}{r.doi ? ` DOI: ${r.doi}.` : ""}
                           </a>))}</div>
                       )}
                     </li>))}
@@ -159,7 +204,7 @@ ${item.references.length ? `<p style="margin-bottom:4pt;"><strong>Supporting lit
                       {!!u.references?.length && (
                         <div className="refs">{u.references.map((r, j) => (
                           <a key={j} href={r.url} target="_blank" rel="noopener noreferrer" className="ref-link">
-                            [{r.year}] {r.authors}. {r.title}. {r.journal}. {r.doi ? `DOI: ${r.doi}` : `PMID: ${r.pmid}`}
+                            [{r.year}] {r.authors}. {r.title}. {r.journal}.{r.pmid ? ` PMID: ${r.pmid}.` : ""}{r.doi ? ` DOI: ${r.doi}.` : ""}
                           </a>))}</div>
                       )}
                     </li>))}
@@ -176,14 +221,28 @@ ${item.references.length ? `<p style="margin-bottom:4pt;"><strong>Supporting lit
             )}
             {!!gap.suggestedQuestions?.length && (
               <>
-                <h3 className="sec-h">💡 Questions that would fill these gaps — pick one to continue</h3>
+                <h3 className="sec-h">💡 PICO questions — select exactly one to continue</h3>
                 <div className="variants">
-                  {gap.suggestedQuestions.map((s, i) => (
-                    <div key={i} className="variant-card">
-                      <span className="v-q">{s.question}</span>
-                      <span className="v-r">{s.rationale}</span>
-                      <button className="mini-btn" onClick={() => refine(s.question)}>→ Refine into PICO (Step 3)</button>
-                    </div>))}
+                  {gap.suggestedQuestions.map((s, i) => {
+                    const isSel = selected === s.question;
+                    return (
+                      <div key={i}
+                        className={`variant-card${isSel ? " selected" : ""}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setSelected(s.question)}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(s.question); } }}>
+                        <span className="v-q">{s.question}</span>
+                        <span className="v-r">{s.rationale}</span>
+                        <span className={`v-sel${isSel ? "" : " muted"}`}>{isSel ? "✓ Selected" : "○ Select this PICO"}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="row" style={{ marginTop: 12 }}>
+                  <button className="primary" disabled={!selected} onClick={() => selected && refine(selected)}>
+                    {selected ? "Continue with selected PICO →" : "Continue with selected PICO"}
+                  </button>
                 </div>
               </>
             )}
