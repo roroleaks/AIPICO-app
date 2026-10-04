@@ -9,15 +9,15 @@
 
 ## 1. Status
 
-**FAIL — not releasable in its current state.** (Steps 1–7 of 10 complete.)
+**FAIL — not releasable in its current state.** (Steps 1–8 of 10 complete.)
 
 The deterministic evidence core is genuinely well built and verified: the claim-filter →
 evidence-set → finalization → reconciliation → export chain is fully wired from a single
-retained set, all 208 tests pass, and typecheck/lint/build are clean. No secrets are exposed
+retained set, all 209 tests pass, and typecheck/lint/build are clean. No secrets are exposed
 anywhere in the tree or in the entire Git history, and error handling degrades gracefully
 without leaking internals.
 
-**7 open defects** remain, led by:
+**6 open defects** remain, led by:
 
 - the desktop build still has **no way to obtain an AI provider key** (F-23), so every install is
   limited to the deterministic evidence list;
@@ -70,6 +70,9 @@ without leaking internals.
   - F-09: Removed "CoQ10" from `CLINICAL_PHRASES` so it normalizes consistently through the "coq10" alias
     to `"coenzyme Q10"`.
   - Added 4 new test suites comprising 6 assertions in `clinical-keywords.test.ts`. All 208 tests pass.
+- **F-15 (was LOW)** — raw HTML/XML markup and fabricated parenthetical citations are stripped at intake.
+  - Added script, style, general tag, and citation pattern removal (`(Author, Year)` and `[Author et al., Year]`) directly at key intake inside `parseClinicalKeywords`.
+  - Added unit test coverage verifying that hostile markup and fake citations are successfully removed, preventing dirty data from reaching search queries or session state.
 
 The two audit items previously listed as impossible are now done. The provider returned HTTP 200
 for the first time during step 6, so:
@@ -78,7 +81,7 @@ for the first time during step 6, so:
   and against the no-key fallback — see the verification matrix;
 - PDF export end-to-end remains to be exercised with real retained evidence (step 8).
 
-Full acceptance is still not claimed: steps 7–10 are open and PDF export E2E has not run.
+Full acceptance is still not claimed: steps 9–10 are open.
 
 ---
 
@@ -86,7 +89,7 @@ Full acceptance is still not claimed: steps 7–10 are open and PDF export E2E h
 
 | Check | Command | Result |
 |---|---|---|
-| Unit/integration tests | `npm test` | **204 pass, 0 fail** (1.44 s) |
+| Unit/integration tests | `npm test` | **209 pass, 0 fail** (1.35 s) |
 | Type safety | `npx tsc --noEmit` | exit 0, clean |
 | Lint | `npm run lint` | exit 0, clean |
 | Build | `npm run build` | exit 0, 8 routes (5 static, 3 dynamic) |
@@ -98,15 +101,15 @@ Full acceptance is still not claimed: steps 7–10 are open and PDF export E2E h
 | Sensitive files ever committed | `.env`/`secret`/`credential`/`.pem`/`.key`/`id_rsa` | **none, ever** |
 | Reflog credential scan | all refs | **0 hits** |
 | Remote URL token | `git remote -v` | clean |
-| Parser edge cases | 14 intake probes | 5 defects found (F-06…F-09, F-15) |
+| Parser edge cases | 14 intake probes | 5 defects found (F-06…F-09, F-15) — F-06…F-09, F-15 resolved |
 | Export gate probes | 6 direct `validateDeliverableIntegrity` calls | 1 High-impact defect (F-02) |
 | API method handling | GET/PUT on 3 routes | **405 on all** — correct |
 | API malformed payloads | 25+ probes across 3 routes | 6 defects (F-02…F-05, F-10…F-13) |
 | Live commentary E2E | production ×3 | **PASS — source="ai" (with key); PASS — source="deterministic" (no-key)** — F-19 and F-24 resolved |
-| **Desktop bundle parity** | `build-app-source.ps1` | **43/43 files identical by SHA-256** — F-01 fixed |
+| **Desktop bundle parity** | `build-app-source.ps1` | **45/45 files identical by SHA-256** — F-01 fixed |
 | **Desktop bundle install** | `npm install` in extracted zip | 362 packages, exit 0; `next` 16.3.8, `sharp` 0.35.5 |
 | **Desktop bundle build** | `npm run build` in extracted zip | exit 0, all 8 routes |
-| **Desktop bundle tests** | `npm test` in extracted zip | **204 pass, 0 fail** (re-verified after step 6) |
+| **Desktop bundle tests** | `npm test` in extracted zip | **209 pass, 0 fail** (re-verified after step 8) |
 | **Staleness guard** | 2 files edited + 1 added, then `-Check` | correctly reported `STALE BUNDLE`, exit 1 |
 | **Line-ending normalization** | `git diff --ignore-cr-at-eol`, `git hash-object` | **empty / blob unchanged** — no content altered |
 | Desktop provider-key path | grep all launcher + installer scripts | **absent — F-23** |

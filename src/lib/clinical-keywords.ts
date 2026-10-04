@@ -270,7 +270,16 @@ export function suggestCorrection(word: string, dictionary: string[]): string | 
  */
 export function parseClinicalKeywords(input: string, extraVocab: string[] = []): ParsedKeywords {
   const errors: string[] = [];
-  const raw = String(input || "");
+  // F-15: Strip raw markup (including script/style blocks and tags) and parenthetical or
+  // bracketed citation patterns at intake. This prevents arbitrary HTML and fabricated or
+  // copy-pasted citations from reaching downstream queries, literature search, or session state.
+  const raw = String(input || "")
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[\(\[]\s*[^()\[\]]*?\b(?:19|20)\d{2}\b[^()\[\]]*?\s*[\)\]]/g, " ")
+    .trim();
+
   const corrections: KeywordCorrection[] = [];
   const normalizedTokens: string[] = [];
   const rawTokens: string[] = [];

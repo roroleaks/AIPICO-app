@@ -391,3 +391,15 @@ test("F-09: CoQ10 and q10 canonicalize consistently to coenzyme Q10", () => {
   assert.ok(s2, "q10 should offer a correction suggestion");
   assert.equal(s2!.to, "coenzyme Q10");
 });
+
+test("F-15: raw HTML/XML markup and fabricated citations are stripped at intake", () => {
+  // Markup and script tags should be completely removed, and citations like (Smith, 2020) should be stripped
+  const input = "<script>alert(1)</script> short cervix (Smith, 2020), progesterone [Doe et al., 2019], cerclage, preterm birth";
+  const p = parseClinicalKeywords(input);
+  assert.equal(p.logicalCount, 4, p.normalizedTokens.join("|"));
+  assert.deepEqual(p.normalizedTokens, ["short cervix", "progesterone", "cerclage", "preterm birth"]);
+  assert.ok(!p.normalizedTokens.some(t => t.includes("<script>")), "should contain no script tag");
+  assert.ok(!p.normalizedTokens.some(t => t.includes("alert")), "should contain no alert text");
+  assert.ok(!p.normalizedTokens.some(t => t.includes("Smith")), "should contain no Smith citation");
+  assert.ok(!p.normalizedTokens.some(t => t.includes("2020")), "should contain no year");
+});
