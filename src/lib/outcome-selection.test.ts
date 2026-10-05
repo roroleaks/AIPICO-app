@@ -5,6 +5,7 @@ import {
   MAX_OUTCOME_OPTIONS,
   MAX_OUTCOME_SELECTIONS,
   MIN_OUTCOME_OPTIONS,
+  applyOutcomeAdvisory,
   areNearDuplicates,
   buildOutcomeContext,
   buildRationale,
@@ -500,5 +501,131 @@ test("OS-O05. no ontology rationale claims an effect", () => {
   const banned = /\b(more effective|less effective|superior|efficacious|works better|is better than|outperform\w*)\b|\b(reduce[sd]?|improve[sd]?|prevent(?:s|ed)?|lower(?:s|ed)?|increas(?:e|es|ed))\s+(the\s+)?(risk|rate|incidence|mortality|morbidity|complication|pain|bleeding)\b/i;
   for (const o of OUTCOME_ONTOLOGY) {
     assert.ok(!banned.test(o.rationale), `${o.id} rationale claims an effect: ${o.rationale}`);
+  }
+});
+
+// The advisory layer is the boundary that keeps an untrusted model from inventing outcomes, and it
+// runs on the live /api/engine path, so it is tested directly rather than only through the selector.
+const ADVISORY_BASE = () => selectOutcomes(context({
+  condition: "short cervix",
+  intervention: "progesterone"
+}));
+
+test("OS-A01. advisory cannot introduce an outcome the deterministic selection did not produce", () => {
+  const base = ADVISORY_BASE();
+  const hallucinated = applyOutcomeAdvisory(base, {
+    options: [{ id: "oncology.response-rate" }, { id: "not-a-real-outcome" }],
+    recommendedOutcomeId: "oncology.response-rate"
+  });
+  assert.deepEqual(
+    hallucinated.options.map(o => o.id),
+    base.options.map(o => o.id),
+    "advisory changed the option set"
+  );
+  assert.ok(!hallucinated.options.some(o => o.id === "oncology.response-rate"));
+  assert.equal(hallucinated.recommendedOutcome.id, base.recommendedOutcome.id);
+});
+
+test("OS-A02. advisory cannot rename or relabel a deterministic option", () => {
+  const base = ADVISORY_BASE();
+  const renamed = applyOutcomeAdvisory(base, {
+    options: [{ id: base.options[0]!.id, label: "curative cancer survival (guaranteed)" }]
+  });
+  assert.equal(renamed.options[0]!.label, base.options[0]!.label);
+  assert.ok(renamed.options.every(o => !/curative|guaranteed/i.test(o.label)));
+  assert.ok(renamed.options.every(o => base.options.some(b => b.id === o.id && b.label === o.label)));
+});
+
+test("OS-A03. advisory reorders by ontology id and promotes the requested recommendation", () => {
+  const base = ADVISORY_BASE();
+  const last = base.options[base.options.length - 1]!;
+  const reordered = applyOutcomeAdvisory(base, {
+    options: [{ id: last.id }],
+    recommendedOutcomeId: last.id
+  });
+  assert.equal(reordered.options[0]!.id, last.id);
+  assert.equal(reordered.recommendedOutcome.id, last.id);
+  assert.deepEqual(
+    reordered.options.map(o => o.id),
+    [last.id, ...base.options.filter(o => o.id !== last.id).map(o => o.id)],
+    "advisory must be a permutation of the deterministic options"
+  );
+  assert.equal(reordered.source, "hybrid");
+});
+
+test("OS-A04. advisory accepts a label the model echoed back instead of an id", () => {
+  const base = ADVISORY_BASE();
+  const target = base.options[2]!;
+  const byLabel = applyOutcomeAdvisory(base, { options: [target.label] });
+  assert.equal(byLabel.options[0]!.id, target.id);
+  const semantic = applyOutcomeAdvisory(base, { options: [target.label.toLowerCase()] });
+  assert.equal(semantic.options[0]!.id, target.id);
+});
+
+test("OS-A05. an unusable advisory leaves the deterministic order intact", () => {
+  const base = ADVISORY_BASE();
+  for (const advisory of [
+    undefined,
+    null,
+    "",
+    "   ",
+    {},
+    { options: [] },
+    { options: [{ id: "" }] },
+    { options: "not-an-array" },
+    { options: [{ nope: true }] },
+    { recommendedOutcomeId: "hallucinated-outcome" }
+  ]) {
+    const result = applyOutcomeAdvisory(base, advisory);
+    assert.deepEqual(result.options.map(o => o.id), base.options.map(o => o.id));
+    assert.equal(result.recommendedOutcome.id, base.recommendedOutcome.id);
+    assert.equal(result.source, "hybrid", "a consulted-but-unusable advisory is still hybrid");
+  }
+});
+
+test("OS-A06. advisory cannot drop, duplicate, or exceed the option count", () => {
+  const base = ADVISORY_BASE();
+  const noisy = applyOutcomeAdvisory(base, {
+    options: [
+      { id: base.options[0]!.id },
+      { id: base.options[0]!.id },
+      { id: base.options[0]!.label },
+      { id: base.options[1]!.id }
+    ],
+    recommendedOutcomeId: base.options[1]!.id
+  });
+  const ids = noisy.options.map(o => o.id);
+  assert.equal(new Set(ids).size, ids.length, "duplicate option");
+  assert.equal(ids.length, base.options.length, "option count changed");
+  assert.ok(ids.length <= MAX_OUTCOME_OPTIONS);
+});
+
+test("OS-A07. advisory cannot enlarge the selection cap or weaken the max-selections contract", () => {
+  const base = ADVISORY_BASE();
+  const noisy = applyOutcomeAdvisory(base, { options: base.options, extra: { maxSelections: 99 } });
+  assert.equal(noisy.maxSelections, base.maxSelections);
+  assert.ok(noisy.maxSelections <= MAX_OUTCOME_SELECTIONS);
+});
+
+test("OS-A08. a deeply nested advisory payload is bounded, not walked forever", () => {
+  const base = ADVISORY_BASE();
+  let nested: unknown = { id: base.options[0]!.id };
+  for (let i = 0; i < 12; i++) nested = { recommendedOutcome: nested };
+  const result = applyOutcomeAdvisory(base, nested);
+  assert.deepEqual(result.options.map(o => o.id), base.options.map(o => o.id));
+});
+
+test("OS-A09. a recommended option always remains one of the offered options", () => {
+  const base = ADVISORY_BASE();
+  for (const advisory of [
+    { options: base.options.map(o => ({ id: o.id })).reverse(), recommendedOutcomeId: base.options[3]!.id },
+    { options: [{ id: "hallucinated" }], recommendedOutcomeId: "hallucinated" },
+    { options: [{ id: base.options[1]!.id }], recommendedOutcome: { id: base.options[2]!.id } }
+  ]) {
+    const result = applyOutcomeAdvisory(base, advisory);
+    assert.ok(
+      result.options.some(o => o.id === result.recommendedOutcome.id),
+      "recommended outcome is not in the offered options"
+    );
   }
 });
