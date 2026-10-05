@@ -29,6 +29,20 @@ export default function QuestionPage() {
 
   const gapPath = useMemo(() => { try { return !!sget<unknown>(KEYS.gap); } catch { return false; } }, []);
 
+  /**
+   * What the clinician actually typed, for the outcome selector.
+   *
+   * The landing page stores the entry under `KEYS.inputText`; only the gap flow writes
+   * `KEYS.question`. Reading `KEYS.question` alone therefore handed the selector an empty string on
+   * the main path, so the keywords the clinician typed were dropped before scoring and the
+   * recommendation fell back to whichever generic patient-important outcome matched the condition
+   * alone. On "fibroids, hysterectomy, menstrual blood loss, haemoglobin" that surfaced
+   * "Patient-reported pain reduction" instead of "Menstrual blood loss reduction".
+   */
+  function originalQuestionText(): string {
+    return sget<string>(KEYS.inputText) || sget<string>(KEYS.question) || "";
+  }
+
   useEffect(() => { analysisRef.current = analysis; }, [analysis]);
 
   // Pure and cheap: drives the counter and keeps the submit label honest about a typed outcome
@@ -69,7 +83,7 @@ export default function QuestionPage() {
           questionType: a.questionType
         },
         {},
-        { originalInput: sget<string>(KEYS.question) || "", population: a.condition }
+        { originalInput: originalQuestionText(), population: a.condition }
       ));
       outcomeSelection = selection.response;
       options = outcomeSelection.options.map(o => o.label);
@@ -108,7 +122,7 @@ export default function QuestionPage() {
         questionType: a.questionType
       },
       {},
-      { originalInput: sget<string>(KEYS.question) || "", population: a.condition }
+      { originalInput: originalQuestionText(), population: a.condition }
     ));
     return {
       done: false,

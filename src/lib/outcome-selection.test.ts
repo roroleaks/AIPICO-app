@@ -22,9 +22,10 @@ import {
   type OutcomeContext
 } from "./outcome-selection.ts";
 import { OUTCOME_ONTOLOGY } from "./outcome-ontology.ts";
-import { QUESTION_TYPES } from "./kb.ts";
+import { QUESTION_TYPES, type SpecialtyKey } from "./kb.ts";
 
 const THERAPY = "Therapy / Prevention";
+const DIAGNOSIS = "Diagnosis";
 
 function context(overrides: Partial<Parameters<typeof buildOutcomeContext>[0]> = {}, extras: Parameters<typeof buildOutcomeContext>[2] = {}): OutcomeContext {
   return buildOutcomeContext(
@@ -704,4 +705,294 @@ test("OS-U05. an unrecognised specialty never receives a rationale that invents 
   for (const o of sel.options) {
     assert.ok(!/infertility|pregnan|obstetric|gynecolog/i.test(o.rationale), `${o.id}: ${o.rationale}`);
   }
+});
+
+// The selection mechanism itself: slots must be filled by relevance, and the outcome that wins must
+// be the one the question actually asks about. These are the properties that were broken.
+test("OS-M01. the highest-scoring in-scope outcome is always offered", () => {
+  // Comparators are omitted so that the ranking is decided by condition and intervention matches
+  // alone. With a comparator present the comparator-keyword bonus dominates and every winner sits in
+  // the same tier, which would hide a loop that fills slots by tier instead of by score.
+  const CASES = [
+    { specialty: "infertility", condition: "IVF", intervention: "single embryo transfer" },
+    { specialty: "gynecology", condition: "fibroids", intervention: "uterine artery embolisation" },
+    { specialty: "obstetrics", condition: "short cervix", intervention: "vaginal progesterone" },
+    { specialty: "infertility", condition: "endometriosis", intervention: "laparoscopic surgery" },
+    { specialty: "infertility", condition: "recurrent pregnancy loss", intervention: "progesterone" },
+    { specialty: "gynecology", condition: "adenomyosis", intervention: "hysterectomy" }
+  ] as const;
+  for (const c of CASES) {
+    const context = buildOutcomeContext({ ...c, questionType: THERAPY, framework: "PICO" }, {});
+const ranked = OUTCOME_ONTOLOGY
+      .map(o => scoreOutcome(o, context))
+      .filter(s => s.candidate.applicableSpecialties.includes(context.specialty!))
+      .sort((a, b) => b.score - a.score);
+    const offered = selectOutcomes(context).options;
+const best = ranked[0]!;
+    assert.ok(
+      offered.some(o => o.id === best.candidate.id),
+      `best-scoring outcome "${best.candidate.label}" (${best.score}, tier ${best.tier}) was not offered for ${c.condition}`
+    );
+  }
+});
+
+test("OS-M02. the recommendation answers the question that was asked", () => {
+  const CASES: [SpecialtyKey, string, string, string, RegExp][] = [
+    ["infertility", "endometriosis", "laparoscopic surgery", "improve pain", /pain/i],
+    ["gynecology", "fibroids", "uterine artery embolisation", "reduce menstrual blood loss", /blood loss|haemoglobin/i],
+    ["infertility", "IVF", "single embryo transfer", "improve live birth rate", /live birth/i],
+    ["obstetrics", "short cervix", "vaginal progesterone", "prevent preterm birth", /preterm/i],
+    ["obstetrics", "preeclampsia", "aspirin", "reduce incidence of pre-eclampsia", /pre-?eclampsia/i],
+    ["obstetrics", "gestational diabetes", "continuous glucose monitoring", "improve glycaemic control", /glycaem|glucose/i],
+    ["infertility", "PCOS", "letrozole", "improve live birth rate", /live birth/i],
+    ["gynecology", "endometrial hyperplasia", "progestin", "achieve regression of hyperplasia", /regression|carcinoma/i],
+    ["infertility", "recurrent pregnancy loss", "progesterone", "reduce miscarriage risk", /miscarriage|pregnancy loss/i],
+    ["gynecology", "adenomyosis", "hysterectomy", "reduce pain", /pain/i],
+    ["infertility", "thin endometrium", "estrogen", "improve clinical pregnancy rate", /pregnancy|endometri/i]
+  ];
+  for (const [specialty, condition, intervention, comparator, expected] of CASES) {
+    const sel = selectOutcomes(buildOutcomeContext(
+      { specialty, condition, intervention, comparator, questionType: THERAPY, framework: "PICO" }, {}
+    ));
+    assert.match(sel.recommendedOutcome.label, expected,
+      `${condition} / ${intervention} should recommend something matching ${expected}`);
+  }
+});
+
+test("OS-M08. the offered list, not only the recommendation, follows the question's intent", () => {
+  // Regression: one shared endpoint won nearly every question in a specialty, and the rest of the
+  // list barely moved, so two questions with different intents looked like the same question. The
+  // recommendation alone was already checked by OS-M02 and OS-M03; this pins the ordering of the
+  // remaining options, which is what the clinician actually scans.
+  const options = (comparator: string) => selectOutcomes(buildOutcomeContext(
+    { specialty: "gynecology", condition: "adenomyosis", intervention: "hysterectomy",
+      comparator, questionType: THERAPY, framework: "PICO" },
+    {}
+  )).options.map(o => o.label);
+
+  const pain = options("reduce pain");
+  const bleeding = options("reduce menstrual blood loss");
+  const quality = options("improve quality of life");
+
+  assert.equal(pain[0], "Patient-reported pain reduction");
+  assert.equal(bleeding[0], "Menstrual blood loss reduction");
+  assert.equal(quality[0], "Health-related quality of life");
+
+  // Each intent must actually reorder the list, not merely head it.
+  const shifted = (a: string[], b: string[]) => a.filter((x, i) => b[i] !== x).length;
+  assert.ok(shifted(pain, bleeding) >= 2, `pain vs bleeding barely differ: ${bleeding.join(" | ")}`);
+  assert.ok(shifted(pain, quality) >= 2, `pain vs quality of life barely differ: ${quality.join(" | ")}`);
+});
+
+test("OS-M13. the keywords the clinician typed choose between outcomes that all match the condition", () => {
+  // Every outcome can list the same condition, so a condition match does not choose between them.
+  // "Live birth" and "Patient-reported pain reduction" both match endometriosis exactly, and the
+  // fertility endpoint used to win even when the clinician had typed "pelvic pain" and
+  // "dyspareunia". Naming the outcome in the entry has to count.
+  const sel = selectOutcomes(buildOutcomeContext(
+    { specialty: "infertility", condition: "endometriosis", intervention: "laparoscopic surgery",
+      comparator: "Medical therapy (e.g., hormonal suppression)",
+      questionType: THERAPY, framework: "PICO" },
+    {},
+    { originalInput: "endometriosis, laparoscopic surgery, pelvic pain, dyspareunia" }
+  ));
+  assert.match(sel.recommendedOutcome.label, /pain/i,
+    `expected a pain outcome, got ${sel.recommendedOutcome.id}: ${sel.options.map(o => o.id).join(", ")}`);
+
+  // Same reasoning for a blood-loss entry: the typed keyword must beat a generic patient-important
+  // endpoint that happens to list the same condition.
+  const bleeding = selectOutcomes(buildOutcomeContext(
+    { specialty: "gynecology", condition: "fibroids", intervention: "hysterectomy",
+      comparator: "Expectant management / no intervention",
+      questionType: THERAPY, framework: "PICO" },
+    {},
+    { originalInput: "fibroids, hysterectomy, menstrual blood loss, haemoglobin" }
+  ));
+  assert.match(bleeding.recommendedOutcome.label, /blood loss|haemoglobin/i,
+    `expected a blood-loss outcome, got ${bleeding.recommendedOutcome.id}: ${bleeding.options.map(o => o.id).join(", ")}`);
+});
+
+test("OS-M11. an outcome scoped to another specialty cannot win on an incidental keyword", () => {
+  // "Spontaneous preterm birth before 37 completed weeks" is scoped to obstetrics but lists
+  // "progesterone" among its keywords, so on an IVF question about luteal-phase progesterone it
+  // outscored "Live birth" and took the recommendation. An entry that declares it does not apply to
+  // this specialty must not win that way.
+  const ivf = selectOutcomes(buildOutcomeContext(
+    { specialty: "infertility", condition: "IVF", intervention: "progesterone",
+      comparator: "support the luteal phase", questionType: THERAPY, framework: "PICO" }, {}
+  ));
+  assert.equal(ivf.recommendedOutcome.id, "live-birth",
+    `IVF / progesterone recommended ${ivf.recommendedOutcome.id}`);
+  // It may still be offered lower down: IVF pregnancies really do carry preterm-birth risk, so
+  // excluding the endpoint entirely would be wrong. It must not lead, though.
+  const pretermSlot = ivf.options.findIndex(o => o.id === "preterm-birth-37");
+  assert.ok(pretermSlot < 0 || pretermSlot >= 2,
+    `preterm-birth-37 ranked at slot ${pretermSlot}: ${ivf.options.map(o => o.id).join(", ")}`);
+
+  // The penalty must not override an exact condition match. Pain reduction is scoped to gynaecology,
+  // but on an endometriosis pain question it is still the answer whichever route the question took.
+  for (const specialty of ["infertility", "gynecology"] as SpecialtyKey[]) {
+    const pain = selectOutcomes(buildOutcomeContext(
+      { specialty, condition: "endometriosis", intervention: "laparoscopic surgery",
+        comparator: "improve pain", questionType: THERAPY, framework: "PICO" }, {}
+    ));
+    assert.match(pain.recommendedOutcome.label, /pain/i,
+      `${specialty} / endometriosis / laparoscopic surgery recommended ${pain.recommendedOutcome.id}`);
+  }
+});
+
+test("OS-M12. a diagnostic question prefers accuracy measures over process success rates", () => {
+  // "Implantation rate" and "Sperm retrieval success" are process rates. They say how often a
+  // procedure worked, not how well a test recognises disease, so they must not answer a question
+  // about making a diagnosis.
+  const CASES: [SpecialtyKey, string, string][] = [
+    ["infertility", "recurrent pregnancy loss", "karyotyping"],
+    ["obstetrics", "preeclampsia", "blood pressure measurement"],
+    ["gynecology", "cervical dysplasia", "colposcopy"]
+  ];
+  for (const [specialty, condition, intervention] of CASES) {
+    const sel = selectOutcomes(buildOutcomeContext(
+      { specialty, condition, intervention, questionType: DIAGNOSIS, framework: "PICO" }, {}
+    ));
+    assert.equal(sel.recommendedOutcome.family, "diagnosis-accuracy",
+      `${condition} / ${intervention} recommended ${sel.recommendedOutcome.id} (${sel.recommendedOutcome.family})`);
+    assert.ok(sel.options.some(o => o.family === "diagnosis-accuracy"),
+      `no accuracy measure offered for ${condition}: ${sel.options.map(o => o.id).join(", ")}`);
+  }
+});
+
+test("OS-M10. a comparator with no ontology keyword still steers the recommendation", () => {
+  // None of these comparators contains a single ontology keyword, so the comparator-keyword bonus
+  // cannot fire and the intent bonus over shared label terms is the only signal that can move the
+  // answer. Without it the recommendation for a given condition never changes.
+  const rec = (specialty: SpecialtyKey, condition: string, intervention: string, comparator: string) =>
+    selectOutcomes(buildOutcomeContext(
+      { specialty, condition, intervention, comparator, questionType: THERAPY, framework: "PICO" }, {}
+    )).recommendedOutcome.id;
+
+  assert.equal(rec("infertility", "hydrosalpinx", "salpingectomy", "improve time to pregnancy"), "time-to-pregnancy");
+  assert.equal(rec("obstetrics", "short cervix", "cerclage", "reduce fetal growth restriction"), "fetal-growth-restriction");
+  assert.equal(rec("obstetrics", "preeclampsia", "aspirin", "reduce need for repeat surgery"), "reoperation-rate");
+
+  // The same condition must answer different comparators differently.
+  const cervix = ["reduce fetal growth restriction", "improve sleep quality", "reduce need for repeat surgery"]
+    .map((c) => rec("obstetrics", "short cervix", "cerclage", c));
+  assert.equal(new Set(cervix).size, 3, `three intents on one condition collapsed to ${new Set(cervix).size}: ${cervix.join(" | ")}`);
+});
+
+test("OS-M09. a shared-condition question does not stack variants of one idea without a comparator", () => {
+  // Without a comparator there is nothing to rank by beyond the condition, so the guard against a
+  // family-monoculture has to be structural: at most one outcome per family unless the family is
+  // explicitly allowed to repeat.
+  const sel = selectOutcomes(buildOutcomeContext(
+    { specialty: "gynecology", condition: "adenomyosis", intervention: "hysterectomy",
+      questionType: THERAPY, framework: "PICO" },
+    {}
+  ));
+  const byFamily = new Map<string, number>();
+  for (const o of sel.options) byFamily.set(o.family, (byFamily.get(o.family) ?? 0) + 1);
+  for (const [family, count] of byFamily) {
+    assert.ok(count <= 1, `family "${family}" appears ${count} times: ${sel.options.map(o => o.label).join(" | ")}`);
+  }
+});
+
+test("OS-M03. two questions about the same condition but different intent get different recommendations", () => {
+  const rec = (intervention: string, comparator: string) => selectOutcomes(buildOutcomeContext(
+    { specialty: "gynecology", condition: "fibroids", intervention, comparator,
+      questionType: THERAPY, framework: "PICO" },
+    {}
+  )).recommendedOutcome.label;
+  assert.match(rec("uterine artery embolisation", "reduce menstrual blood loss"), /blood loss|haemoglobin/i);
+  assert.match(rec("myomectomy", "improve quality of life"), /quality of life/i);
+});
+
+test("OS-M04. slot filling is ordered by relevance, not by an internal tier label", () => {
+  // Regression: slot filling walked tiers in the order specific -> specialty -> keyword -> generic
+  // and filled every slot from the first non-empty tier. Tier and score disagree here: "Live birth"
+  // scores 92 in the keyword tier while "Spontaneous conception rate" scores 82 in the specific
+  // tier, so tier-first filling offered the weaker outcome and blocked the better one. The label
+  // pairing is incidental; what matters is that a lower-scoring entry outranked a higher-scoring one.
+  //
+  // No specialty filter is applied to the expected ranking, because the selector's scope gate also
+  // admits a specific-tier outcome from another specialty. Here the keyword-tier winner scores 80
+  // while the specialty-tier runner-up scores 58, and the two are in different families, so nothing
+  // except the fill order decides between them.
+  const context = buildOutcomeContext(
+    { specialty: "obstetrics", condition: "IVF", intervention: "aspirin",
+      questionType: THERAPY, framework: "PICO" },
+    {}
+  );
+  const ranked = OUTCOME_ONTOLOGY
+    .map(o => scoreOutcome(o, context))
+    .sort((a, b) => b.score - a.score);
+  const best = ranked[0]!;
+  const runnerUp = ranked[1]!;
+  assert.ok(best.score > runnerUp.score, "fixture no longer discriminates on score");
+  assert.notEqual(best.tier, runnerUp.tier, "fixture no longer discriminates on tier");
+
+  const sel = selectOutcomes(context);
+  assert.equal(sel.recommendedOutcome.label, best.candidate.label);
+  assert.ok(sel.options.some(o => o.id === best.candidate.id),
+    `higher-scoring "${best.candidate.label}" (${best.score}, ${best.tier}) lost to `
+    + `"${runnerUp.candidate.label}" (${runnerUp.score}, ${runnerUp.tier})`);
+});
+
+test("OS-M05. a question with no comparator does not stack options from one family", () => {
+  // Regression: with no comparator to discriminate them, every outcome that merely matched the
+  // condition scored within a few points of the others, so the top of the ranking filled with
+  // same-family neighbours and the clinician saw three variants of one idea instead of a choice.
+  const CASES: [SpecialtyKey, string, string][] = [
+    ["gynecology", "fibroids", "uterine artery embolisation"],
+    ["infertility", "IVF", "single embryo transfer"],
+    ["obstetrics", "gestational diabetes", "insulin"],
+    ["gynecology", "pelvic organ prolapse", "physiotherapy"],
+    ["obstetrics", "short cervix", "cervical cerclage"]
+  ];
+  for (const [specialty, condition, intervention] of CASES) {
+    const sel = selectOutcomes(buildOutcomeContext(
+      { specialty, condition, intervention, questionType: THERAPY, framework: "PICO" }, {}
+    ));
+    const families = sel.options.map(o => o.family);
+    const adjacentRepeats = families.filter((f, i) => i > 0 && f === families[i - 1]).length;
+    assert.equal(adjacentRepeats, 0,
+      `${condition}: repeated family back to back -> ${families.join(", ")}`);
+  }
+});
+
+test("OS-M06. a comparator naming a concept outranks the specialty's default endpoints", () => {
+  // Regression: the generic category bonuses (patientImportant + preferredPrimary) are constant
+  // within a specialty, so they cannot separate two outcomes that both match the condition. They
+  // let "Patient-reported pain reduction" beat "Menstrual blood loss reduction" on a blood-loss
+  // question, and "Live birth" beat pain on a pain question.
+  const bloodLoss = selectOutcomes(buildOutcomeContext(
+    { specialty: "gynecology", condition: "fibroids", intervention: "uterine artery embolisation",
+      comparator: "reduce menstrual blood loss", questionType: THERAPY, framework: "PICO" }, {}
+  ));
+  assert.match(bloodLoss.recommendedOutcome.label, /blood loss|haemoglobin/i);
+
+  const pain = selectOutcomes(buildOutcomeContext(
+    { specialty: "infertility", condition: "endometriosis", intervention: "laparoscopic surgery",
+      comparator: "improve pain", questionType: THERAPY, framework: "PICO" }, {}
+  ));
+  assert.match(pain.recommendedOutcome.label, /pain/i);
+});
+
+test("OS-M07. distinct clinical questions do not all collapse onto one endpoint", () => {
+  const CASES: [SpecialtyKey, string, string, string][] = [
+    ["obstetrics", "short cervix", "vaginal progesterone", "prevent preterm birth"],
+    ["obstetrics", "preeclampsia", "aspirin", "reduce incidence of pre-eclampsia"],
+    ["obstetrics", "gestational diabetes", "insulin", "improve glycaemic control"],
+    ["infertility", "endometriosis", "laparoscopic surgery", "improve pain"],
+    ["gynecology", "fibroids", "hysterectomy", "reduce menstrual blood loss"],
+    ["gynecology", "endometrial hyperplasia", "progestin", "achieve regression of hyperplasia"],
+    ["infertility", "PCOS", "letrozole", "improve live birth rate"],
+["gynecology", "pelvic organ prolapse", "physiotherapy", "improve quality of life"]
+  ];
+  const recs = CASES.map(([specialty, condition, intervention, comparator]) =>
+    selectOutcomes(buildOutcomeContext(
+      { specialty, condition, intervention, comparator, questionType: THERAPY, framework: "PICO" }, {}
+    )).recommendedOutcome.label);
+  // Six of eight questions recommending the same endpoint was the reported symptom.
+  assert.ok(new Set(recs).size >= 6,
+    `only ${new Set(recs).size} distinct recommendations across 8 questions: ${recs.join(" | ")}`);
 });

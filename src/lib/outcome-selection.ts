@@ -46,6 +46,9 @@ export const MAX_FREE_TEXT_LENGTH = 120;
 /** Outcome families that may be shown twice, and only when the question is about thresholds. */
 const THRESHOLD_EXCEPTION_FAMILY = "preterm-birth";
 
+/** Sensitivity, specificity and missed-diagnosis rate: how well a test recognises disease. */
+const DIAGNOSTIC_ACCURACY_FAMILY = "diagnosis-accuracy";
+
 /**
  * Families allowed more than one member.
  *
@@ -54,7 +57,7 @@ const THRESHOLD_EXCEPTION_FAMILY = "preterm-birth";
  * same question, and offering only one of them leaves a diagnostic selection too thin to use.
  */
 const DIAGNOSTIC_FAMILY_ALLOWANCE: Record<string, number> = {
-  "diagnosis-accuracy": 3
+  [DIAGNOSTIC_ACCURACY_FAMILY]: 3
 };
 
 /**
@@ -356,12 +359,54 @@ const WEIGHTS = {
   conditionExact: 45,
   conditionKeywordOnly: 18,
   interventionExact: 24,
-  comparatorSignal: 6,
+  /** Naming the concept the comparator asks about is decisive, on a par with matching the condition. */
+  comparatorKeywordExact: 40,
+  /**
+   * Bonus for an outcome whose own keywords appear in what the clinician typed.
+   *
+   * Every outcome can list the same condition, so a condition match alone does not choose between
+   * them: on an endometriosis question "Live birth" and "Patient-reported pain reduction" both match
+   * the condition exactly, and the fertility endpoint won even though the clinician had typed
+   * "pelvic pain" and "dyspareunia". The keyword bonus below was gated behind a non-matching
+   * condition, so naming the outcome was worth nothing precisely when everything matched. Naming the
+   * concept has to be decisive, for the same reason comparatorKeywordExact is.
+   */
+  inputKeywordExact: 26,
   specialtyExact: 14,
   specialtyAny: 7,
+  /**
+   * Penalty for an outcome scoped to other specialties than the one being asked about.
+   *
+   * "Spontaneous preterm birth before 37 completed weeks" is scoped to obstetrics, but it lists
+   * "progesterone" among its keywords, so on an IVF question about luteal-phase progesterone it
+   * scored 97 against 82 for "Live birth" and took the recommendation. That is a keyword naming a
+   * related intervention, not the outcome being asked about, and it cannot outrank an outcome that
+   * actually belongs to the question's specialty.
+   */
+  otherSpecialtyPenalty: 40,
+  /**
+   * Bonus for an accuracy measure when the question is about making or detecting a diagnosis.
+   *
+   * On a "detect aneuploidy" question about recurrent pregnancy loss, "Implantation rate" and
+   * "Sperm retrieval success" outscored every accuracy measure. They are process rates: they say how
+   * often a procedure worked, not how well a test recognises disease. The question type already
+   * declares which kind of answer is wanted, so honour it. This has to outweigh conditionExact,
+   * because "Miscarriage rate" is a real match for recurrent pregnancy loss and would otherwise
+   * answer a question that is asking about a test.
+   */
+  diagnosticQuestionBonus: 50,
   questionTypeExact: 10,
   keywordPerHit: 4,
   keywordCap: 12,
+  /**
+   * Bonus for sharing a content term with what the question actually asks about.
+   *
+   * This has to outweigh the generic category bonuses (patientImportant + preferredPrimary = 26),
+   * because those are constant within a specialty and were letting "Patient-reported pain
+   * reduction" beat "Menstrual blood loss reduction" on a question about menstrual blood loss.
+   */
+  intentPerHit: 8,
+  intentCap: 20,
   patientImportant: 16,
   measurable: 8,
   preferredPrimary: 10,
@@ -429,6 +474,13 @@ export function scoreOutcome(candidate: OutcomeCandidate, context: OutcomeContex
   const conditionHit = candidate.applicableConditions.some(c => containsPhrase(conditionText, phrases(c).join(" ")));
   const interventionHit = candidate.applicableInterventions.some(i => containsPhrase(interventionText, phrases(i).join(" ")));
   const matchedKeywords = candidate.keywords.filter(k => containsPhrase(allText.join(" "), phrases(k).join(" ")));
+  // A keyword found in the comparator alone is far stronger evidence than one found anywhere in the
+  // input, because the comparator states what the question is asking *about*. On an endometriosis
+  // pain question, "pain" appearing in the comparator is what makes "Patient-reported pain
+  // reduction" the answer; the same word in the population or intervention text says much less.
+  const comparatorMatchedKeywords = context.comparator
+    ? candidate.keywords.filter(k => containsPhrase(context.comparator!, phrases(k).join(" ")))
+    : [];
   const specialtyHit = !!context.specialty && candidate.applicableSpecialties.includes(context.specialty);
   const questionTypeHit = !!context.questionType && candidate.applicableQuestionTypes.includes(context.questionType);
 
@@ -443,11 +495,67 @@ export function scoreOutcome(candidate: OutcomeCandidate, context: OutcomeContex
     score += WEIGHTS.interventionExact;
     if (tier === "generic" || tier === "keyword") tier = "specific";
   }
-  if (context.comparator) score += WEIGHTS.comparatorSignal;
+  if (comparatorMatchedKeywords.length) {
+    // Decisive. Naming the concept the question asks about outweighs every category bonus, because
+    // those bonuses are constant within a specialty and so cannot distinguish two outcomes that
+    // both match the condition.
+    score += WEIGHTS.comparatorKeywordExact
+      + Math.min((comparatorMatchedKeywords.length - 1) * WEIGHTS.keywordPerHit, WEIGHTS.keywordCap);
+    if (tier !== "specific") tier = "specific";
+  }
+  // Keywords the clinician typed themselves. Scoped to the free-text entry rather than the whole
+  // question, because the condition and intervention fields are already scored on their own and
+  // would otherwise count twice.
+  const typedText = [context.originalInput, ...context.keywords].filter(Boolean).join(" ");
+  const typedMatchedKeywords = typedText
+    ? candidate.keywords.filter(k => containsPhrase(typedText, phrases(k).join(" ")))
+    : [];
+  // Scoped to a specialty that is not in play, and not rescued by an exact condition match. This is
+  // what keeps the universal fallback universal: on an unrecognised specialty, no OB/GYN-scoped
+  // outcome may be pulled in by a keyword the clinician happened to type.
+  const scopedElsewhere = candidate.applicableSpecialties.length > 0 && !specialtyHit;
+  if (typedMatchedKeywords.length && (!scopedElsewhere || conditionHit)) {
+    score += WEIGHTS.inputKeywordExact
+      + Math.min((typedMatchedKeywords.length - 1) * WEIGHTS.keywordPerHit, WEIGHTS.keywordCap);
+    if (tier !== "specific") tier = "specific";
+  }
+  // Does the outcome name the thing the question is actually about?
+  //
+  // A keyword hit anywhere in the input is weak evidence, because the input also carries the
+  // population and the intervention. Sharing a content term with the comparator or the condition
+  // is the specific evidence, and it is what separates "Menstrual blood loss reduction" from
+  // "Patient-reported pain reduction" on a fibroid question about blood loss.
+  const intentTokens = comparatorIntentTokens(context);
+  const labelTokens = new Set(
+    phrases(candidate.label).map(canonicalToken).filter(t => !NON_DISTINCTING_MODIFIERS.has(t))
+  );
+  let intentHits = 0;
+  for (const token of labelTokens) if (intentTokens.has(token)) intentHits++;
+  score += Math.min(intentHits * WEIGHTS.intentPerHit, WEIGHTS.intentCap);
   score += specialtyHit ? WEIGHTS.specialtyExact : WEIGHTS.specialtyAny;
+  // Scoped to other specialties. An entry that declares it does not apply here must not win on an
+  // incidental keyword match. An exact condition match still overrides this: "Patient-reported pain
+  // reduction" is scoped to gynaecology, but on an endometriosis question it names the exact
+  // condition and is still the answer, whether the question arrived via the infertility or the
+  // gynaecology route.
+  if (
+    context.specialty &&
+    !conditionHit &&
+    candidate.applicableSpecialties.length > 0 &&
+    !specialtyHit
+  ) {
+    score -= WEIGHTS.otherSpecialtyPenalty;
+  }
   if (questionTypeHit) {
     score += WEIGHTS.questionTypeExact;
     if (tier === "generic" && (specialtyHit || conditionHit)) tier = "specialty";
+  }
+  if (
+    candidate.family === DIAGNOSTIC_ACCURACY_FAMILY &&
+    context.questionType &&
+    /diagnosis|screening/i.test(context.questionType)
+  ) {
+    score += WEIGHTS.diagnosticQuestionBonus;
   }
   score += Math.min(matchedKeywords.length * WEIGHTS.keywordPerHit, WEIGHTS.keywordCap);
   if (isPatientImportant(candidate)) score += WEIGHTS.patientImportant;
@@ -467,11 +575,43 @@ export function scoreOutcome(candidate: OutcomeCandidate, context: OutcomeContex
   return { candidate, score, tier, matchedKeywords };
 }
 
-/** Stable ordering: score desc, then ontology priority asc, then id asc. */
+/** Stable ordering: score desc, then match tier, then ontology priority asc, then id asc. */
 function compareScored(a: ScoredOutcome, b: ScoredOutcome): number {
   if (b.score !== a.score) return b.score - a.score;
+  const tierA = TIER_RANK[a.tier];
+  const tierB = TIER_RANK[b.tier];
+  if (tierA !== tierB) return tierA - tierB;
   if (a.candidate.priority !== b.candidate.priority) return a.candidate.priority - b.candidate.priority;
   return a.candidate.id.localeCompare(b.candidate.id);
+}
+
+/** Tie-break only. Score remains the primary signal; see the note on slot filling. */
+const TIER_RANK: Record<MatchTier, number> = {
+  specific: 0,
+  specialty: 1,
+  keyword: 2,
+  family: 3,
+  generic: 4
+};
+
+/**
+ * Content terms drawn from what the question actually asks about.
+ *
+ * These are the tokens that survive generic-measurement folding, so "reduce menstrual blood loss"
+ * yields {blood, loss} while "live birth rate" yields {live, birth}. Used to prefer the outcome
+ * that answers the stated question over one that merely scores well for the specialty.
+ */
+function comparatorIntentTokens(context: OutcomeContext): Set<string> {
+  const text = [context.comparator, context.population, context.condition, context.originalInput]
+    .filter(Boolean).join(" ");
+  const out = new Set<string>();
+  for (const token of phrases(text)) {
+    const canonical = canonicalToken(token);
+    if (!canonical || NON_DISTINCTING_MODIFIERS.has(canonical)) continue;
+    if (/^\d+$/.test(canonical)) continue;
+    out.add(canonical);
+  }
+  return out;
 }
 
 /**
@@ -607,7 +747,6 @@ export function selectOutcomes(
   };
 
   const eligible = scored.filter(s => acceptsQuestionType(s.candidate) && inScope(s));
-  const tiers: MatchTier[] = ["specific", "specialty", "keyword", "family", "generic"];
   const chosen: ScoredOutcome[] = [];
   const chosenIds = new Set<string>();
   const familiesUsed = new Map<string, number>();
@@ -623,17 +762,44 @@ export function selectOutcomes(
     return seen < allowance;
   };
 
-  for (const tier of tiers) {
-    for (const entry of eligible) {
-      if (chosen.length >= max) break;
-      if (entry.tier !== tier) continue;
+  // Slots are filled in score order, not tier order.
+  //
+  // Tier is only a relevance hint, and it disagrees with score: "Live birth" scores highest on an
+  // IVF question (94, keyword tier) while "Implantation rate" scores lower (72, specific tier).
+  // Iterating tier-first therefore filled slots from the weaker tier and then blocked the stronger
+  // outcome, so the best-scoring outcome in the whole ontology was never offered at all. Ranking
+  // by score and letting `compareScored` use tier as a tie-break keeps every signal consistent.
+  const ranked = [...eligible].sort(compareScored);
+
+  // One outcome per family while walking down the ranking.
+  //
+  // Without this the same generic patient-important endpoints won nearly every question in a
+  // specialty, so sixteen different questions produced nine distinct recommendations and "Live
+  // birth" appeared in six of them. The family cap is what stops one idea filling every slot;
+  // relevance is still decided by the score alone.
+  for (const entry of ranked) {
+    if (chosen.length >= max) break;
+    if (chosenIds.has(entry.candidate.id)) continue;
+    if (!familyAllowed(entry.candidate)) continue;
+    chosen.push(entry);
+    chosenIds.add(entry.candidate.id);
+    familiesUsed.set(entry.candidate.family, (familiesUsed.get(entry.candidate.family) ?? 0) + 1);
+  }
+
+  // Backfill by score if diversity left the selection short of the minimum.
+  //
+  // The family cap applies here too. Skipping it made this a loophole: a second outcome from an
+  // already-used family could reappear through the backfill, so the deliberate-repeat allowance
+  // stopped actually deciding how many accuracy measures a diagnostic question received.
+  if (chosen.length < min) {
+    for (const entry of ranked) {
+      if (chosen.length >= min) break;
       if (chosenIds.has(entry.candidate.id)) continue;
       if (!familyAllowed(entry.candidate)) continue;
       chosen.push(entry);
       chosenIds.add(entry.candidate.id);
       familiesUsed.set(entry.candidate.family, (familiesUsed.get(entry.candidate.family) ?? 0) + 1);
     }
-    if (chosen.length >= min) break;
   }
 
   // Composition pass: an intervention question without a harm outcome, or a pregnancy question
