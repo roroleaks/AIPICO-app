@@ -60,6 +60,22 @@ button.link { background: none; border: none; color: var(--muted); cursor: point
 .chip:hover { background: var(--accent-light); }
 .chip:disabled { opacity: .45; cursor: not-allowed; }
 .chip.chip-on { background: var(--accent); color: #fff; }
+/* Outcome options carry a category, a recommended flag and a reason, so each chip is a small
+   card rather than a label. They stack instead of wrapping so a long rationale stays readable. */
+.chips.outcome-chips { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.outcome-chip { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; text-align: left; padding: 11px 13px; line-height: 1.35; }
+.outcome-chip-label { font-weight: 600; }
+.outcome-chip-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.outcome-badge { background: var(--accent); color: #fff; border-radius: 999px; padding: 1px 9px; font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+.outcome-category { border: 1px solid var(--border); color: var(--muted); border-radius: 999px; padding: 1px 9px; font-size: .68rem; text-transform: capitalize; }
+.outcome-why { color: var(--muted); font-size: .78rem; font-weight: 400; }
+.chip.chip-recommended { border-width: 2px; }
+.chip.chip-on.outcome-chip .outcome-badge, .chip.chip-on .outcome-category { background: #fff; color: var(--accent); border-color: #fff; }
+.chip.chip-on .outcome-why { color: #e8f4f4; }
+.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chip.chip-on:focus-visible { outline-color: #fff; }
+.outcome-error { color: #b3261e; }
+.free-input[aria-invalid="true"] { border-color: #b3261e; }
 table.pico { width: 100%; border-collapse: collapse; }
 table.pico td { border: 1px solid var(--border); padding: 9px 12px; vertical-align: top; font-size: .92rem; }
 table.pico td:first-child { width: 175px; font-weight: 700; color: var(--accent); background: var(--accent-light); }

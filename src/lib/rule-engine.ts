@@ -1,4 +1,5 @@
 import { KB, QUESTION_TYPES, SYNONYMS, rationalOutcomes, type Analysis, type Clarification, type Formulation, type SpecialtyKey } from "./kb.ts";
+import { buildOutcomeContext, selectOutcomes } from "./outcome-selection.ts";
 
 function normalize(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -122,11 +123,24 @@ export function ruleClarify(analysis: Analysis, answered: Record<string, string>
   };
   let options: string[] = (optionMap[nextField] || []).slice(0, 8);
   let rationale: string | undefined;
+  let outcomeSelection: Clarification["outcomeSelection"];
   if (nextField === "outcome") {
-    const condition = ans.condition || a.condition || "";
-    const logic = rationalOutcomes(condition, specKey);
-    options = [logic.primary, ...logic.alternatives.filter(o => o !== logic.primary)].slice(0, 8);
-    rationale = logic.rationale;
+    // The outcome field is answered from the ontology rather than from the specialty's flat list,
+    // so the recommendation reflects the condition, intervention and comparator already collected.
+    const selection = selectOutcomes(buildOutcomeContext(
+      {
+        specialty: specKey,
+        condition: ans.condition || a.condition || "",
+        intervention: ans.intervention || a.intervention || "",
+        comparator: ans.comparator || a.comparator || "",
+        questionType: ans.questionType || a.questionType || ""
+      },
+      ans,
+      { population: ans.population || ans.condition || a.condition || "" }
+    ));
+    outcomeSelection = selection;
+    options = selection.options.map(o => o.label);
+    rationale = selection.recommendedOutcome.rationale;
   }
   return {
     done: false,
@@ -135,7 +149,8 @@ export function ruleClarify(analysis: Analysis, answered: Record<string, string>
     options,
     allowFreeText: true,
     source: "rules",
-    rationale
+    rationale,
+    outcomeSelection
   };
 }
 

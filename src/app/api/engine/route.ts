@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { KB, QUESTION_TYPES, rationalOutcomes, type Analysis } from "@/lib/kb";
+import { applyOutcomeAdvisory } from "@/lib/outcome-selection";
 import { ruleAnalyze, ruleClarify, ruleFormulate } from "@/lib/rule-engine";
 // Claim-specific filtering boundary. The engine imports these rather than keeping its own
 // copy, so the rule the unit tests verify is the rule that gates commentary, the rendered
@@ -1236,23 +1237,53 @@ Respond ONLY with JSON.`, { input, knowledgeBase: kbContext() });
       const parsed = readAnalysisStage(body, stage);
       if (!parsed.ok) return parsed.response;
       const { analysis, answered } = parsed;
-      if (KEY && analysis?.specialty && isSpecialty(analysis.specialty)) {
-        const outcomeLogic = rationalOutcomes(answered.condition || analysis.condition || "", analysis.specialty);
-        const out = await callLLM(
-          `You are an interactive clinical clarification assistant for ${KB[analysis.specialty as keyof typeof KB].label}.
+
+      // The deterministic selection is computed first and is the authority for the outcome field.
+      // The model may only reorder it; it can never introduce, rename or invent an option.
+      const deterministic = ruleClarify(analysis, answered);
+
+      if (deterministic.field !== "outcome") {
+        if (KEY && analysis?.specialty && isSpecialty(analysis.specialty)) {
+          const out = await callLLM(
+            `You are an interactive clinical clarification assistant for ${KB[analysis.specialty as keyof typeof KB].label}.
 The clinician's original uncertainty and the current analysis are given. Ask the SINGLE most important next clarification question needed to formulate an answerable clinical question.
 Prefer asking about: outcome specificity first, then population details, then comparator.
-The most rational primary outcome for the current condition is "${outcomeLogic.primary}". Prefer it and its alternatives when they are clinically appropriate.
-Recommended outcomes for this scenario (in priority order): ${JSON.stringify([outcomeLogic.primary, ...outcomeLogic.alternatives])}.
-Provide 8 to 10 diverse, clinically relevant options covering different angles (different outcomes, populations, comparators, or timeframes) so the clinician has real choices.
+Provide 4 to 6 diverse, clinically relevant options so the clinician has real choices.
 Respond ONLY with JSON:
 {"done": false, "field": "<condition|intervention|comparator|outcome>", "questionText": "...", "options": ["...", "..."], "allowFreeText": true}
 Set done=true with empty strings when everything essential is known.`,
-          { analysis, answered, outcomeLogic }
-        );
-        return NextResponse.json({ ...out, source: "ai" });
+            { analysis, answered }
+          );
+          return NextResponse.json({ ...out, source: "ai" });
+        }
+        return NextResponse.json(deterministic);
       }
-      return NextResponse.json(ruleClarify(analysis, answered));
+
+      const outcomeSelection = deterministic.outcomeSelection;
+      if (!outcomeSelection || !(KEY && analysis?.specialty && isSpecialty(analysis.specialty))) {
+        return NextResponse.json(deterministic);
+      }
+
+      const advisory = await callLLM(
+        `You are helping a clinician choose the primary outcome for a clinical question.
+These outcomes were selected for this question and are already ranked by clinical relevance:
+${JSON.stringify(outcomeSelection.options.map(o => ({ id: o.id, label: o.label, category: o.category })), null, 1)}
+Reorder them only if this specific question is clearly better served by a different order, and name the single outcome that should be the recommended primary.
+You MUST use the ids exactly as given. You MUST NOT invent, rename, or add outcomes.
+Respond ONLY with JSON:
+{"recommendedOutcomeId": "<id from the list>", "options": ["<id>", "..."]}`,
+        { analysis, answered, question: deterministic.questionText }
+      );
+      const advised = applyOutcomeAdvisory(outcomeSelection, advisory);
+      return NextResponse.json({
+        ...deterministic,
+        questionText: typeof advisory === "object" && advisory && typeof (advisory as { questionText?: unknown }).questionText === "string"
+          ? String((advisory as { questionText: string }).questionText).slice(0, 600)
+          : deterministic.questionText,
+        options: advised.options.map(o => o.label),
+        outcomeSelection: advised,
+        source: advised.source
+      });
     }
 
     if (stage === "formulate") {

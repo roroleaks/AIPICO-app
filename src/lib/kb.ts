@@ -1,3 +1,7 @@
+// `outcome-selection` imports `SpecialtyKey` as a type only, so this runtime import does not
+// create a cycle: the ontology is the single source of truth and kb.ts is a consumer of it.
+import { buildOutcomeContext, selectOutcomes, type OutcomeSelectionResponse } from "./outcome-selection.ts";
+
 export type SpecialtyKey = "infertility" | "gynecology" | "obstetrics";
 
 export interface OutcomeRule {
@@ -251,85 +255,41 @@ export const QUESTION_TYPES = [
   { type: "Harm", framework: "PECO harm" }
 ];
 
-function normalizeText(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
-}
-
+/**
+ * Deterministic outcome logic for a condition.
+ *
+ * Delegates to the shared selector rather than keeping a second ranking here, so the deterministic
+ * fallback, the API response and the browser all produce the same recommendation. The
+ * `OutcomeRule` shape is preserved because callers still read `primary`/`alternatives`.
+ */
 export function rationalOutcomes(condition: string, specialty: SpecialtyKey | null): OutcomeRule {
-  const text = normalizeText(condition);
-  const candidates = specialty ? [KB[specialty]] : Object.values(KB);
-  for (const spec of candidates) {
-    for (const rule of spec.outcomeRules) {
-      if (rule.keywords.some(k => text.includes(normalizeText(k)))) return rule;
-    }
-  }
-  const spec = specialty ? KB[specialty] : null;
-  const ranked = spec?.outcomesRanked ?? ["live birth rate", "quality of life", "symptom relief"];
+  return toOutcomeRule(selectOutcomes(buildOutcomeContext({ specialty, condition }, {}, {})));
+}
+
+function toOutcomeRule(selection: OutcomeSelectionResponse): OutcomeRule {
+  const primary = selection.recommendedOutcome;
+  const keywords = [...new Set(selection.options.flatMap(o => o.keywords))].slice(0, 12);
   return {
-    keywords: [],
-    primary: ranked[0],
-    alternatives: ranked.slice(0, 7),
-    rationale: "Standard patient-centered outcomes for this clinical area."
+    keywords,
+    primary: primary.label,
+    alternatives: selection.options.filter(o => o.id !== primary.id).map(o => o.label),
+    rationale: primary.rationale
   };
 }
 
-const FERT_TEXT_RE = /ivf|icsi|assisted reproduct|embryo|in vitro|oocyte|gonadotroph|gonadotrop|embryo transfer|live birth|pregnancy|fertility|infertility|implantation/i;
-const SYMPTOM_TEXT_RE = /pain|dysmenorrh|bleeding|symptom|heaviness|menorrhagia|spotting/i;
-const RECURRENCE_TEXT_RE = /recurr|relapse|reoperation/i;
-
-const FERT_CANON = [
-  "live birth rate",
-  "cumulative live birth rate",
-  "clinical pregnancy rate",
-  "ongoing pregnancy rate",
-  "miscarriage rate",
-  "treatment duration or treatment burden",
-  "implantation rate",
-  "time to pregnancy"
-];
-const SYMPTOM_CANON = ["pain relief", "symptom improvement", "quality of life", "patient satisfaction"];
-const RECURRENCE_CANON = ["recurrence rate", "reoperation rate"];
-
+/**
+ * Deterministic outcome logic for a full PICO question.
+ *
+ * The question text used to be routed into three hardcoded canonical lists here, which is the same
+ * ranking the ontology already performs with declared conditions, interventions and keywords. The
+ * question is now passed through as context so one implementation serves every caller.
+ */
 export function picoOutcomes(question: string, condition: string, specialty: SpecialtyKey | null): OutcomeRule {
-  const text = normalizeText(`${question} ${condition}`);
-  const hasFert = FERT_TEXT_RE.test(text);
-  const hasSymptom = SYMPTOM_TEXT_RE.test(text);
-  const hasRecur = RECURRENCE_TEXT_RE.test(text);
-
-  const base = rationalOutcomes(condition, specialty);
-  const baseList = [base.primary, ...base.alternatives.filter(o => o !== base.primary)];
-  const inFert = (o: string) => /live birth|birth rate|pregnancy rate|implantation|miscarriage|pregnancy outcome|delivery rate|neonatal outcome/i.test(o);
-  const inSymptom = (o: string) => /pain|symptom|blood loss|bleeding|dysmenorrh|hemoglobin|score/i.test(o);
-  const inRecur = (o: string) => /recurr|relapse|reoperation/i.test(o);
-
-  let pool: string[] = [];
-  if (hasFert) {
-    pool = [...FERT_CANON];
-    for (const o of baseList) if (inFert(o) && !pool.includes(o)) pool.push(o);
-    if (!hasSymptom && !hasRecur) pool.push("adverse event or discontinuation rate");
-  } else if (hasSymptom || hasRecur) {
-    if (hasSymptom) pool = [...pool, ...SYMPTOM_CANON];
-    if (hasRecur) pool = [...pool, ...RECURRENCE_CANON];
-    for (const o of baseList) if ((inSymptom(o) || inRecur(o)) && !pool.includes(o)) pool.push(o);
-    pool.push("adverse event or discontinuation rate");
-  } else {
-    pool = baseList;
-  }
-
-  const seen = new Set<string>();
-  const uniq = pool.filter(o => {
-    const k = normalizeText(o);
-    if (!k || seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
-  const primary = uniq[0] || "clinical outcome";
-  return {
-    keywords: [],
-    primary,
-    alternatives: uniq.slice(1, 6),
-    rationale: "Patient-centered outcomes aligned to the selected PICO question."
-  };
+  return toOutcomeRule(selectOutcomes(buildOutcomeContext(
+    { specialty, condition },
+    {},
+    { originalInput: question, population: condition }
+  )));
 }
 
 export interface Analysis {
@@ -351,8 +311,16 @@ export interface Clarification {
   questionText: string;
   options: string[];
   allowFreeText: boolean;
-  source: "ai" | "rules";
+  source: "ai" | "rules" | "hybrid";
   rationale?: string;
+  /**
+   * Present when `field` is "outcome": the ranked, schema-validated selection payload.
+   *
+   * `options` stays the flat label list so existing consumers keep working, but the UI reads this
+   * field for categories, per-option rationales and the recommended primary. It is produced by the
+   * shared selector rather than assembled per caller, so the two cannot drift.
+   */
+  outcomeSelection?: OutcomeSelectionResponse;
 }
 
 export interface Formulation {

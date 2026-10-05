@@ -3,7 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatedProcessingIndicator } from "@/components/AnimatedProcessingIndicator";
-import { picoOutcomes, rationalOutcomes, type Analysis, type Clarification, type Formulation } from "@/lib/kb";
+import { rationalOutcomes, type Analysis, type Clarification, type Formulation } from "@/lib/kb";
+import {
+  buildOutcomeContext,
+  parseOutcomeSelectionResponse,
+  selectOutcomes,
+  validateFreeTextOutcome,
+  type OutcomeSelectionResponse
+} from "@/lib/outcome-selection";
 import { sget, sset, KEYS } from "@/lib/session";
 import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
 
@@ -15,6 +22,7 @@ export default function QuestionPage() {
   const [chatLog, setChatLog] = useState<{ q?: string; a?: string }[]>([]);
   const [freeText, setFreeText] = useState("");
   const [selectedOutcomes, setSelectedOutcomes] = useState<string[]>([]);
+  const [freeTextError, setFreeTextError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>("intent");
   const analysisRef = useRef<Analysis | null>(null);
@@ -23,35 +31,94 @@ export default function QuestionPage() {
 
   useEffect(() => { analysisRef.current = analysis; }, [analysis]);
 
+  // Pure and cheap: drives the counter and keeps the submit label honest about a typed outcome
+  // that would be refused on submit.
+  const freeTextOk = !!freeText.trim() && validateFreeTextOutcome(freeText).ok;
+
   interface RawClarify {
     done?: unknown;
     field?: unknown;
     questionText?: unknown;
     options?: unknown;
     source?: unknown;
+    outcomeSelection?: unknown;
   }
 
   const normalizeClarify = useCallback((c: RawClarify, a: Analysis): Clarification => {
     const done = c?.done === true || String(c?.done ?? "").toLowerCase() === "true";
     const field = typeof c?.field === "string" && c.field ? c.field : "outcome";
-    let options = Array.isArray(c?.options)
+    const rawOptions = Array.isArray(c?.options)
       ? c.options.filter((o): o is string => typeof o === "string" && o.trim().length > 0)
       : [];
     // De-duplicate: a repeated option would collide as a React key.
-    options = Array.from(new Set(options.map(o => o.trim())));
-    const rationale = field === "outcome" ? rationalOutcomes(a.condition, a.specialty).rationale : undefined;
-    if (!options.length && !done) {
+    let options = Array.from(new Set(rawOptions.map(o => o.trim())));
+    let rationale: string | undefined;
+    let outcomeSelection: OutcomeSelectionResponse | undefined;
+
+    if (!done && field === "outcome") {
+      // The shared selector is the single source of truth on both sides. When the server sent a
+      // validated selection it is used; when it sent nothing usable, the same function is called
+      // here with the same context so an offline or malformed response still offers options that
+      // belong to this question instead of a generic chip list.
+      const selection = parseOutcomeSelectionResponse(c?.outcomeSelection, buildOutcomeContext(
+        {
+          specialty: a.specialty,
+          condition: a.condition,
+          intervention: a.intervention,
+          comparator: a.comparator,
+          questionType: a.questionType
+        },
+        {},
+        { originalInput: sget<string>(KEYS.question) || "", population: a.condition }
+      ));
+      outcomeSelection = selection.response;
+      options = outcomeSelection.options.map(o => o.label);
+      rationale = outcomeSelection.recommendedOutcome.rationale;
+    } else if (!options.length && !done) {
       const logic = rationalOutcomes(a.condition, a.specialty);
       options = [logic.primary, ...logic.alternatives.filter(o => o !== logic.primary)].slice(0, 6);
+      rationale = logic.rationale;
     }
+
     return {
       done,
       field: done ? null : field,
       questionText: typeof c?.questionText === "string" && c.questionText ? c.questionText : "Please specify:",
       options,
       allowFreeText: true,
-      source: c?.source === "ai" ? "ai" : "rules",
-      rationale
+      source: c?.source === "ai" ? "ai" : c?.source === "hybrid" ? "hybrid" : "rules",
+      rationale,
+      outcomeSelection
+    };
+  }, []);
+
+  /**
+   * Builds a complete outcome clarification locally.
+   *
+   * Used where the flow deliberately overrides the server's field, so the screen keeps the ranked
+   * selection rather than dropping back to a flat label list.
+   */
+  const outcomeClarify = useCallback((a: Analysis, questionText: string): Clarification => {
+    const selection = selectOutcomes(buildOutcomeContext(
+      {
+        specialty: a.specialty,
+        condition: a.condition,
+        intervention: a.intervention,
+        comparator: a.comparator,
+        questionType: a.questionType
+      },
+      {},
+      { originalInput: sget<string>(KEYS.question) || "", population: a.condition }
+    ));
+    return {
+      done: false,
+      field: "outcome",
+      questionText,
+      options: selection.options.map(o => o.label),
+      allowFreeText: true,
+      source: selection.source,
+      rationale: selection.recommendedOutcome.rationale,
+      outcomeSelection: selection
     };
   }, []);
 
@@ -172,25 +239,13 @@ export default function QuestionPage() {
     }
     const nc = normalizeClarify(raw, a);
     if (gapPath && log.length === 0) {
-      const pico = sget<string>(KEYS.question) || "";
-      const knownLogic = picoOutcomes(pico, a.condition, a.specialty);
-      nc.done = false;
-      nc.field = "outcome";
-      nc.questionText = "Which outcomes should the evidence commentary target?";
-      nc.options = [knownLogic.primary, ...knownLogic.alternatives.filter(o => o !== knownLogic.primary)].slice(0, 6);
-      nc.source = "rules";
-      nc.rationale = knownLogic.rationale;
+      Object.assign(nc, outcomeClarify(a, "Which outcomes should the evidence commentary target?"));
     } else if (log.length >= 1) { nc.done = true; nc.field = null; }
     if (nc.done && log.length === 0) {
-      const knownLogic = rationalOutcomes(a.condition, a.specialty);
-      nc.done = false;
-      nc.field = "outcome";
-      nc.questionText = "What is your primary clinical outcome of interest?";
-      nc.options = [knownLogic.primary, ...knownLogic.alternatives.filter(o => o !== knownLogic.primary)].slice(0, 6);
-      nc.source = "rules";
-      nc.rationale = knownLogic.rationale;
+      Object.assign(nc, outcomeClarify(a, "What is your primary clinical outcome of interest?"));
     }
     setSelectedOutcomes([]);
+    setFreeTextError(null);
     setClarification(nc);
     setBusy(null);
     if (nc.done) {
@@ -198,7 +253,7 @@ export default function QuestionPage() {
     } else {
       setChatLog([...log, { q: nc.questionText }]);
     }
-  }, [formulate, normalizeClarify, gapPath]);
+  }, [formulate, normalizeClarify, outcomeClarify, gapPath]);
 
   const answer = useCallback(async (field: string, value: string) => {
     try {
@@ -223,10 +278,23 @@ export default function QuestionPage() {
     const extra = freeText.trim();
     // The 2-outcome cap must also cover free text, otherwise the button says
     // "2 outcome(s)" while submitting three.
-    const vals = Array.from(new Set([...selectedOutcomes, ...(extra ? [extra] : [])])).slice(0, 2);
+    const typed = extra ? validateFreeTextOutcome(extra) : null;
+    if (typed && !typed.ok) {
+      setFreeTextError(typed.reason);
+      return;
+    }
+    const maxPick = 2;
+    const vals = Array.from(new Set([
+      ...selectedOutcomes,
+      ...(typed && typed.ok ? [typed.value] : [])
+    ])).slice(0, maxPick);
     if (!vals.length) return;
+    // The full sanitized label is stored, not the short display form: downstream search and
+    // evidence steps read this key, and a truncated "Neonatal intensive care adm…" would degrade
+    // the PubMed query built from it.
     sset(KEYS.outcomes, vals);
     setFreeText("");
+    setFreeTextError(null);
     setSelectedOutcomes([]);
     answer("outcome", vals.join(" and "));
   }, [selectedOutcomes, freeText, answer]);
@@ -298,37 +366,82 @@ export default function QuestionPage() {
                   {clarification.field === "outcome" ? (
                     <>
                       <p className="hint">{clarification.questionText}</p>
-                      <div className="chips">
-                        {clarification.options.map(o => {
-                          const sel = selectedOutcomes.includes(o);
-                          const full = selectedOutcomes.length >= 2 && !sel;
-                          return (
-                            <button key={o} className={`chip ${sel ? "chip-on" : ""}`} disabled={full}
-                              onClick={() => {
-                                setSelectedOutcomes(prev =>
-                                  prev.includes(o) ? prev.filter(x => x !== o)
-                                    : prev.length >= 2 ? prev : [...prev, o]);
-                              }}>{o}</button>
-                          );
-                        })}
-                      </div>
-                      {clarification.rationale && (
-                        <p className="hint" style={{ marginTop: 10 }}>💡 {clarification.rationale}</p>
-                      )}
-                      <div className="row" style={{ marginTop: 10 }}>
-                        <input
-                          className="free-input"
-                          value={freeText}
-                          onChange={e => setFreeText(e.target.value)}
-                          onKeyDown={e => { if (e.key === "Enter" && freeText.trim()) submitSelectedOutcomes(); }}
-                          placeholder="Or type another outcome…"
-                        />
-                        <button className="primary" disabled={!selectedOutcomes.length && !freeText.trim()}
-                          onClick={submitSelectedOutcomes}>
-                          Continue with {Math.min(selectedOutcomes.length + (freeText.trim() ? 1 : 0), 2)} outcome(s) ➜
-                        </button>
-                      </div>
-                      <p className="hint" style={{ marginTop: 6 }}>Pick up to 2 outcomes — the commentary will be written to match them.</p>
+                      {(() => {
+                        const selection = clarification.outcomeSelection;
+                        const maxPick = selection?.maxSelections ?? 2;
+                        const recommendedId = selection?.recommendedOutcome.id;
+                        const chosen = selectedOutcomes.length;
+                        const atMax = chosen >= maxPick;
+                        const byLabel = new Map((selection?.options ?? []).map(o => [o.label, o]));
+                        return (
+                          <>
+                            <p className="hint" style={{ marginTop: 4 }}>
+                              {selection
+                                ? `These ${selection.options.length} options were selected for this question.`
+                                : "Suggested outcomes."}
+                            </p>
+                            <div className="chips outcome-chips" role="group" aria-label="Outcome options">
+                              {clarification.options.map(o => {
+                                const detail = byLabel.get(o);
+                                const sel = selectedOutcomes.includes(o);
+                                const full = atMax && !sel;
+                                const recommended = !!detail && detail.id === recommendedId;
+                                return (
+                                  <button
+                                    key={o}
+                                    type="button"
+                                    className={`chip outcome-chip ${sel ? "chip-on" : ""} ${recommended ? "chip-recommended" : ""}`}
+                                    aria-pressed={sel}
+                                    aria-label={`${o}${recommended ? ", recommended primary outcome" : ""}${detail ? `, ${detail.category} outcome` : ""}`}
+                                    disabled={full}
+                                    title={full ? `You can select up to ${maxPick} outcomes.` : detail?.rationale}
+                                    onClick={() => {
+                                      setSelectedOutcomes(prev =>
+                                        prev.includes(o) ? prev.filter(x => x !== o)
+                                          : prev.length >= maxPick ? prev : [...prev, o]);
+                                    }}
+                                  >
+                                    <span className="outcome-chip-label">{o}</span>
+                                    <span className="outcome-chip-meta">
+                                      {recommended && <span className="outcome-badge">Recommended</span>}
+                                      {detail && <span className="outcome-category">{detail.category.replace(/-/g, " ")}</span>}
+                                    </span>
+                                    {detail && <span className="outcome-why">{detail.rationale}</span>}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            {selection && (
+                              <p className="hint" style={{ marginTop: 10 }}>
+                                💡 {selection.recommendedOutcome.rationale}
+                              </p>
+                            )}
+                            <div className="row" style={{ marginTop: 10 }}>
+                              <input
+                                className="free-input"
+                                value={freeText}
+                                aria-label="Add your own outcome"
+                                aria-invalid={!!freeTextError}
+                                aria-describedby={freeTextError ? "free-text-error" : undefined}
+                                onChange={e => { setFreeText(e.target.value); setFreeTextError(null); }}
+                                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); submitSelectedOutcomes(); } }}
+                                placeholder="Or type another outcome…"
+                              />
+                              <button className="primary"
+                                disabled={!selectedOutcomes.length && !freeText.trim()}
+                                onClick={submitSelectedOutcomes}>
+                                Continue with {Math.min(selectedOutcomes.length + (freeTextOk ? 1 : 0), maxPick)} outcome(s) ➜
+                              </button>
+                            </div>
+                            {freeTextError && <p id="free-text-error" className="hint outcome-error" role="alert">{freeTextError}</p>}
+                            <p className="hint" style={{ marginTop: 6 }} aria-live="polite">
+                              {atMax
+                                ? `Maximum of ${maxPick} outcomes reached — deselect one to choose another.`
+                                : `Pick up to ${maxPick} outcomes — the commentary will be written to match them.`}
+                            </p>
+                          </>
+                        );
+                      })()}
                     </>
                   ) : (
                     <>
