@@ -279,7 +279,18 @@ const MEDICAL_TAXONOMY: MedicalTermEntry[] = [
     canonical: "diminished ovarian reserve",
     category: "condition",
     specialty: "infertility",
-    synonyms: ["diminished ovarian reserve", "dor", "low amh", "poor ovarian response", "elevated fsh", "low antral follicle count"]
+    synonyms: ["diminished ovarian reserve", "dor", "low amh", "elevated fsh", "low antral follicle count", "decreased ovarian reserve"]
+  },
+  {
+    canonical: "poor ovarian response",
+    category: "condition",
+    specialty: "infertility",
+    synonyms: [
+      "poor ovarian response", "poor responders", "poor responder",
+      "poor ovarian responders", "low ovarian response", "por",
+      "bologna criteria", "poseidon criteria", "poor ovarian reserve",
+      "expected poor responders"
+    ]
   },
   {
     canonical: "thin endometrium",
@@ -301,6 +312,43 @@ const MEDICAL_TAXONOMY: MedicalTermEntry[] = [
   },
 
   // --- INFERTILITY: Interventions / Comparators ---
+  {
+    canonical: "growth hormone",
+    category: "intervention",
+    specialty: "infertility",
+    synonyms: [
+      "growth hormone", "gh", "somatotropin", "growth hormone adjuvant",
+      "gh co-treatment", "growth hormone supplementation", "growth hormone co-treatment",
+      "adjuvant growth hormone"
+    ]
+  },
+  {
+    canonical: "coenzyme Q10",
+    category: "intervention",
+    specialty: "infertility",
+    synonyms: [
+      "coenzyme q10", "co enzyme q10", "co-enzyme q10", "coq10",
+      "ubiquinol", "ubiquinone", "coenzyme q10 supplementation", "co enzyme q 10"
+    ]
+  },
+  {
+    canonical: "dehydroepiandrosterone",
+    category: "intervention",
+    specialty: "infertility",
+    synonyms: ["dehydroepiandrosterone", "dhea", "dhea supplementation", "dhea adjuvant"]
+  },
+  {
+    canonical: "melatonin",
+    category: "intervention",
+    specialty: "infertility",
+    synonyms: ["melatonin", "melatonin supplementation", "melatonin adjuvant"]
+  },
+  {
+    canonical: "myo-inositol",
+    category: "intervention",
+    specialty: "infertility",
+    synonyms: ["myo-inositol", "inositol", "myoinositol", "d-chiro-inositol"]
+  },
   {
     canonical: "letrozole",
     category: "intervention",
@@ -430,6 +478,34 @@ const MEDICAL_TAXONOMY: MedicalTermEntry[] = [
     specialty: "infertility",
     direction: "adverse",
     synonyms: ["miscarriage rate", "miscarriage", "early pregnancy loss", "spontaneous abortion"]
+  },
+  {
+    canonical: "oocyte yield",
+    category: "outcome",
+    specialty: "infertility",
+    direction: "desirable",
+    synonyms: ["oocyte yield", "number of oocytes retrieved", "retrieved oocytes", "mature oocytes", "mII oocytes", "metaphase II oocytes", "oocytes"]
+  },
+  {
+    canonical: "fertilization rate",
+    category: "outcome",
+    specialty: "infertility",
+    direction: "desirable",
+    synonyms: ["fertilization rate", "fertilisation rate", "2pn rate", "normal fertilization rate"]
+  },
+  {
+    canonical: "cycle cancellation rate",
+    category: "outcome",
+    specialty: "infertility",
+    direction: "adverse",
+    synonyms: ["cycle cancellation rate", "cycle cancellation", "cancellation rate"]
+  },
+  {
+    canonical: "ovarian hyperstimulation syndrome",
+    category: "outcome",
+    specialty: "infertility",
+    direction: "adverse",
+    synonyms: ["ovarian hyperstimulation syndrome", "ohss", "severe ohss", "moderate to severe ohss"]
   }
 ];
 
@@ -526,8 +602,17 @@ function formulatePopulationPhrase(population: string, specialty: SpecialtyKey):
   const p = population.trim();
   const lower = p.toLowerCase();
 
-  if (/^(women|patients|individuals|pregnant individuals|pregnant women)/i.test(lower)) {
+  if (/^(women|patients|individuals|pregnant individuals|pregnant women|couples)/i.test(lower)) {
     return p;
+  }
+  if (/undergoing\s+(ivf|icsi|art|assisted reproductive|iui)/i.test(lower)) {
+    if (/^poor\s+(ovarian\s+)?responders?/i.test(p)) {
+      return p;
+    }
+    return `women with ${p}`;
+  }
+  if (/^poor\s+(ovarian\s+)?responders?$/i.test(lower)) {
+    return `poor responders undergoing IVF`;
   }
   if (specialty === "obstetrics") {
     if (/pregnancy|twin|gestation|gravida|labor|labour/i.test(lower)) {
@@ -536,6 +621,9 @@ function formulatePopulationPhrase(population: string, specialty: SpecialtyKey):
     return `pregnant women diagnosed with ${p}`;
   }
   if (specialty === "infertility") {
+    if (/infertil|response|reserve|failure|loss|pcos|azoospermia|oligozoospermia/i.test(lower)) {
+      return `women with ${p}`;
+    }
     return `women presenting with ${p}`;
   }
   return `women with ${p}`;
@@ -633,15 +721,18 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
   // Heuristic classification for any remaining tokens
   for (const token of unclassified) {
     const lower = token.toLowerCase();
-    // Interventions check first so procedures/drugs never contaminate Condition
-    if (/ectomy|scopy|surgery|treatment|therapy|drug|aspirin|progesterone|letrozole|clomiphene|cerclage|pessary|insulin|metformin|heparin|dienogest|embolization|ablation|insemination|transfer/i.test(lower)) {
+    // Interventions check first so procedures/drugs/hormones never contaminate Condition
+    if (/hormone|coq10|coenzyme|dhea|melatonin|inositol|somatotropin|antioxidant|priming|supplements?|adjuvant|stimulat/i.test(lower)) {
       if (!matchedInterventions.includes(token)) matchedInterventions.push(token);
-    } else if (/rate|relief|pain|birth|loss|bleeding|weight|score|morbidity|mortality|survival|gestational age|reserve|pregnancy|outcome/i.test(lower)) {
+      specialtyScores.infertility += 2;
+    } else if (/ectomy|scopy|surgery|treatment|therapy|drug|aspirin|progesterone|letrozole|clomiphene|cerclage|pessary|insulin|metformin|heparin|dienogest|embolization|ablation|insemination|transfer/i.test(lower)) {
+      if (!matchedInterventions.includes(token)) matchedInterventions.push(token);
+    } else if (/rate|relief|pain|birth|loss|bleeding|weight|score|morbidity|mortality|survival|gestational age|reserve|pregnancy|outcome|yield/i.test(lower)) {
       if (!matchedOutcomes.includes(token)) matchedOutcomes.push(token);
-    } else if (/itis|osis|emia|oma|syndrome|disease|preterm|preeclamp|diabetes|cervix|uterus|ovary|ovarian|fibroid|polyps|prolapse|failure|incompetence|restriction/i.test(lower)) {
+    } else if (/poor\s+responder|low\s+responder|itis|osis|emia|oma|syndrome|disease|preterm|preeclamp|diabetes|cervix|uterus|ovary|ovarian|fibroid|polyps|prolapse|failure|incompetence|restriction/i.test(lower)) {
       if (!matchedConditions.includes(token)) matchedConditions.push(token);
       if (/preterm|cervix|preeclamp|gestation/i.test(lower)) specialtyScores.obstetrics += 1;
-      else if (/ivf|icsi|infertil|pcos/i.test(lower)) specialtyScores.infertility += 1;
+      else if (/ivf|icsi|infertil|pcos|responder/i.test(lower)) specialtyScores.infertility += 1;
       else specialtyScores.gynecology += 1;
     } else if (matchedConditions.length === 0) {
       matchedConditions.push(token);
@@ -652,6 +743,29 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
     }
   }
 
+  // In reproductive medicine: if an ART procedure (IVF / ICSI) is present alongside an underlying condition
+  // (e.g. poor ovarian response, diminished ovarian reserve, PCOS) and adjuvant therapies (e.g. growth hormone, CoQ10),
+  // IVF represents the clinical procedural setting of the population, not the test intervention competing with the adjuvant.
+  const hasArtProcedure = matchedInterventions.some(i => /in vitro fertilization|intracytoplasmic sperm injection|ivf|icsi/i.test(i))
+    || rawTokens.some(t => /\b(ivf|icsi|art)\b/i.test(t));
+  const otherInterventions = matchedInterventions.filter(i => !/in vitro fertilization|intracytoplasmic sperm injection|ivf|icsi/i.test(i));
+
+  if (hasArtProcedure && otherInterventions.length >= 1) {
+    if (matchedConditions.length > 0) {
+      if (!/ivf|icsi|in vitro|art/i.test(matchedConditions[0])) {
+        matchedConditions[0] = `${matchedConditions[0]} undergoing IVF`;
+      }
+    } else {
+      matchedConditions.push("women undergoing IVF");
+    }
+    // Retain only specific drug/adjuvant therapies as interventions
+    matchedInterventions.length = 0;
+    matchedInterventions.push(...otherInterventions);
+    specialtyScores.infertility += 4;
+  } else if (hasArtProcedure && matchedConditions.length === 0) {
+    matchedConditions.push("women undergoing IVF");
+  }
+
   // Determine specialty
   let specialty: SpecialtyKey = "obstetrics";
   if (specialtyScores.infertility > specialtyScores.obstetrics && specialtyScores.infertility >= specialtyScores.gynecology) {
@@ -660,10 +774,12 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
     specialty = "gynecology";
   } else if (specialtyScores.obstetrics > 0) {
     specialty = "obstetrics";
+  } else if (specialtyScores.infertility > 0) {
+    specialty = "infertility";
   }
 
   // Determine clean, non-overlapping P, I, C
-  const population = matchedConditions[0] || (specialty === "obstetrics" ? "short cervix" : specialty === "infertility" ? "polycystic ovary syndrome" : "endometriosis");
+  const population = matchedConditions[0] || (specialty === "obstetrics" ? "short cervix" : specialty === "infertility" ? "poor ovarian response" : "endometriosis");
   
   let intervention = "";
   let comparator = "";
@@ -702,15 +818,15 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
       rationale: `Evaluates the primary therapeutic efficacy of ${intervention} versus ${comparator} on the key clinical endpoint.`
     },
     {
-      question: `In high-risk subgroups of ${popPhrase} (P), does early intervention with ${intervention} (I) compared with ${comparator} (C) ${q2Action} (O)?`,
-      rationale: `Addresses risk-stratified timing and therapeutic threshold to prevent acute or progressive complications.`
+      question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q2Action} (O)?`,
+      rationale: `Addresses secondary therapeutic outcomes, clinical safety, and comparative treatment benefits.`
     },
     {
-      question: `In patients undergoing treatment for ${population} (P), does ${intervention} (I) compared with ${comparator} (C) ${q3Action} (O)?`,
-      rationale: `Focuses on balancing procedural safety, organ preservation, and long-term functional recovery.`
+      question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q3Action} (O)?`,
+      rationale: `Focuses on balancing procedural safety, organ preservation, and key clinical milestones.`
     },
     {
-      question: `In ${popPhrase} (P), does protocolized management with ${intervention} (I) compared with ${comparator} (C) improve patient-reported quality of life and treatment satisfaction (O)?`,
+      question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) improve patient-reported quality of life and treatment satisfaction (O)?`,
       rationale: `Measures patient-centered outcomes, symptom relief sustainability, and overall care satisfaction.`
     }
   ];

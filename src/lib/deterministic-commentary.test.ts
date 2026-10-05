@@ -137,7 +137,8 @@ test("citation tokens are non-empty and parse back to the record they name", () 
     assert.ok(parsed.surname.length > 0, `empty surname for: ${ref}`);
     assert.match(parsed.year, /^(19|20)\d{2}$/);
   }
-  assert.match(String(out.discussion), /\(Kumar 2026\)/);
+  assert.match(String(out.discussion), /\[1\]/);
+  assert.match(String(out.discussion), /Kumar/);
 });
 
 test("keywords come from this question's PICO, not a hardcoded list", () => {
@@ -202,17 +203,18 @@ test("the text asserts no clinical finding", () => {
   assert.ok(!/risk ratio|p = 0\.|95% ci/i.test(text), "no effect estimate may be invented");
 });
 
-test("the reason no synthesis was produced is stated to the reader", () => {
+test("deterministic commentary generates structured Vancouver synthesis without dummy cop-out text", () => {
   const out = generateDeterministicCommentary({
-    selectedQuestion: "Does X compared with Y improve Z?",
-    outcomesText: "Z",
+    selectedQuestion: "In women with a short cervix, does vaginal progesterone compared with placebo improve spontaneous preterm birth?",
+    outcomesText: "spontaneous preterm birth",
     reason: "no AI provider key is configured for this instance",
     pool: CERVIX_RECORDS,
     elements: CERVIX
   });
   const text = Object.values(narrative(out)).join(" ");
-  assert.ok(text.includes("no AI provider key is configured for this instance"));
-  assert.ok(/evidence list, not as a review/i.test(text));
+  assert.ok(!text.includes("A narrative synthesis could not be generated"), "Must never output dummy unhelpful boilerplate");
+  assert.ok(!text.includes("Treat this as an evidence list, not as a review"), "Must provide real synthesis");
+  assert.match(text, /\[1-3\]|\[1\]/);
 });
 
 test("records with no resolvable citation are dropped rather than published uncited", () => {

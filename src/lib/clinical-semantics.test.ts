@@ -157,3 +157,36 @@ test("outcome directionality correctly identifies adverse vs desirable endpoints
   assert.equal(getOutcomeDirection("pelvic pain reduction"), "desirable");
   assert.equal(getOutcomeDirection("preservation of ovarian reserve"), "desirable");
 });
+
+test("parseClinicalScenario accurately differentiates poor responders, IVF, growth hormone, and CoQ10", () => {
+  const input = "poor responders, ivf, growth hormone, co enzyme q10, pregnancy rate";
+  const scenario = parseClinicalScenario(input);
+
+  assert.equal(scenario.specialty, "infertility");
+  assert.equal(
+    scenario.population,
+    "poor ovarian response undergoing IVF",
+    "Population must integrate condition and procedural IVF setting"
+  );
+  assert.equal(scenario.intervention, "growth hormone", "Growth hormone must strictly be intervention");
+  assert.equal(scenario.comparator, "coenzyme Q10", "Coenzyme Q10 must strictly be comparator");
+  assert.ok(
+    scenario.outcomes.some(o => o.toLowerCase().includes("pregnancy rate")),
+    "Outcome must include pregnancy rate"
+  );
+
+  for (const sq of scenario.suggestedQuestions) {
+    assert.ok(sq.question.includes("growth hormone (I)"), "Intervention slot must contain growth hormone");
+    assert.ok(sq.question.includes("coenzyme Q10 (C)"), "Comparator slot must contain coenzyme Q10");
+    assert.ok(sq.question.includes("(P)"), "Must have (P) marker");
+    assert.ok(sq.question.includes("(O)"), "Must have (O) marker");
+    assert.ok(!sq.question.includes("co enzyme q10 (P)"), "CoQ10 must NEVER be classified as population");
+    assert.ok(!sq.question.includes("growth hormone (O)"), "Growth hormone must NEVER be classified as outcome");
+  }
+
+  // Roundtrip extraction
+  const extracted = extractPicoFromQuestion(scenario.suggestedQuestions[0].question, input);
+  assert.equal(extracted.condition, "poor ovarian response undergoing IVF");
+  assert.equal(extracted.intervention, "growth hormone");
+  assert.equal(extracted.comparator, "coenzyme Q10");
+});

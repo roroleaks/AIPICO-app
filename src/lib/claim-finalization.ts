@@ -1,4 +1,4 @@
-﻿import { auditRef, extractInTextCites, findKeyForCitation, type AuditableRef, type PicoElement } from "./relevance.ts";
+import { auditRef, extractInTextCites, extractNumericCites, findKeyForCitation, type AuditableRef, type PicoElement } from "./relevance.ts";
 import type { EvidenceSet } from "./evidence-set.ts";
 
 /** One sentence of narrative prose, with the citations that were resolved for it. */
@@ -198,6 +198,7 @@ export function finalizeClaims(input: ClaimFinalizationInput): ClaimFinalization
     const kept: string[] = [];
     for (const sentence of splitSentences(String(raw ?? ""))) {
       const cites = extractInTextCites(sentence);
+      const { citedNumbers } = extractNumericCites(sentence);
       const citationKeys: string[] = [];
       let unresolved = false;
       const records: AuditableRef[] = [];
@@ -211,6 +212,26 @@ export function finalizeClaims(input: ClaimFinalizationInput): ClaimFinalization
         if (!citationKeys.includes(key)) citationKeys.push(key);
         const rec = input.evidenceSet.citationMap.get(key);
         if (rec) records.push(rec as AuditableRef);
+      }
+
+      for (const num of citedNumbers) {
+        const idx = num - 1;
+        const rec = input.evidenceSet.retainedRecords[idx];
+        if (rec) {
+          const rawKey = rec.doi ? `doi:${rec.doi.toLowerCase()}` : rec.pmid ? `pmid:${rec.pmid}` : "";
+          const foundKey = (rawKey && input.evidenceSet.allowedCitationKeys.has(rawKey))
+            ? rawKey
+            : Array.from(input.evidenceSet.allowedCitationKeys)[idx];
+          if (foundKey) {
+            if (!citationKeys.includes(foundKey)) citationKeys.push(foundKey);
+            records.push(rec as AuditableRef);
+          } else {
+            citationKeys.push(`ref:${num}`);
+            records.push(rec as AuditableRef);
+          }
+        } else {
+          unresolved = true;
+        }
       }
 
       if (!ASSERTION.test(sentence)) {
@@ -233,7 +254,7 @@ export function finalizeClaims(input: ClaimFinalizationInput): ClaimFinalization
       const consistent = onTopic.filter(r => directionSupportsClaim(sentence, r));
 
       let reason: FinalClaim["reason"];
-      if (!cites.length) reason = "no-citation";
+      if (!cites.length && !citedNumbers.size) reason = "no-citation";
       else if (unresolved || !records.length) reason = "citation-not-in-evidence-set";
       else if (!addressed.length) reason = "pico-not-addressed";
       else if (!onTopic.length) reason = "outcome-not-reported";

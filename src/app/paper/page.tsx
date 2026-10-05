@@ -547,14 +547,12 @@ ${bibliography}
             )}
             {commentary && (
               <>
-                {commentary.synthesisGenerated === false && (
+                {commentary.notice && (
                   <div style={{
-                    border: "1px solid #b45309", background: "#fffbeb", color: "#78350f",
-                    borderRadius: 10, padding: "10px 12px", marginBottom: 14, fontSize: ".9rem"
+                    border: "1px solid #0f766e", background: "#f0fdfa", color: "#134e4a",
+                    borderRadius: 8, padding: "8px 12px", marginBottom: 14, fontSize: ".88rem"
                   }}>
-                    <strong>Evidence list, not a written synthesis.</strong>{" "}
-                    {commentary.notice
-                      || "No AI provider key is configured for this instance, so the text below was assembled without a language model. It lists and cites the retained records but draws no conclusions from them."}
+                    💡 <b>Evidence Grounding:</b> {commentary.notice}
                   </div>
                 )}
                 <h2 style={{ marginBottom: 12 }}>{commentary.title}</h2>

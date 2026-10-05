@@ -16,15 +16,9 @@ import {
 } from "@/lib/clinical-input";
 import type { KeywordCorrection, CorrectionRecord } from "@/lib/clinical-input";
 import type { ClinicalInput } from "@/lib/clinical-input";
+import { parseClinicalScenario } from "@/lib/clinical-semantics";
 
 // sessionStorage is browser-only, so it cannot be read while rendering on the server.
-// useSyncExternalStore is the one way to read it without either a hydration mismatch or a
-// setState-in-effect: React renders the server snapshot during hydration and the stored
-// snapshot immediately after, so the first paint matches the server HTML exactly.
-//
-// The cache is keyed on the raw JSON string, not the parsed value. `sget` parses on every
-// call, so keying on its result returned a fresh object each time and React saw an unstable
-// snapshot; keying on the string keeps the identity stable until the stored value changes.
 let cachedRaw: string | null = null;
 let cachedValue: ClinicalInput | null = null;
 function sessionInputSnapshot(): ClinicalInput | null {
@@ -44,11 +38,8 @@ function sessionInputSnapshot(): ClinicalInput | null {
 const serverSnapshot = (): null => null;
 const serverModeSnapshot = (): "gap" => "gap";
 const subscribeToNothing = () => () => {};
-// Stable empty array so the memoized parse is not recomputed on every render.
 const EMPTY_DECISIONS: CorrectionRecord[] = [];
-// Same stability requirement as the input: the restored mode must keep one identity, and it
-// must be read through the same snapshot path or the first client render differs from the
-// server HTML when the stored mode is "gap".
+
 let cachedModeRaw: string | null = null;
 let cachedModeValue: "formulate" | "gap" = "gap";
 function sessionModeSnapshot(): "formulate" | "gap" {
@@ -70,8 +61,7 @@ export default function Home() {
   const router = useRouter();
   const restored = useSyncExternalStore(subscribeToNothing, sessionInputSnapshot, serverSnapshot);
   const restoredMode = useSyncExternalStore(subscribeToNothing, sessionModeSnapshot, serverModeSnapshot);
-  // Until the user types, the field shows the restored text; `draft` takes over afterwards so
-  // editing never gets overwritten by the stored value.
+
   const [draft, setDraft] = useState<string | null>(null);
   const input = draft ?? restored?.rawInput ?? "";
   const setInput = useCallback((v: string) => setDraft(v), []);
@@ -79,16 +69,23 @@ export default function Home() {
   const mode = modeDraft ?? restoredMode;
   const setMode = useCallback((v: "formulate" | "gap") => setModeDraft(v), []);
   const [tagError, setTagError] = useState<string | null>(null);
-  // Every suggestion the user has decided, applied or kept. Keyed decisions are what stop a
-  // suggestion reappearing when the input is reparsed, the component rerenders, or the page is
-  // reloaded. Restored decisions come from the session audit trail.
+
+  // Input style: Quick tag words (free-text) vs Structured labeled fields (P, I, C, O)
+  const [entryStyle, setEntryStyle] = useState<"tags" | "structured">("tags");
+
+  // Structured fields state
+  const [structP, setStructP] = useState("");
+  const [structI, setStructI] = useState("");
+  const [structC, setStructC] = useState("");
+  const [structO, setStructO] = useState("");
+
   const [decided, setDecided] = useState<CorrectionRecord[] | null>(null);
   const decisions = useMemo(
     () => decided ?? restored?.corrections ?? EMPTY_DECISIONS,
     [decided, restored]
   );
 
-  // Validate as the user types so the count and message stay live, but never block typing.
+  // Validate as the user types
   const parsed = useMemo(
     () => resolveCorrections(parseInput(input), decisions),
     [input, decisions]
@@ -97,10 +94,53 @@ export default function Home() {
   const validationMessage = validateKeywords(parsed);
   const canSubmit = validationMessage === null;
 
-  // The professional message must be reachable even though navigation is blocked, so it is
-  // shown live while typing rather than only after a submit the disabled button prevents.
   const liveMessage = input.trim() ? validationMessage : null;
   const alertMessage = tagError || liveMessage;
+
+  // Real-time clinical semantic parsing
+  const liveScenario = useMemo(() => {
+    if (!input.trim() || input.trim().length < 4) return null;
+    try {
+      return parseClinicalScenario(input);
+    } catch {
+      return null;
+    }
+  }, [input]);
+
+  const applyPreset = (preset: { p: string; i: string; c: string; o: string; raw: string }) => {
+    setStructP(preset.p);
+    setStructI(preset.i);
+    setStructC(preset.c);
+    setStructO(preset.o);
+    setInput(preset.raw);
+    setTagError(null);
+  };
+
+  const handleStructuredChange = (field: "p" | "i" | "c" | "o", val: string) => {
+    const nextP = field === "p" ? val : structP;
+    const nextI = field === "i" ? val : structI;
+    const nextC = field === "c" ? val : structC;
+    const nextO = field === "o" ? val : structO;
+
+    if (field === "p") setStructP(val);
+    if (field === "i") setStructI(val);
+    if (field === "c") setStructC(val);
+    if (field === "o") setStructO(val);
+
+    const parts = [nextP, nextI, nextC, nextO].map(s => s.trim()).filter(Boolean);
+    setInput(parts.join(", "));
+    setTagError(null);
+  };
+
+  const switchToStructured = () => {
+    if (liveScenario && (!structP && !structI)) {
+      setStructP(liveScenario.population);
+      setStructI(liveScenario.intervention);
+      setStructC(liveScenario.comparator);
+      setStructO(liveScenario.outcomes[0] || "");
+    }
+    setEntryStyle("structured");
+  };
 
   const decide = (c: KeywordCorrection, decision: CorrectionRecord["decision"]) => {
     const key = correctionKey(c);
@@ -108,8 +148,6 @@ export default function Home() {
     const at = decisions.findIndex(p => correctionKey(p) === key);
     const next = at >= 0 ? decisions.map(p => (correctionKey(p) === key ? record : p)) : [...decisions, record];
     setDecided(next);
-    // Persist immediately: a decision the user cannot see they made until they start the
-    // search would otherwise be lost on reload.
     const current = resolveCorrections(parseInput(input), next);
     sset(KEYS.input, toSessionInput(current, input));
     sset(KEYS.inputText, sessionSearchText(toSessionInput(current, input)));
@@ -140,7 +178,7 @@ export default function Home() {
           </div>
           <div className="hdr-center">
             <h1>From Clinical Uncertainty to Answerable Questions</h1>
-            <p>AI-Assisted Clinical Question Formulation · Obs/Gyn</p>
+            <p>AI-Assisted Clinical Question Formulation · Obs/Gyn & Reproductive Medicine</p>
           </div>
           <div className="hdr-right">
             <span className="author-name">
@@ -175,30 +213,213 @@ export default function Home() {
             </button>
           </div>
 
-          {mode === "formulate" ? (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+            <span className="pill">📝 Step 1 · Clinical Input</span>
+            <div style={{ display: "flex", gap: 6, background: "#f1f5f9", padding: 3, borderRadius: 8 }}>
+              <button
+                type="button"
+                onClick={() => setEntryStyle("tags")}
+                style={{
+                  border: "none",
+                  padding: "5px 12px",
+                  fontSize: "0.82rem",
+                  fontWeight: 600,
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  background: entryStyle === "tags" ? "var(--accent)" : "transparent",
+                  color: entryStyle === "tags" ? "#fff" : "var(--muted)"
+                }}
+              >
+                ⚡ Quick Tag Words
+              </button>
+              <button
+                type="button"
+                onClick={switchToStructured}
+                style={{
+                  border: "none",
+                  padding: "5px 12px",
+                  fontSize: "0.82rem",
+                  fontWeight: 600,
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  background: entryStyle === "structured" ? "var(--accent)" : "transparent",
+                  color: entryStyle === "structured" ? "#fff" : "var(--muted)"
+                }}
+              >
+                🏷️ Structured PICO Fields
+              </button>
+            </div>
+          </div>
+
+          {entryStyle === "tags" ? (
             <>
-              <span className="pill">📝 Step 1 · Clinical Input</span>
-              <p className="hint">Enter 4–6 clinically meaningful keywords or phrases. Multi-word phrases count as one keyword. Separate terms with commas, dashes, semicolons, or new lines.</p>
+              <p className="hint">
+                Enter 4–6 clinically meaningful keywords or phrases. Multi-word phrases count as one keyword. Separate terms with commas, dashes, semicolons, or new lines.
+              </p>
               <textarea
                 aria-label="Clinical keywords"
                 value={input}
                 onChange={(e) => { setInput(e.target.value); setTagError(null); }}
-                placeholder="e.g., short cervix, progesterone, cerclage, preterm birth, cervical length"
+                placeholder="e.g., poor responders, ivf, growth hormone, co enzyme q10, pregnancy rate"
                 rows={4}
               />
             </>
           ) : (
-            <>
-              <span className="pill">🕳️ Find Gap · Evidence Mapping</span>
-              <p className="hint">Enter 4–6 clinically meaningful keywords or phrases. Multi-word phrases count as one keyword. The system searches the OB/GYN literature and maps 4 established, 4 conflicting and 4 evidence-gap areas.</p>
-              <textarea
-                aria-label="Clinical keywords"
-                value={input}
-                onChange={(e) => { setInput(e.target.value); setTagError(null); }}
-                placeholder="e.g., endometriosis, live birth rate, IVF, aspirin, recurrent implantation failure"
-                rows={4}
-              />
-            </>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 12 }}>
+              <p className="hint" style={{ marginBottom: 4 }}>
+                Enter explicit clinical terms for each PICO element. The system will map literature across PubMed and European databases.
+              </p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: "0.82rem", fontWeight: 700, color: "#1e293b", display: "block", marginBottom: 4 }}>
+                    👥 Population / Clinical Problem (P):
+                  </label>
+                  <input
+                    type="text"
+                    className="free-input"
+                    value={structP}
+                    onChange={(e) => handleStructuredChange("p", e.target.value)}
+                    placeholder="e.g., poor responders, IVF"
+                    style={{ width: "100%" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: "0.82rem", fontWeight: 700, color: "#1e293b", display: "block", marginBottom: 4 }}>
+                    💊 Intervention / Therapy (I):
+                  </label>
+                  <input
+                    type="text"
+                    className="free-input"
+                    value={structI}
+                    onChange={(e) => handleStructuredChange("i", e.target.value)}
+                    placeholder="e.g., growth hormone"
+                    style={{ width: "100%" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: "0.82rem", fontWeight: 700, color: "#1e293b", display: "block", marginBottom: 4 }}>
+                    ⚖️ Comparator / Control (C):
+                  </label>
+                  <input
+                    type="text"
+                    className="free-input"
+                    value={structC}
+                    onChange={(e) => handleStructuredChange("c", e.target.value)}
+                    placeholder="e.g., co enzyme q10"
+                    style={{ width: "100%" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: "0.82rem", fontWeight: 700, color: "#1e293b", display: "block", marginBottom: 4 }}>
+                    🎯 Target Outcome (O):
+                  </label>
+                  <input
+                    type="text"
+                    className="free-input"
+                    value={structO}
+                    onChange={(e) => handleStructuredChange("o", e.target.value)}
+                    placeholder="e.g., clinical pregnancy rate"
+                    style={{ width: "100%" }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginTop: 4 }}>
+                <span style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>
+                  💡 Quick Presets:
+                </span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    style={{ background: "#f8fafc", color: "var(--ink)", border: "1px solid var(--border)" }}
+                    onClick={() => applyPreset({
+                      p: "poor responders, ivf",
+                      i: "growth hormone",
+                      c: "co enzyme q10",
+                      o: "clinical pregnancy rate",
+                      raw: "poor responders, ivf, growth hormone, co enzyme q10, pregnancy rate"
+                    })}
+                  >
+                    Poor Responders (GH vs CoQ10)
+                  </button>
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    style={{ background: "#f8fafc", color: "var(--ink)", border: "1px solid var(--border)" }}
+                    onClick={() => applyPreset({
+                      p: "short cervix",
+                      i: "vaginal progesterone",
+                      c: "cervical cerclage",
+                      o: "spontaneous preterm birth",
+                      raw: "short cervix, vaginal progesterone, cerclage, preterm birth, cervical length"
+                    })}
+                  >
+                    Short Cervix (Progesterone vs Cerclage)
+                  </button>
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    style={{ background: "#f8fafc", color: "var(--ink)", border: "1px solid var(--border)" }}
+                    onClick={() => applyPreset({
+                      p: "polycystic ovary syndrome",
+                      i: "letrozole",
+                      c: "clomiphene citrate",
+                      o: "cumulative live birth rate",
+                      raw: "PCOS, letrozole, clomiphene, live birth rate, ovulation"
+                    })}
+                  >
+                    PCOS (Letrozole vs Clomiphene)
+                  </button>
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    style={{ background: "#f8fafc", color: "var(--ink)", border: "1px solid var(--border)" }}
+                    onClick={() => applyPreset({
+                      p: "endometriosis",
+                      i: "laparoscopic surgery",
+                      c: "dienogest",
+                      o: "pelvic pain reduction",
+                      raw: "endometriosis, laparoscopy, dienogest, pelvic pain, ovarian reserve"
+                    })}
+                  >
+                    Endometriosis (Surgery vs Dienogest)
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Real-time PICO Classification Badge Card */}
+          {liveScenario && (
+            <div style={{ marginTop: 12, padding: "12px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  ✓ Live PICO Classification Detected
+                </span>
+                <span style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
+                  Specialty: <b style={{ textTransform: "capitalize" }}>{liveScenario.specialty}</b>
+                </span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
+                <div style={{ background: "#fff", padding: "8px 10px", borderRadius: 6, border: "1px solid #e2e8f0" }}>
+                  <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "#1e293b", display: "block" }}>👥 Population (P):</span>
+                  <span style={{ fontSize: "0.85rem", color: "#0f766e", fontWeight: 600 }}>{liveScenario.population}</span>
+                </div>
+                <div style={{ background: "#fff", padding: "8px 10px", borderRadius: 6, border: "1px solid #e2e8f0" }}>
+                  <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "#1e293b", display: "block" }}>💊 Intervention (I):</span>
+                  <span style={{ fontSize: "0.85rem", color: "#0f766e", fontWeight: 600 }}>{liveScenario.intervention}</span>
+                </div>
+                <div style={{ background: "#fff", padding: "8px 10px", borderRadius: 6, border: "1px solid #e2e8f0" }}>
+                  <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "#1e293b", display: "block" }}>⚖️ Comparator (C):</span>
+                  <span style={{ fontSize: "0.85rem", color: "#0f766e", fontWeight: 600 }}>{liveScenario.comparator}</span>
+                </div>
+                <div style={{ background: "#fff", padding: "8px 10px", borderRadius: 6, border: "1px solid #e2e8f0" }}>
+                  <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "#1e293b", display: "block" }}>🎯 Target Outcome (O):</span>
+                  <span style={{ fontSize: "0.85rem", color: "#0f766e", fontWeight: 600 }}>{liveScenario.outcomes[0] || "clinical outcome"}</span>
+                </div>
+              </div>
+            </div>
           )}
 
           {countHint && (
@@ -223,8 +444,8 @@ export default function Home() {
             <div className="advisory" role="alert" aria-live="polite" style={{ marginTop: 10 }}>⚠️ {alertMessage}</div>
           )}
 
-          <div className="row">
-            <button className="primary" onClick={start} disabled={!input.trim() || !canSubmit}>
+          <div className="row" style={{ marginTop: 16 }}>
+            <button className="primary" onClick={start} disabled={!input.trim() || !canSubmit} style={{ padding: "12px 28px", fontSize: "1rem" }}>
               {mode === "formulate" ? "🔍 Map Evidence & Formulate PICO →" : "🗺 Map the evidence →"}
             </button>
           </div>

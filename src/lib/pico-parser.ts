@@ -169,7 +169,12 @@ export function extractPicoFromQuestion(
   }
   if (!condition || condition.length < 3) {
     if (topic) {
-      condition = topic.split(",")[0].trim();
+      try {
+        const scenario = parseClinicalScenario(topic);
+        condition = scenario.population;
+      } catch {
+        condition = topic.split(",")[0].trim();
+      }
     } else {
       condition = "high-risk clinical population";
     }
@@ -189,15 +194,32 @@ export function extractPicoFromQuestion(
     }
   }
   if (!intervention || intervention.length < 3) {
-    if (topic && topic.includes(",")) {
-      const parts = topic.split(",").map(p => p.trim());
-      intervention = parts[1] || parts[0] || "evaluated clinical intervention";
+    if (topic) {
+      try {
+        const scenario = parseClinicalScenario(topic);
+        intervention = scenario.intervention;
+      } catch {
+        const parts = topic.split(",").map(p => p.trim());
+        intervention = parts[1] || parts[0] || "evaluated clinical intervention";
+      }
     } else {
       intervention = "evaluated clinical intervention";
     }
   }
 
   // Fallback 3: Comparator
+  if (!comparator || comparator.length < 3) {
+    if (topic) {
+      try {
+        const scenario = parseClinicalScenario(topic);
+        comparator = scenario.comparator;
+      } catch {
+        comparator = "placebo or standard care";
+      }
+    } else {
+      comparator = "placebo or standard care";
+    }
+  }
   if (!comparator || comparator.length < 2) {
     comparator = "standard care / placebo";
   }
