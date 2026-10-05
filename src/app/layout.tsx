@@ -18,7 +18,11 @@ export const metadata: Metadata = {
     "AI-assisted formulation of answerable clinical questions in Obstetrics and Gynecology (Obs/Gyn)",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
       <body>{children}</body>

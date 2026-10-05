@@ -26,16 +26,25 @@ import { buildEvidenceSet } from "@/lib/evidence-set";
 import type { AuditableRef } from "@/lib/relevance";
 import { finalizeClaims } from "@/lib/claim-finalization";
 import { validateDeliverableIntegrity } from "@/lib/deliverable-integrity";
+import { generateDeterministicGapAnalysis } from "@/lib/deterministic-gap.ts";
 
-export const maxDuration = 120;
+export const maxDuration = 60;
 
-const MODEL = process.env.LLM_MODEL || "gemini-flash-latest";
-const KEY = process.env.GEMINI_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const KEY = GEMINI_API_KEY || GROQ_API_KEY || OPENROUTER_API_KEY || OPENAI_API_KEY;
 
-// Every outbound call is bounded so one hanging dependency degrades instead of
-// consuming the whole request budget (previously nothing had a timeout).
-const LLM_TIMEOUT_MS = 45_000;
-const API_TIMEOUT_MS = 12_000;
+function hasAnyLlmKey(): boolean {
+  return !!KEY;
+}
+
+const MODEL = process.env.LLM_MODEL || "gemini-2.0-flash";
+
+// Bounded timeouts so dependencies degrade gracefully within request budget
+const LLM_TIMEOUT_MS = 25_000;
+const API_TIMEOUT_MS = 10_000;
 
 class LlmFatal extends Error {}
 class LlmTransient extends Error {
@@ -49,44 +58,116 @@ class LlmTransient extends Error {
 // 4xx (other than 429) will never succeed on retry: bad key, bad request, wrong model.
 const LLM_NON_RETRYABLE = new Set([400, 401, 403, 404, 422]);
 
-async function callLLM(system: string, payload: unknown, attempts = 4): Promise<Record<string, unknown>> {
+function cleanJsonResponse(raw: string): Record<string, unknown> {
+  let cleaned = raw.trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  }
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start !== -1 && end > start) {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    }
+    throw new Error("Unable to parse JSON from LLM response");
+  }
+}
+
+async function callGemini(modelName: string, apiKey: string, system: string, payload: unknown): Promise<Record<string, unknown>> {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: "user", parts: [{ text: JSON.stringify(payload) }] }],
+        generationConfig: { temperature: 0.2, responseMimeType: "application/json" }
+      }),
+      signal: AbortSignal.timeout(LLM_TIMEOUT_MS)
+    }
+  );
+  if (!res.ok) {
+    const detail = (await res.text().catch(() => "")).slice(0, 240).replace(/\s+/g, " ");
+    if (LLM_NON_RETRYABLE.has(res.status)) throw new LlmFatal(`Gemini ${res.status}: ${detail}`);
+    const ra = Number(res.headers.get("retry-after"));
+    const retryAfterMs = Number.isFinite(ra) && ra > 0 ? Math.min(ra * 1000, 20_000) : 0;
+    throw new LlmTransient(`Gemini ${res.status}: ${detail}`, retryAfterMs);
+  }
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("Empty Gemini response");
+  return cleanJsonResponse(text);
+}
+
+async function callOpenAiCompatible(url: string, apiKey: string, model: string, system: string, payload: unknown): Promise<Record<string, unknown>> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: JSON.stringify(payload) }
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.2
+    }),
+    signal: AbortSignal.timeout(LLM_TIMEOUT_MS)
+  });
+  if (!res.ok) {
+    const detail = (await res.text().catch(() => "")).slice(0, 240).replace(/\s+/g, " ");
+    if (LLM_NON_RETRYABLE.has(res.status)) throw new LlmFatal(`LLM ${res.status}: ${detail}`);
+    throw new LlmTransient(`LLM ${res.status}: ${detail}`, 0);
+  }
+  const data = await res.json();
+  const text = data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error("Empty response from AI provider");
+  return cleanJsonResponse(text);
+}
+
+async function callLLM(system: string, payload: unknown, attempts = 2): Promise<Record<string, unknown>> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": KEY || "" },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: system }] },
-            contents: [{ role: "user", parts: [{ text: JSON.stringify(payload) }] }],
-            generationConfig: { temperature: 0.2, responseMimeType: "application/json" }
-          }),
-          signal: AbortSignal.timeout(LLM_TIMEOUT_MS)
+      if (GEMINI_API_KEY) {
+        try {
+          return await callGemini(MODEL, GEMINI_API_KEY, system, payload);
+        } catch (geminiErr) {
+          if (MODEL !== "gemini-1.5-flash") {
+            try {
+              return await callGemini("gemini-1.5-flash", GEMINI_API_KEY, system, payload);
+            } catch {
+              // fall through to throw geminiErr
+            }
+          }
+          throw geminiErr;
         }
-      );
-      if (!res.ok) {
-        // Keep an upstream excerpt so quota vs rate-limit vs bad-key is diagnosable in logs.
-        const detail = (await res.text().catch(() => "")).slice(0, 240).replace(/\s+/g, " ");
-        if (LLM_NON_RETRYABLE.has(res.status)) throw new LlmFatal(`LLM ${res.status}: ${detail}`);
-        const ra = Number(res.headers.get("retry-after"));
-        const retryAfterMs = Number.isFinite(ra) && ra > 0 ? Math.min(ra * 1000, 20_000) : 0;
-        throw new LlmTransient(`LLM ${res.status}: ${detail}`, retryAfterMs);
+      } else if (GROQ_API_KEY) {
+        const groqModel = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+        return await callOpenAiCompatible("https://api.groq.com/openai/v1/chat/completions", GROQ_API_KEY, groqModel, system, payload);
+      } else if (OPENROUTER_API_KEY) {
+        const orModel = process.env.OPENROUTER_MODEL || "google/gemini-2.0-flash-exp:free";
+        return await callOpenAiCompatible("https://openrouter.ai/api/v1/chat/completions", OPENROUTER_API_KEY, orModel, system, payload);
+      } else if (OPENAI_API_KEY) {
+        const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+        const oaModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
+        return await callOpenAiCompatible(`${baseUrl}/chat/completions`, OPENAI_API_KEY, oaModel, system, payload);
+      } else {
+        throw new Error("No AI provider key configured");
       }
-      const data = await res.json();
-      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) throw new Error("Empty LLM response");
-      return JSON.parse(text);
     } catch (e) {
       lastErr = e;
-      // A permanent rejection will not heal by retrying; stop burning the budget.
       if (e instanceof LlmFatal) break;
-      // Never sleep after the final attempt: it only burns the request budget.
       if (attempt < attempts - 1) {
-        const backoff = 1500 * Math.pow(2, attempt) + Math.floor(Math.random() * 400);
+        const backoff = 1000 * Math.pow(2, attempt);
         const wait = e instanceof LlmTransient && e.retryAfterMs ? Math.max(backoff, e.retryAfterMs) : backoff;
-        await new Promise(r => setTimeout(r, wait));
+        await new Promise(r => setTimeout(r, Math.min(wait, 5000)));
       }
     }
   }
@@ -496,7 +577,7 @@ async function fetchReferencesForPoints(
       if (r.pmid) excluded.add(r.pmid);
     }
     results.push({ point: p.point, references: finalRefs });
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, 50));
   }
   return results;
 }
@@ -1111,15 +1192,14 @@ refAudit: directPool.map(r => auditRef(r, elements)),
       const parsedTopic = readFreeText(body.input, "input");
       if (!parsedTopic.ok) return parsedTopic.response;
       const topic = parsedTopic.text;
-      if (!KEY) {
-        return NextResponse.json({
-          topic,
-          known: [], uncertain: [], gaps: [], suggestedQuestions: [],
-          note: "Gap analysis requires the AI engine (API key not configured)."
-        });
-      }
-const gapAnalysis = await callLLM(
-        `You are an evidence-mapping engine for Obstetrics and Gynecology with strict scientific editorial standards.
+
+      let gapAnalysis: Record<string, unknown> | null = null;
+      let gapSource: "ai" | "deterministic" = "deterministic";
+
+      if (hasAnyLlmKey()) {
+        try {
+          gapAnalysis = await callLLM(
+            `You are an evidence-mapping engine for Obstetrics and Gynecology with strict scientific editorial standards.
 
 TASK: Given a clinical topic, map the current evidence landscape.
 
@@ -1136,8 +1216,18 @@ HARD RULES:
 4. Reference integrity: the 8 evidence points must each carry a DISTINCT searchQuery targeting its own claim. Do not present study protocols, trial registrations, or conference abstracts as evidence of clinical effect.
 
 Respond ONLY with valid JSON, no preamble or commentary.`,
-        { topic }
-      );
+            { topic }
+          );
+          gapSource = "ai";
+        } catch (llmErr) {
+          console.warn("[engine] LLM gap analysis failed, using deterministic fallback:", llmErr);
+        }
+      }
+
+      if (!gapAnalysis) {
+        gapAnalysis = generateDeterministicGapAnalysis(topic) as unknown as Record<string, unknown>;
+        gapSource = "deterministic";
+      }
 
       interface RawGapPoint { point?: unknown; text?: unknown; searchQuery?: unknown }
 
@@ -1194,12 +1284,21 @@ Respond ONLY with valid JSON, no preamble or commentary.`,
       const uncertainPts = normPoints(gapAnalysis.uncertain).slice(0, 4);
 
       const usedPmids = new Set<string>();
-      const knownWithRefs = await fetchReferencesForPoints(knownPts, topic, usedPmids);
-      const uncertainWithRefs = await fetchReferencesForPoints(uncertainPts, topic, usedPmids);
+      let knownWithRefs: Array<{ point: string; references: PubMedRef[] }> = [];
+      let uncertainWithRefs: Array<{ point: string; references: PubMedRef[] }> = [];
+      try {
+        knownWithRefs = await fetchReferencesForPoints(knownPts, topic, usedPmids);
+        uncertainWithRefs = await fetchReferencesForPoints(uncertainPts, topic, usedPmids);
+      } catch (refErr) {
+        console.warn("[engine] Reference fetching encountered an issue, returning points without external refs:", refErr);
+        knownWithRefs = knownPts.map(p => ({ point: p.point, references: [] }));
+        uncertainWithRefs = uncertainPts.map(p => ({ point: p.point, references: [] }));
+      }
       
       return NextResponse.json({ 
         ...gapAnalysis, 
         topic,
+        source: gapSource,
         known: knownWithRefs,
         uncertain: uncertainWithRefs
       });
@@ -1324,6 +1423,21 @@ Respond ONLY with JSON.`,
         return NextResponse.json(ruleAnalyze(typeof body.input === "string" ? body.input : ""));
       } catch (fallbackError) {
         console.error(`[engine] rule fallback for "intent" also failed:`, fallbackError);
+      }
+    }
+    if (stage === "gap") {
+      try {
+        const topic = typeof body.input === "string" ? body.input : "";
+        const fallback = generateDeterministicGapAnalysis(topic);
+        return NextResponse.json({
+          ...fallback,
+          topic,
+          source: "deterministic",
+          known: fallback.known.map(k => ({ point: k.point, references: [] })),
+          uncertain: fallback.uncertain.map(u => ({ point: u.point, references: [] }))
+        });
+      } catch (fallbackError) {
+        console.error(`[engine] rule fallback for "gap" also failed:`, fallbackError);
       }
     }
     if (stage === "clarify" || stage === "formulate") {
