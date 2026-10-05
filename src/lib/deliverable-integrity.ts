@@ -1,5 +1,5 @@
-﻿import type { AuditableRef } from "./relevance.ts";
-import { checkCitations, extractInTextCites, formatReference, foldName } from "./relevance.ts";
+import type { AuditableRef } from "./relevance.ts";
+import { checkCitations, extractInTextCites, extractNumericCites, formatReference, foldName } from "./relevance.ts";
 import { normalizeDoi, type EvidenceWarning } from "./evidence-set.ts";
 
 /**
@@ -55,7 +55,7 @@ function referenceKey(ref: string): string {
   // Defensive: this key is also reached from the duplicate-detection loop, which walks the
   // caller's array before any element guard has run. Coercing here means a non-string can
   // never reach foldName, which assumes a real string.
-  const raw = String(ref);
+  const raw = String(ref).replace(/^\[?\d+\]?[\.\)]?\s*/, "");
   const doi = normalizeDoi((raw.match(/10\.\d{4,9}\/[^\s"'<>,;)\]]+/i) || [])[0] || "");
   if (doi) return `doi:${doi}`;
   const pmid = (raw.match(/\bPMID:?\s*(\d{6,9})\b/i) || [])[1]
@@ -94,7 +94,7 @@ function citationMatchesRecord(author: string, year: string, rec: AuditableRef):
  * identifiers a publisher guarantees over author-name resemblance.
  */
 function referenceIsBackedBy(ref: string, retained: AuditableRef[]): boolean {
-  const target = String(ref);
+  const target = String(ref).replace(/^\[?\d+\]?[\.\)]?\s*/, "");
   const refDoi = referenceKey(target).startsWith("doi:") ? referenceKey(target).slice(4) : "";
   const refPmid = referenceKey(target).startsWith("pmid:") ? referenceKey(target).slice(5) : "";
   const refFolded = foldName(target);
@@ -169,6 +169,21 @@ export function validateDeliverableIntegrity(input: DeliverableIntegrityInput): 
       continue;
     }
     matching.forEach(({ i }) => citedRecordIndexes.add(i));
+  }
+
+  // Also support Vancouver numerical citations [1], [2], etc.
+  const { citedNumbers } = extractNumericCites(narrative);
+  for (const num of citedNumbers) {
+    const idx = num - 1;
+    if (idx >= 0 && idx < retained.length) {
+      citedRecordIndexes.add(idx);
+    } else {
+      const label = `[${num}]`;
+      if (!seenUnsupported.has(label)) {
+        seenUnsupported.add(label);
+        unsupportedCitations.push(label);
+      }
+    }
   }
 
   // Orphan and uncited detection is delegated to the same checker the pipeline reconciles with,

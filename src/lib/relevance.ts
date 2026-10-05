@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Claim-specific reference relevance.
  *
  * This module is the single filtering boundary between retrieved literature and everything
@@ -423,16 +423,22 @@ const NON_NAMES = /^(and|et|al|in|the|a|an|for|of|on|with|by|at|from)$/i;
  * "Ramos". Splitting it made every citation of that paper look like an unknown reference.
  */
 export function surnamesOf(ref: string): string[] {
-  const t = ref.trim();
+  const t = ref.trim().replace(/^\[?\d+\]?[\.\)]?\s*/, "");
   const y = /(19|20)\d{2}/.exec(t);
   if (!y) return [];
-  const head = t.slice(0, y.index);
+  // For Vancouver or Chicago, the author segment is before the first period or before the year:
+  const periodIdx = t.indexOf(".");
+  const sliceEnd = periodIdx > 0 && periodIdx < y.index ? periodIdx : y.index;
+  const head = t.slice(0, sliceEnd);
   const names = head.match(NAME_TOKEN) || [];
-  return names.filter(n => n.length > 1 && !NON_NAMES.test(n) && CAPITALISED.test(n));
+  const filtered = names.filter(n => n.length > 1 && !NON_NAMES.test(n) && CAPITALISED.test(n));
+  if (filtered.length) return filtered;
+  const fallbackHead = t.slice(0, y.index);
+  return (fallbackHead.match(NAME_TOKEN) || []).filter(n => n.length > 1 && !NON_NAMES.test(n) && CAPITALISED.test(n));
 }
 
 export function refSurnameYear(s: string): { surname: string; year: string } | null {
-  const t = s.trim();
+  const t = s.trim().replace(/^\[?\d+\]?[\.\)]?\s*/, "");
   const y = /(19|20)\d{2}/.exec(t);
   if (!y) return null;
   const first = t.match(NAME_TOKEN)?.[0];
@@ -507,16 +513,69 @@ export function extractInTextCites(text: string): { author: string; year: string
  * Names are compared with diacritics folded, so an accented surname matches whether the text
  * spells it with or without the accent.
  */
+/**
+ * Extract numerical citation references from text (e.g. "[1]", "[1, 2]", "[1-3]").
+ * Returns a set of 1-based reference numbers and raw matched brackets.
+ */
+export function extractNumericCites(text: string): { citedNumbers: Set<number>; rawBrackets: string[] } {
+  const citedNumbers = new Set<number>();
+  const rawBrackets: string[] = [];
+  const bracketRegex = /\[([\d\s,\-]+)\]/g;
+  let match: RegExpExecArray | null;
+  while ((match = bracketRegex.exec(text || ""))) {
+    const inner = match[1].trim();
+    rawBrackets.push(match[0]);
+    const parts = inner.split(/\s*,\s*/);
+    for (const part of parts) {
+      if (/^\d+$/.test(part)) {
+        const num = parseInt(part, 10);
+        if (num > 0) citedNumbers.add(num);
+      } else if (/^(\d+)\s*-\s*(\d+)$/.test(part)) {
+        const rangeMatch = part.match(/^(\d+)\s*-\s*(\d+)$/);
+        if (rangeMatch) {
+          const start = parseInt(rangeMatch[1], 10);
+          const end = parseInt(rangeMatch[2], 10);
+          if (start > 0 && end >= start && end - start < 100) {
+            for (let i = start; i <= end; i++) citedNumbers.add(i);
+          }
+        }
+      }
+    }
+  }
+  return { citedNumbers, rawBrackets };
+}
+
+/**
+ * Citation/reference integrity.
+ *
+ * Supports both Vancouver numerical citation style (`[1]`, `[2]`, `[1-3]`) and
+ * author-year author-date style (`(Owen 2020)`).
+ *
+ * `uncited` are references nothing points at. `orphans` are in-text author-year citations
+ * or out-of-range numeric citations (e.g. `[9]` when only 4 references exist)
+ * that map to no reference at all.
+ *
+ * Names are compared with diacritics folded, so an accented surname matches whether the text
+ * spells it with or without the accent.
+ */
 export function checkCitations(discussion: string, refs: string[]): CitationChecks {
   const parsed = refs
     .map(r => ({ ref: r, year: /(19|20)\d{2}/.exec(r)?.[0] || "", names: surnamesOf(r).map(foldName) }))
     .filter(x => x.year);
   const cites = extractInTextCites(discussion || "");
+  const { citedNumbers } = extractNumericCites(discussion || "");
   const uncited: string[] = [];
   const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const folded = foldName(discussion || "");
 
-  for (const r of refs) {
+  for (let i = 0; i < refs.length; i++) {
+    const r = refs[i];
+    const refNum = i + 1;
+    // 1. Matched via Vancouver numerical citation: [1], [2], etc.
+    if (citedNumbers.has(refNum)) {
+      continue;
+    }
+    // 2. Matched via Author-Year citation: (Owen 2020)
     const p = refSurnameYear(r);
     const props = parsed.find(x => x.ref === r);
     const candidates = props?.names.length ? props.names : p ? [foldName(p.surname)] : [];
@@ -531,12 +590,20 @@ export function checkCitations(discussion: string, refs: string[]): CitationChec
   }
 
   const orphans: string[] = [];
+  // Author-year orphans
   for (const c of cites) {
     const author = foldName(c.author);
     const matched = parsed.some(
       p => p.year === c.year && p.names.some(nm => nm === author)
     );
     if (!matched && !orphans.includes(`${c.author} ${c.year}`)) orphans.push(`${c.author} ${c.year}`);
+  }
+  // Vancouver numerical orphans: e.g. [5] when only 3 references exist
+  for (const num of citedNumbers) {
+    if (num > refs.length) {
+      const label = `[${num}]`;
+      if (!orphans.includes(label)) orphans.push(label);
+    }
   }
 
   return {
@@ -562,8 +629,12 @@ export function resolveReference<T extends AuditableRef>(raw: string, pool: T[])
   if (!y) return null;
   const names = new Set(surnamesOf(raw).map(n => n.toLowerCase()));
   if (!names.size) return null;
-  const titleCore = raw.toLowerCase().match(/"([^"]{12,})"/)?.[1]
-    ?.replace(/[^a-z0-9]+/g, " ").trim().slice(0, 28);
+  const quoted = raw.toLowerCase().match(/"([^"]{12,})"/)?.[1];
+  const strippedNum = raw.replace(/^\[?\d+\]?[\.\)]?\s*/, "");
+  const unquotedCandidate = strippedNum.split(/\.\s+/)[1];
+  const titleCore = (quoted || unquotedCandidate || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ").trim().slice(0, 28);
   let best: T | null = null;
   let bestDelta = Number.POSITIVE_INFINITY;
   for (const r of pool) {
@@ -572,7 +643,7 @@ export function resolveReference<T extends AuditableRef>(raw: string, pool: T[])
     const authorHit = (r.authors || "").split(/[\s,]+/).filter(Boolean)
       .some(a => a.length > 1 && names.has(a.toLowerCase()));
     if (!authorHit) continue;
-    if (titleCore) {
+    if (titleCore && titleCore.length >= 6) {
       const t = (r.title || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
       if (!t.includes(titleCore)) continue;
     }
@@ -586,22 +657,43 @@ export function resolveReference<T extends AuditableRef>(raw: string, pool: T[])
 /**
  * Canonical bibliography entry for a record.
  *
- * This is the single formatter for every reference the user sees or exports, so the on-screen
- * list, the sources PDF and the commentary bibliography cannot drift apart. Entries are built
- * from the record's own metadata rather than from text the model typed, which removes the
- * whole class of failures where a citation carried the right author but a wrong year, DOI or
- * journal.
+ * Emits Vancouver style (ICMJE / NLM format), which is standard in medical and obstetric
+ * literature: Author(s). Title. Journal. Year. doi URL.
+ * (Titles are not enclosed in quotation marks, and year follows the journal specification).
  */
-export function formatReference(ref: AuditableRef): string {
+export function formatReference(ref: AuditableRef, style: "vancouver" | "chicago" = "vancouver"): string {
   const url = ref.url || (ref.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${ref.pmid}/` : "");
+  if (style === "chicago") {
+    return [
+      ref.authors ? `${ref.authors}.` : "",
+      ref.year ? `${ref.year}.` : "",
+      `"${(ref.title || "").replace(/\.$/, "")}."`,
+      ref.journal ? `${ref.journal}.` : "",
+      ref.doi ? `doi:${ref.doi}` : "",
+      url
+    ].filter(Boolean).join(" ");
+  }
+
+  // Vancouver style (NLM / ICMJE convention)
+  const authors = ref.authors ? `${ref.authors.trim().replace(/\.$/, "")}.` : "";
+  const title = ref.title ? `${ref.title.trim().replace(/\.$/, "")}.` : "";
+  const journal = ref.journal ? `${ref.journal.trim().replace(/\.$/, "")}.` : "";
+  const year = ref.year ? `${String(ref.year).trim()}.` : "";
+  const doi = ref.doi ? `doi:${ref.doi.replace(/^doi:\s*/i, "")}` : "";
+
   return [
-    ref.authors ? `${ref.authors}.` : "",
-    ref.year ? `${ref.year}.` : "",
-    `"${(ref.title || "").replace(/\.$/, "")}."`,
-    ref.journal ? `${ref.journal}.` : "",
-    ref.doi ? `doi:${ref.doi}` : "",
+    authors,
+    title,
+    journal ? `${journal} ${year}`.trim() : year,
+    doi,
     url
   ].filter(Boolean).join(" ");
+}
+
+export function formatVancouverReference(ref: AuditableRef, index?: number): string {
+  const prefix = typeof index === "number" && index > 0 ? `${index}. ` : "";
+  const formatted = formatReference(ref, "vancouver");
+  return `${prefix}${formatted}`.trim();
 }
 
 export interface CuratedReferences {
@@ -684,6 +776,7 @@ export function curateReferences<T extends AuditableRef>(
  * bracket, such as "(Park and Park 2026)" or "(Berghella 2026; Broad 2009)".
  */
 export function stripOrphanCitations(text: string, orphans: string[]): { text: string; removed: string[] } {
+  const numericOrphans = orphans.filter(o => /^\[\d+\]$/.test(o.trim()));
   const wanted = orphans
     .map(o => {
       const sp = o.lastIndexOf(" ");
@@ -693,9 +786,25 @@ export function stripOrphanCitations(text: string, orphans: string[]): { text: s
       return /^(19|20)\d{2}$/.test(year) && author ? { author, year, key: `${foldName(author)}|${year}` } : null;
     })
     .filter((x): x is { author: string; year: string; key: string } => !!x);
-  if (!wanted.length) return { text: text || "", removed: [] };
+  if (!wanted.length && !numericOrphans.length) return { text: text || "", removed: [] };
 
-const removed: string[] = [];
+  const removed: string[] = [];
+  let out = text || "";
+
+  // Strip numeric orphans like [5]
+  for (const no of numericOrphans) {
+    const num = no.replace(/[\[\]]/g, "").trim();
+    out = out.replace(new RegExp(`\\[\\s*${num}\\s*\\]`, "g"), () => {
+      if (!removed.includes(no)) removed.push(no);
+      return "";
+    });
+    out = out.replace(new RegExp(`\\[([^\\]]*)\\b${num}\\b([^\\]]*)\\]`, "g"), (match, pre, post) => {
+      const remaining = `${pre},${post}`.split(",").map(s => s.trim()).filter(s => s && s !== num);
+      if (!removed.includes(no)) removed.push(no);
+      return remaining.length ? `[${remaining.join(", ")}]` : "";
+    });
+  }
+
   const NAME = NAME_TOKEN.source;
   const orphanKeys = new Set(wanted.map(w => w.key));
 
@@ -708,7 +817,7 @@ const removed: string[] = [];
   // disagree. Matching author-year pairs against a regex instead leaves orphans behind whenever the
   // model writes a form the regex does not model, such as "(Gen 2012, 2014)" or "(Gen., 2012)".
   const BRACKET = /([\(\[\{])([^()\[\]{}]{0,240}?\b(?:19|20)\d{2}[a-z]?\b[^()\[\]{}]{0,240}?)([\)\]\}])/g;
-  let out = (text || "").replace(BRACKET, (match, open: string, inner: string, close: string) => {
+  out = out.replace(BRACKET, (match, open: string, inner: string, close: string) => {
     // A slot is one citation, so it is dropped as a unit: when "(Žarko Alfirević 2012)" matches
     // only on the surname the model used, removing just that token would leave the rest of the
     // slot standing as a citation to a paper that was never resolved.

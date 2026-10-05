@@ -63,15 +63,15 @@ export default function GapPage() {
     })();
   }, [router]);
 
-  const chicagoPlain = (r: Reference) => {
+  const vancouverPlain = (r: Reference) => {
     const url = r.url || `https://pubmed.ncbi.nlm.nih.gov/${r.pmid}/`;
     return [
-      r.authors ? `${r.authors}.` : "",
-      r.year ? `${r.year}.` : "",
-      `"${r.title.replace(/\.$/, "")}."`,
-      r.journal ? `${r.journal}.` : "",
-      r.doi ? `doi:${r.doi}` : ""
-    ].filter(Boolean).join(" ") + ` ${url}`;
+      r.authors ? `${r.authors.replace(/\.$/, "")}.` : "",
+      r.title ? `${r.title.replace(/\.$/, "")}.` : "",
+      r.journal ? (r.year ? `${r.journal.replace(/\.$/, "")}. ${r.year}.` : `${r.journal.replace(/\.$/, "")}.`) : (r.year ? `${r.year}.` : ""),
+      r.doi ? `doi:${r.doi.replace(/^doi:\s*/i, "")}` : "",
+      url
+    ].filter(Boolean).join(" ");
   };
 
   const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "document";
@@ -119,7 +119,7 @@ export default function GapPage() {
     const sections = items.map((item, i) => ({
       heading: `${i + 1}. ${isKnown ? "Established point" : "Contested area"}`,
       blocks: item.references.length
-        ? [item.point, "Supporting literature: " + item.references.map(chicagoPlain).join(" ")]
+        ? [item.point, "Supporting literature: " + item.references.map(vancouverPlain).join(" ")]
         : [item.point]
     }));
     dlPdf({

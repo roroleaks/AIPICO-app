@@ -7,7 +7,7 @@ import type { Formulation } from "@/lib/kb";
 import { sget, sset, KEYS } from "@/lib/session";
 import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
 import { NO_LITERATURE_MESSAGE, NO_LITERATURE_HINT } from "@/lib/clinical-keywords";
-import { formatReference } from "@/lib/relevance";
+import { formatReference, formatVancouverReference } from "@/lib/relevance";
 import { validateDeliverableIntegrity } from "@/lib/deliverable-integrity";
 
 interface ReferenceItem { pmid: string; title: string; authors: string; year: string; journal: string; doi?: string; url: string }
@@ -308,7 +308,7 @@ export default function PaperPage() {
     }
   };
 
-  const chicagoPlain = (r: ReferenceItem) => formatReference(r);
+  const vancouverPlain = (r: ReferenceItem, idx?: number) => formatVancouverReference(r, idx);
 
   /**
    * Single parity gate for every deliverable on this page.
@@ -356,7 +356,7 @@ export default function PaperPage() {
 
   const copyReferences = async () => {
     if (!commentary?.references?.length) return;
-    const lines = commentary.references.map(chicagoFromString);
+    const lines = commentary.references.map((r, i) => vancouverFromString(r, i + 1));
     if (!guardDeliverable(lines, "Copy references")) return;
     try {
       await navigator.clipboard.writeText(lines.join("\n"));
@@ -393,10 +393,10 @@ export default function PaperPage() {
         ? commentary.references
         : [];
     const bibliography = refs.length
-      ? `<h2>References</h2>
-<ol>${refs.map(r => `<li>${esc(typeof r === "string" ? r : chicagoPlain(r))}</li>`).join("")}</ol>`
+      ? `<h2>References (Vancouver Style)</h2>
+<ol>${refs.map((r, i) => `<li>${esc(typeof r === "string" ? r : vancouverPlain(r, i + 1))}</li>`).join("")}</ol>`
       : "";
-    if (refs.length && !guardDeliverable(refs.map(r => (typeof r === "string" ? r : chicagoPlain(r))), "Word export")) return;
+    if (refs.length && !guardDeliverable(refs.map((r, i) => (typeof r === "string" ? r : vancouverPlain(r, i + 1))), "Word export")) return;
     const html = `<html><head><meta charset="utf-8"></head><body>
 <h1>${esc(activeQuestion)}</h1>
 <h2>Framework: ${esc(formulation.framework)}</h2>
@@ -419,10 +419,10 @@ ${bibliography}
 
   const exportRefsPDF = (items: ReferenceItem[], docTitle: string, header: string, kind: "sources" | "pubmed") => {
     if (!items.length) return;
-    const refs = items.map(chicagoPlain);
+    const refs = items.map((r, i) => vancouverPlain(r, i + 1));
     if (!guardDeliverable(refs, `${header} PDF`)) return;
     dlPdf({
-      docType: `Reference List · ${header}`,
+      docType: `Reference List · ${header} (Vancouver Style)`,
       title: docTitle,
       meta: `Clinical Question Assistant · Generated ${new Date().toLocaleDateString()}`,
       pico: picoPayload(),
@@ -432,15 +432,17 @@ ${bibliography}
     }, slug(docTitle) + "-references.pdf", kind);
   };
 
-  const chicagoFromString = (r: string) =>
-    r.trim().replace(/^\[?\d+\]?[\.\)]?\s*/, "");
+  const vancouverFromString = (r: string, idx?: number) => {
+    const cleaned = r.trim().replace(/^\[?\d+\]?[\.\)]?\s*/, "");
+    return typeof idx === "number" && idx > 0 ? `${idx}. ${cleaned}` : cleaned;
+  };
 
   const exportCommentaryRefs = () => {
     if (!commentary || !commentary.references?.length) return;
-    const refs = commentary.references.map(chicagoFromString);
+    const refs = commentary.references.map((r, i) => vancouverFromString(r, i + 1));
     if (!guardDeliverable(refs, "Reference PDF")) return;
     dlPdf({
-      docType: "Reference List · Chicago Style",
+      docType: "Reference List · Vancouver Style",
       title: commentary.title,
       meta: `Clinical Question Assistant · Generated ${new Date().toLocaleDateString()}`,
       pico: picoPayload(),
@@ -455,7 +457,7 @@ ${bibliography}
   const exportCommentaryToPDF = () => {
     if (!commentary) return;
     const discussionBlocks = commentary.discussion.split(/\n{1,}/).map(b => b.trim()).filter(Boolean);
-    const refs = commentary.references.length ? commentary.references.map(chicagoFromString) : [];
+    const refs = commentary.references.length ? commentary.references.map((r, i) => vancouverFromString(r, i + 1)) : [];
     if (refs.length && !guardDeliverable(refs, "Commentary PDF")) return;
     dlPdf({
       docType: "Scientific Commentary",
@@ -522,7 +524,7 @@ ${bibliography}
             {!commentary && commentaryLoading && (
               <AnimatedProcessingIndicator
                 message="Writing your scientific commentary"
-                secondaryMessage="Drafting background abstract, keywords, introduction, detailed thematic discussion, clinical conclusion, and Chicago-style references from direct evidence..."
+                secondaryMessage="Drafting background abstract, keywords, introduction, detailed thematic discussion, clinical conclusion, and Vancouver-style references from direct evidence..."
               />
             )}
             {commentaryLoading && commentary && (
@@ -562,8 +564,8 @@ ${bibliography}
                 <h3 className="sec-h">Discussion</h3><div style={{ whiteSpace: "pre-wrap" }}>{commentary.discussion}</div>
                 <h3 className="sec-h">Conclusion</h3><p>{commentary.conclusion}</p>
                 {!!commentary.references.length && (
-                  <><h3 className="sec-h">References (Chicago Style)</h3>
-                    <ol className="refs-numbered">{commentary.references.map((ref, i) => <li key={i}>{ref}</li>)}</ol></>
+                  <><h3 className="sec-h">References (Vancouver Style)</h3>
+                    <ol className="refs-numbered">{commentary.references.map((ref, i) => <li key={i}>{vancouverFromString(ref, i + 1)}</li>)}</ol></>
                 )}
                 {/* Filtering summary: how many records were retrieved, how many survived the
                     claim-specific filter, and what was dropped. Contextual records are listed
@@ -583,8 +585,8 @@ ${bibliography}
                       {commentary.additionalEvidence.length} further relevant record(s) not cited in this commentary
                     </summary>
                     <ul className="refs-numbered" style={{ marginTop: 8 }}>
-                      {commentary.additionalEvidence.map((r) => (
-                        <li key={r.pmid} style={{ opacity: .85 }}>{chicagoPlain(r)}</li>
+                      {commentary.additionalEvidence.map((r, i) => (
+                        <li key={r.pmid} style={{ opacity: .85 }}>{vancouverPlain(r, i + 1)}</li>
                       ))}
                     </ul>
                   </details>

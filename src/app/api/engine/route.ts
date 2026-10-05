@@ -957,12 +957,12 @@ ${strictOutcomes ? `- Discuss ONLY the selected outcomes as target outcomes for 
   - introduction: background, clinical significance, and rationale (2-3 paragraphs)
   - discussion: comprehensive synthesis of current evidence organized by subthemes with short subheaders, covering strengths/limitations of evidence, controversies, and identified research gaps
   - conclusion: clear take-home message and implications (1-2 paragraphs)
-  - references: array of AT LEAST 4 strings in Chicago author-date style built ONLY from the provided referencePool. Format: Surname, First Name. Year. "Title." Journal Volume(Issue). DOI or URL. Cite each reference at least once in the discussion using parenthetical citations like (Author Year).
-- Every in-text citation MUST reproduce the EXACT last name and EXACT publication year of one of the provided references (e.g., (Likes 2019) or Likes et al. 2019 only if a reference from Likes is in the pool). Never cite an author or year not present in the referencePool.
-- Cite using the FIRST author's surname exactly as it appears at the start of the listed reference, paired with the listed publication year. Cite EACH listed reference at least once in the discussion; do not list a reference you never cite in the text.
+  - references: array of AT LEAST 4 strings in Vancouver style (ICMJE/NLM) built ONLY from the provided referencePool in sequential order of citation. Format: [Number]. Author(s) (up to 6, then et al.). Article title (no quotes). Journal. Year;Volume(Issue):Pages. doi:10.xxx (or URL).
+- Every in-text citation MUST use Vancouver numbered square brackets matching the reference list (e.g., [1], [2], [1, 2], [1-3]). You may optionally include author surnames alongside the bracket, e.g. Owen et al. [1]. Never cite a reference number not present in the references list.
+- The references MUST be numbered sequentially starting with 1 in the exact order they are first cited in the discussion. Cite EACH listed reference at least once in the text; do not list a reference you never cite.
 - The referencePool has ALREADY been filtered for claim-specific relevance: every record in it directly addresses the Population AND (Intervention or Comparator) AND the SELECTED OUTCOMES. Records from other conditions, cancer trials, or basic-science work are not present and must never be cited or listed.
 - Cite and list references ONLY from the provided referencePool.
-- Every sentence that asserts an effect, a magnitude, a mechanism or a recommendation MUST carry its own in-text citation, not just one citation per paragraph. Sentences are judged one at a time: a sentence that asserts something and cites nothing is deleted and replaced with a statement that direct evidence was not identified, so an uncited assertive sentence never reaches the reader.
+- Every sentence that asserts an effect, a magnitude, a mechanism or a recommendation MUST carry its own in-text citation (e.g. [1]), not just one citation per paragraph. Sentences are judged one at a time: a sentence that asserts something and cites nothing is deleted and replaced with a statement that direct evidence was not identified, so an uncited assertive sentence never reaches the reader.
 - Do not state an effect size, percentage, p-value or confidence interval unless the cited record reports that number. Write only what the cited records support.`;
       const promptPayload = {
         topic, gapAnalysis, selectedQuestion, outcome: outcomesText, referencePool: poolForPrompt
@@ -1079,7 +1079,7 @@ let commentary: Record<string, unknown>;
           try {
             commentary = await callLLM(
               `${basePrompt}
-- Your previous draft was rejected for citation integrity. These in-text citations name no reference you listed: ${citationChecks.orphans.join("; ") || "none"}. These references you listed were never cited in the text: ${citationChecks.uncited.map(u => u.split(".")[0]).join("; ") || "none"}. Fix both: cite each listed reference at least once, and delete or correct every citation that is not in the referencePool.
+- Your previous draft was rejected for citation integrity. These in-text citations name no reference you listed: ${citationChecks.orphans.join("; ") || "none"}. These references you listed were never cited in the text: ${citationChecks.uncited.map(u => u.split(".")[0]).join("; ") || "none"}. Fix both: cite each listed reference at least once using sequential Vancouver numeric brackets [1], [2], etc., and delete or correct every citation that is not in the referencePool.
 ${responseShape}`,
               promptPayload,
               2
