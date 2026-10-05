@@ -180,6 +180,9 @@ export default function QuestionPage() {
       ? f.variants.map(normVariant).filter((v): v is { question: string; rationale: string } => !!v) : [];
     sset(KEYS.formulation, f);
     sset("cq_outcome", ans.outcome || "");
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(KEYS.commentary);
+    }
     router.push("/paper");
   }, [router]);
 
@@ -307,6 +310,9 @@ export default function QuestionPage() {
     // evidence steps read this key, and a truncated "Neonatal intensive care adm…" would degrade
     // the PubMed query built from it.
     sset(KEYS.outcomes, vals);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(KEYS.commentary);
+    }
     setFreeText("");
     setFreeTextError(null);
     setSelectedOutcomes([]);

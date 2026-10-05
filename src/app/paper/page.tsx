@@ -135,6 +135,9 @@ export default function PaperPage() {
   const [commentary, setCommentary] = useState<CommentaryPaper | null>(() => {
     const c = sget<CommentaryPaper>(KEYS.commentary);
     if (!c || typeof c.title !== "string") return null;
+    if (c.title === "No literature related to your search found" || c.noDirectEvidence === true) {
+      return null;
+    }
     return {
       title: c.title,
       abstract: typeof c.abstract === "string" ? c.abstract : c.title,
@@ -227,7 +230,11 @@ export default function PaperPage() {
           citationChecks: curCitationChecks(data),
           removedCitations: Array.isArray(data.removedCitations) ? data.removedCitations : []
         };
-        sset(KEYS.commentary, norm);
+        if (!norm.noDirectEvidence && norm.title !== "No literature related to your search found") {
+          sset(KEYS.commentary, norm);
+        } else if (typeof window !== "undefined") {
+          window.sessionStorage.removeItem(KEYS.commentary);
+        }
         setCommentary(norm);
       } else {
         setCommentaryError(true);

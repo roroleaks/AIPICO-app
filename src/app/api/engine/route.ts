@@ -215,9 +215,12 @@ function dedupeRefs(refs: PubMedRef[]): PubMedRef[] {
   return out;
 }
 
+const NCBI_API_KEY = process.env.NCBI_API_KEY || process.env.PUBMED_API_KEY || "";
+
 async function esearchIds(term: string, retmax: number, filters = ""): Promise<string[]> {
+  const apiKeyParam = NCBI_API_KEY ? `&api_key=${encodeURIComponent(NCBI_API_KEY)}` : "";
   const res = await fetch(
-    `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmode=json&retmax=${retmax}&sort=relevance${filters}&term=${encodeURIComponent(term)}`,
+    `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmode=json&retmax=${retmax}&sort=relevance${filters}&term=${encodeURIComponent(term)}${apiKeyParam}`,
     { signal: AbortSignal.timeout(API_TIMEOUT_MS) }
   );
   if (!res.ok) throw new Error(`esearch ${res.status}`);
@@ -229,8 +232,9 @@ async function esummaryForIds(ids: string[]): Promise<Record<string, ESummaryDoc
   // An empty id list makes NCBI return an error payload, which would otherwise
   // throw and burn two pointless retry rounds.
   if (!ids.length) return {};
+  const apiKeyParam = NCBI_API_KEY ? `&api_key=${encodeURIComponent(NCBI_API_KEY)}` : "";
   const res = await fetch(
-    `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=${ids.join(",")}`,
+    `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=${ids.join(",")}${apiKeyParam}`,
     { signal: AbortSignal.timeout(API_TIMEOUT_MS) }
   );
   if (!res.ok) throw new Error(`esummary ${res.status}`);
@@ -245,11 +249,13 @@ async function fetchPubMedReferences(query: string, maxResults = 3, excluded: Se
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const reviewIds = await esearchIds(term, want + extra, "&filter=pubt.review");
+      if (!NCBI_API_KEY) await new Promise(r => setTimeout(r, 120));
       const generalIds = await esearchIds(term, want + extra);
       if (!reviewIds.length && !generalIds.length) return [];
       const ids = Array.from(new Set([...reviewIds, ...generalIds]))
         .filter(id => !excluded.has(id))
         .slice(0, maxResults);
+      if (!NCBI_API_KEY) await new Promise(r => setTimeout(r, 120));
       const result = await esummaryForIds(ids);
       const refs = ids
         .map((id) => {
@@ -839,7 +845,49 @@ export async function POST(req: NextRequest) {
       // Everything downstream (commentary generation, the rendered reference list, the audit
       // table, and every export) is derived from `directPool`. The model may only cite from
       // it, so an unrelated record can never reach the commentary or the reference list.
-      const { kept: directPool, excluded: excludedByClaim } = filterByClaim(refPool, elements);
+      let { kept: directPool, excluded: excludedByClaim } = filterByClaim(refPool, elements);
+
+      // Targeted PICO & Outcome retrieval fallback if directPool has zero matches.
+      // Often the broad topic search misses records that explicitly evaluate the target outcome.
+      // Before declaring "No literature related to your search found", perform targeted searches
+      // specifically for the target outcome combined with the intervention and population.
+      if (directPool.length === 0 && elements.length > 0) {
+        const byType = elements.reduce((acc, el) => {
+          const l = el.label.toLowerCase();
+          if (l.includes("pop")) acc.population = el.value;
+          else if (l.includes("interv")) acc.intervention = el.value;
+          else if (l.includes("comp")) acc.comparator = el.value;
+          else if (l.includes("out")) acc.outcome = el.value;
+          return acc;
+        }, {} as Record<string, string>);
+
+        const targetPop = byType.population || "";
+        const targetInt = byType.intervention || "";
+        const targetOut = byType.outcome || outcome || outcomesArr[0] || "";
+
+        const queriesToTry = [
+          // 1. Intervention + Outcome + core Population
+          sanitizeQuery(`${targetInt} ${targetOut} ${targetPop}`),
+          // 2. Focused Treatment + Outcome
+          sanitizeQuery(`${targetInt} ${targetOut}`),
+          // 3. Selected Question directly
+          selectedQuestion ? sanitizeQuery(String(selectedQuestion)) : ""
+        ].filter(
+          (q, idx, arr) => q && q.length > 3 && arr.indexOf(q) === idx && q !== cleanTopicQuery(String(topic || ""))
+        );
+
+        for (const query of queriesToTry) {
+          const additionalRefs = await fetchReferencesBroad(query, 8);
+          if (additionalRefs.length) {
+            refPool = dedupeRefs([...refPool, ...additionalRefs]);
+            const filtered = filterByClaim(refPool, elements);
+            directPool = filtered.kept;
+            excludedByClaim = filtered.excluded;
+            if (directPool.length > 0) break;
+          }
+        }
+      }
+
       // Build canonical evidence set from retained records to serve as the single source of truth
       // for allowed citations, deduplication and revalidation.
       const evidenceSet = await buildEvidenceSet(directPool as AuditableRef[]);
