@@ -885,6 +885,9 @@ export const OUTCOME_ONTOLOGY: OutcomeCandidate[] = [
   }),
 
   // ---------------------------------------------------------------- diagnostics, screening, risk
+  // Diagnostic accuracy is not an obstetric concept, so these carry an empty specialty list. Scoping
+  // them to the three OB/GYN keys meant an unrecognised specialty asking a diagnostic question had
+  // no in-scope outcome left at all.
   defineOutcome({
     id: "sensitivity",
     label: "Sensitivity",
@@ -892,7 +895,7 @@ export const OUTCOME_ONTOLOGY: OutcomeCandidate[] = [
     category: "clinical",
     family: "diagnosis-accuracy",
     priority: 1,
-    applicableSpecialties: ["obstetrics", "gynecology", "infertility"],
+    applicableSpecialties: [],
     applicableConditions: ["endometriosis", "adenomyosis", "placenta accreta spectrum", "ovarian cyst", "fetal growth restriction", "preeclampsia", "recurrent miscarriage"],
     applicableInterventions: ["ultrasound", "mri", "screening test", "biomarker", "ntp test"],
     applicableQuestionTypes: [DIAGNOSIS, SCREENING],
@@ -908,7 +911,7 @@ export const OUTCOME_ONTOLOGY: OutcomeCandidate[] = [
     category: "clinical",
     family: "diagnosis-accuracy",
     priority: 2,
-    applicableSpecialties: ["obstetrics", "gynecology", "infertility"],
+    applicableSpecialties: [],
     applicableConditions: ["endometriosis", "adenomyosis", "placenta accreta spectrum", "ovarian cyst", "cervical cancer screening", "preterm birth risk"],
     applicableInterventions: ["ultrasound", "mri", "screening test", "biomarker", "cervical length measurement"],
     applicableQuestionTypes: [DIAGNOSIS, SCREENING],
@@ -940,7 +943,7 @@ export const OUTCOME_ONTOLOGY: OutcomeCandidate[] = [
     category: "safety",
     family: "diagnosis-accuracy",
     priority: 2,
-    applicableSpecialties: ["obstetrics", "gynecology", "infertility"],
+    applicableSpecialties: [],
     applicableConditions: ["endometriosis", "adenomyosis", "placenta accreta spectrum", "ovarian cyst", "endometrial hyperplasia"],
     applicableInterventions: ["ultrasound", "mri", "screening test", "hysteroscopy"],
     applicableQuestionTypes: [DIAGNOSIS, SCREENING],
@@ -961,7 +964,9 @@ export const OUTCOME_ONTOLOGY: OutcomeCandidate[] = [
     applicableSpecialties: [],
     applicableConditions: ["unknown", "unspecified"],
     applicableInterventions: [],
-    applicableQuestionTypes: [ETIOLOGY, PROGNOSIS, SCREENING],
+    // Every question type, including Diagnosis. A question-type list that omits Diagnosis left that
+    // path with no in-scope outcome at all, so the universal tier could not do its job.
+    applicableQuestionTypes: [THERAPY, DIAGNOSIS, PROGNOSIS, ETIOLOGY, SCREENING, HARM],
     keywords: ["incidence", "rate", "occurrence", "risk", "frequency"],
     rationale: "It is the direct measure of how often the clinical event of interest occurs.",
     measurable: true,
@@ -1000,7 +1005,7 @@ export const OUTCOME_ONTOLOGY: OutcomeCandidate[] = [
       "fibroids", "pcos", "recurrent pregnancy loss", "preterm birth risk", "heavy menstrual bleeding"
     ],
     applicableInterventions: [],
-    applicableQuestionTypes: [THERAPY, HARM],
+    applicableQuestionTypes: [THERAPY, HARM, PROGNOSIS, ETIOLOGY, SCREENING],
     keywords: ["adverse", "side effect", "harm", "toxicity", "complication of"],
     rationale: "It is the harm side of any intervention question, and a question that cannot answer it is incomplete.",
     measurable: true,
@@ -1016,7 +1021,7 @@ export const OUTCOME_ONTOLOGY: OutcomeCandidate[] = [
     applicableSpecialties: [],
     applicableConditions: ["unknown", "unspecified", "endometriosis", "fibroids", "pcos", "heavy menstrual bleeding"],
     applicableInterventions: [],
-    applicableQuestionTypes: [THERAPY, HARM],
+    applicableQuestionTypes: [THERAPY, HARM, PROGNOSIS],
     keywords: ["discontinuation", "adherence", "switch", "drop out", "tolerability"],
     rationale: "It shows how tolerable the intervention was in practice, which effectiveness measures alone do not.",
     measurable: true,
@@ -1032,7 +1037,7 @@ export const OUTCOME_ONTOLOGY: OutcomeCandidate[] = [
     applicableSpecialties: [],
     applicableConditions: ["unknown", "unspecified", "heavy menstrual bleeding", "pelvic pain", "endometriosis", "nausea", "vomiting of pregnancy"],
     applicableInterventions: [],
-    applicableQuestionTypes: [THERAPY, HARM, PROGNOSIS],
+    applicableQuestionTypes: [THERAPY, HARM, PROGNOSIS, ETIOLOGY, SCREENING],
     keywords: ["symptom", "resolution", "relief", "improvement", "resolved"],
     rationale: "It is the patient-visible change the question is about when no more specific endpoint has been defined.",
     measurable: true,
@@ -1048,7 +1053,7 @@ export const OUTCOME_ONTOLOGY: OutcomeCandidate[] = [
     applicableSpecialties: [],
     applicableConditions: ["unknown", "unspecified"],
     applicableInterventions: [],
-    applicableQuestionTypes: [THERAPY, PROGNOSIS, HARM],
+    applicableQuestionTypes: [THERAPY, DIAGNOSIS, PROGNOSIS, ETIOLOGY, SCREENING, HARM],
     keywords: ["event", "clinical outcome", "endpoint", "occurrence"],
     rationale: "It is the generic but correctly scoped fallback: the event this question is actually about.",
     measurable: true,

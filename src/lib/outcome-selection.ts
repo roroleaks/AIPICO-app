@@ -47,6 +47,17 @@ export const MAX_FREE_TEXT_LENGTH = 120;
 const THRESHOLD_EXCEPTION_FAMILY = "preterm-birth";
 
 /**
+ * Families allowed more than one member.
+ *
+ * Most families are near-duplicates, so one per selection is right. Diagnostic accuracy is the
+ * exception: sensitivity, specificity and missed-diagnosis rate answer different halves of the
+ * same question, and offering only one of them leaves a diagnostic selection too thin to use.
+ */
+const DIAGNOSTIC_FAMILY_ALLOWANCE: Record<string, number> = {
+  "diagnosis-accuracy": 3
+};
+
+/**
  * Wording that carries no distinguishing clinical meaning.
  *
  * These are dropped before duplicate detection so that "live birth rate" and "live birth" are
@@ -604,7 +615,12 @@ export function selectOutcomes(
   const familyAllowed = (candidate: OutcomeCandidate): boolean => {
     const seen = familiesUsed.get(candidate.family) ?? 0;
     if (seen === 0) return true;
-    return thresholdsWanted && candidate.family === THRESHOLD_EXCEPTION_FAMILY;
+    if (thresholdsWanted && candidate.family === THRESHOLD_EXCEPTION_FAMILY) return true;
+    // Diagnostic accuracy is the one family whose members are complementary rather than
+    // redundant: a test question is not answered by sensitivity alone, so capping it at one
+    // left a diagnostic selection with too few options to choose between.
+    const allowance = DIAGNOSTIC_FAMILY_ALLOWANCE[candidate.family] ?? 0;
+    return seen < allowance;
   };
 
   for (const tier of tiers) {

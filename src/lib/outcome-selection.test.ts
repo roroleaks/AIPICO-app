@@ -22,6 +22,7 @@ import {
   type OutcomeContext
 } from "./outcome-selection.ts";
 import { OUTCOME_ONTOLOGY } from "./outcome-ontology.ts";
+import { QUESTION_TYPES } from "./kb.ts";
 
 const THERAPY = "Therapy / Prevention";
 
@@ -627,5 +628,80 @@ test("OS-A09. a recommended option always remains one of the offered options", (
       result.options.some(o => o.id === result.recommendedOutcome.id),
       "recommended outcome is not in the offered options"
     );
+  }
+});
+
+// The universal tier is what stands between an unrecognised context and an empty or unusably short
+// list. The OB/GYN-only UI never exercises it, so it is probed directly for every question type.
+const UNIVERSAL_IDS = new Set([
+  "incidence-of-event", "relative-risk-of-event", "adverse-effects-of-intervention",
+  "treatment-discontinuation", "symptom-resolution", "clinical-event-rate"
+]);
+
+test("OS-U01. every question type still offers a usable list when nothing is recognised", () => {
+  for (const { type } of QUESTION_TYPES) {
+    const sel = selectOutcomes(buildOutcomeContext(
+      { specialty: undefined, condition: "zzz unrecognised condition", intervention: "qqq unrecognised drug",
+        questionType: type, framework: "PICO" },
+      {}
+    ));
+    assert.ok(
+      sel.options.length >= MIN_OUTCOME_OPTIONS && sel.options.length <= MAX_OUTCOME_OPTIONS,
+      `${type} produced ${sel.options.length} options`
+    );
+    assert.ok(sel.recommendedOutcome, `${type} has no recommended outcome`);
+    for (const o of sel.options) assert.ok(o.rationale.trim(), `${type}/${o.id} has no rationale`);
+  }
+});
+
+test("OS-U02. an unrecognised specialty offers universal outcomes and never OB/GYN-specific ones", () => {
+  const sel = selectOutcomes(buildOutcomeContext(
+    { specialty: "oncology" as never, condition: "metastatic colorectal cancer",
+      intervention: "pembrolizumab", questionType: THERAPY, framework: "PICO" },
+    {}
+  ));
+  assert.ok(sel.options.length >= MIN_OUTCOME_OPTIONS);
+  for (const o of sel.options) {
+    assert.ok(
+      UNIVERSAL_IDS.has(o.id),
+      `${o.id} ("${o.label}") is not a universal outcome and must not answer a non-OB/GYN question`
+    );
+    assert.ok(!/pre-?eclampsia|gestational|caesarean|cerclage|amniotic/i.test(o.label), `OB/GYN leakage: ${o.label}`);
+  }
+});
+
+test("OS-U03. the universal tier is reached, not merely present in the ontology", () => {
+  const sel = selectOutcomes(buildOutcomeContext(
+    { specialty: undefined, condition: "zzz unrecognised", intervention: "qqq unrecognised",
+      questionType: THERAPY, framework: "PICO" },
+    {}
+  ));
+  const universal = sel.options.filter(o => UNIVERSAL_IDS.has(o.id));
+  assert.ok(universal.length > 0, "no universal outcome survived selection");
+  assert.ok(
+    sel.options.every(o => !o.label || typeof o.label === "string"),
+    "an option reached selection without a label"
+  );
+});
+
+test("OS-U04. a diagnostic question can offer more than one accuracy measure", () => {
+  const sel = selectOutcomes(buildOutcomeContext(
+    { specialty: undefined, condition: "zzz unrecognised", intervention: "qqq unrecognised",
+      questionType: "Diagnosis", framework: "Diagnostic accuracy (PIRD)" },
+    {}
+  ));
+  const accuracy = sel.options.filter(o => o.family === "diagnosis-accuracy");
+  assert.ok(accuracy.length >= 2, "diagnostic selection offered a single accuracy measure");
+  assert.ok(sel.options.length <= MAX_OUTCOME_OPTIONS);
+});
+
+test("OS-U05. an unrecognised specialty never receives a rationale that invents a domain", () => {
+  const sel = selectOutcomes(buildOutcomeContext(
+    { specialty: "oncology" as never, condition: "metastatic colorectal cancer",
+      intervention: "pembrolizumab", questionType: THERAPY, framework: "PICO" },
+    {}
+  ));
+  for (const o of sel.options) {
+    assert.ok(!/infertility|pregnan|obstetric|gynecolog/i.test(o.rationale), `${o.id}: ${o.rationale}`);
   }
 });
