@@ -1,5 +1,5 @@
 import { KB, type SpecialtyKey } from "./kb.ts";
-import { ruleAnalyze } from "./rule-engine.ts";
+import { parseClinicalScenario } from "./clinical-semantics.ts";
 
 export interface DeterministicGapPoint {
   point: string;
@@ -23,14 +23,12 @@ export interface DeterministicGapPayload {
  */
 export function generateDeterministicGapAnalysis(rawTopic: string): DeterministicGapPayload {
   const topic = (rawTopic || "").trim() || "obstetric and gynecologic clinical care";
-  const analysis = ruleAnalyze(topic);
-  const specialty: SpecialtyKey | null = analysis.specialty && specialtyInKb(analysis.specialty)
-    ? (analysis.specialty as SpecialtyKey)
-    : null;
+  const scenario = parseClinicalScenario(topic);
+  const specialty: SpecialtyKey = scenario.specialty;
 
-  const condition = analysis.condition || extractCondition(topic);
-  const intervention = analysis.intervention || extractIntervention(topic);
-  const comparator = analysis.comparator || "standard care or placebo";
+  const condition = scenario.population;
+  const intervention = scenario.intervention;
+  const comparator = scenario.comparator;
 
   // Build 4 established knowledge points
   const known: DeterministicGapPoint[] = [
@@ -118,7 +116,7 @@ export function generateDeterministicGapAnalysis(rawTopic: string): Deterministi
     known,
     uncertain,
     gaps,
-    suggestedQuestions
+    suggestedQuestions: scenario.suggestedQuestions
   };
 }
 

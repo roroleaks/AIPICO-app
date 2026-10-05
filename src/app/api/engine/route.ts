@@ -28,6 +28,7 @@ import { finalizeClaims } from "@/lib/claim-finalization";
 import { validateDeliverableIntegrity } from "@/lib/deliverable-integrity";
 import { generateDeterministicGapAnalysis } from "@/lib/deterministic-gap.ts";
 import { extractPicoFromQuestion } from "@/lib/pico-parser";
+import { parseClinicalScenario } from "@/lib/clinical-semantics";
 
 export const maxDuration = 60;
 
@@ -1241,6 +1242,7 @@ refAudit: directPool.map(r => auditRef(r, elements)),
       const parsedTopic = readFreeText(body.input, "input");
       if (!parsedTopic.ok) return parsedTopic.response;
       const topic = parsedTopic.text;
+      const scenario = parseClinicalScenario(topic);
 
       let gapAnalysis: Record<string, unknown> | null = null;
       let gapSource: "ai" | "deterministic" = "deterministic";
@@ -1252,6 +1254,13 @@ refAudit: directPool.map(r => auditRef(r, elements)),
 
 TASK: Given a clinical topic, map the current evidence landscape.
 
+CLINICAL TOPIC DECOMPOSITION:
+- Specialty: ${scenario.specialty}
+- Clinical Population / Condition (P): ${scenario.population}
+- Primary Intervention (I): ${scenario.intervention}
+- Comparison / Control (C): ${scenario.comparator}
+- Candidate Clinical Endpoints (O): ${scenario.outcomes.join(", ")}
+
 HARD RULES:
 1. Standard medical spelling and terminology ONLY. This is a scientific deliverable: correct spelling is mandatory. Example: "laparoscopic treatment" (never "laparurgical"), "hysterectomy" (never "hysterctmy"), "endometriosis" (never "endometriotis"). Before output, re-read your own response and correct any typo or malformed term.
 2. EXACT item counts, no more and no fewer:
@@ -1259,9 +1268,16 @@ HARD RULES:
    - uncertain: EXACTLY 4 areas where evidence is conflicting or low-quality. Each: {point, searchQuery} same format.
    - gaps: EXACTLY 4 genuine research gaps. Each: {gap, why}, where why briefly explains why the gap matters clinically.
    - suggestedQuestions: EXACTLY 4 answerable PICO-format research questions targeting the most important gaps. Each: {question, rationale}.
+      STRICT PICO SEPARATION: Each question must strictly separate Population (P), Intervention (I), Comparator (C), and Outcome (O).
+      Format: "In [Population/Condition ONLY] (P), does [Intervention ONLY] (I) compared with [Comparator ONLY] (C) [Verb Phrase] [Outcome ONLY] (O)?"
+      MANDATORY:
+      - (P) must contain ONLY the patient population (e.g. "${scenario.population}"). NEVER put intervention or comparator into (P).
+      - (I) must contain ONLY the evaluated intervention (e.g. "${scenario.intervention}").
+      - (C) must contain ONLY the comparison arm (e.g. "${scenario.comparator}").
+      - (O) must contain ONLY the clinical endpoint.
 3. Claim-strength calibration:
-   - known may contain ONLY settled knowledge. Phrase every claim to match the strength of the evidence: use hedged, association-style wording ("is associated with", "the evidence shows", "meta-analyses support") unless multiple consistent high-level studies establish the effect, in which case stronger wording ("reduces", "increases") is acceptable. NEVER use absolute or definitive causal language ("is proven to", "demonstrably causes", "guaranteed") unless supported by multiple consistent high-level studies.
-   - uncertain must state WHY the evidence conflicts or is low-quality (heterogeneous populations, small samples, inconsistent endpoints).
+    - known may contain ONLY settled knowledge. Phrase every claim to match the strength of the evidence: use hedged, association-style wording ("is associated with", "the evidence shows", "meta-analyses support") unless multiple consistent high-level studies establish the effect, in which case stronger wording ("reduces", "increases") is acceptable. NEVER use absolute or definitive causal language ("is proven to", "demonstrably causes", "guaranteed") unless supported by multiple consistent high-level studies.
+    - uncertain must state WHY the evidence conflicts or is low-quality (heterogeneous populations, small samples, inconsistent endpoints).
 4. Reference integrity: the 8 evidence points must each carry a DISTINCT searchQuery targeting its own claim. Do not present study protocols, trial registrations, or conference abstracts as evidence of clinical effect.
 
 Respond ONLY with valid JSON, no preamble or commentary.`,
@@ -1297,12 +1313,7 @@ Respond ONLY with valid JSON, no preamble or commentary.`,
           : [];
 
       if (!Array.isArray(gapAnalysis.suggestedQuestions) || gapAnalysis.suggestedQuestions.length === 0) {
-        const logic = rationalOutcomes(String(topic), gapAnalysis.specialty as keyof typeof KB | null);
-        const outcomes = [logic.primary, ...logic.alternatives.filter(o => o !== logic.primary)].slice(0, 4);
-        gapAnalysis.suggestedQuestions = outcomes.map(o => ({
-          question: `In women affected by ${topic} (P), does the intervention of interest compared with standard care or placebo (C) improve ${o} (O)?`,
-          rationale: `Most patient-centered outcome for this topic - ${logic.rationale}`
-        }));
+        gapAnalysis.suggestedQuestions = scenario.suggestedQuestions;
       }
       interface RawGapItem { gap?: unknown; why?: unknown }
       interface RawSuggestion { question?: unknown; rationale?: unknown }
@@ -1318,12 +1329,29 @@ Respond ONLY with valid JSON, no preamble or commentary.`,
         gapAnalysis.gaps = [{ gap: "Primary evidence gap under investigation", why: "Confirm specific gaps with a focused literature review." }];
       }
       if (Array.isArray(gapAnalysis.suggestedQuestions)) {
-        gapAnalysis.suggestedQuestions = gapAnalysis.suggestedQuestions
+        const sqList: Array<{ question: string; rationale: string }> = gapAnalysis.suggestedQuestions
           .map((s: RawSuggestion) => ({
             question: fixTerms(String(s?.question || "")).replace(/\s+/g, " ").trim(),
             rationale: fixTerms(String(s?.rationale || "")).replace(/\s+/g, " ").trim()
           }))
           .filter(s => s.question.length > 0);
+
+        // Sanity check: Ensure strict PICO separation and no mixing of P, I, C
+        const isMalformed = (sq: { question: string }) => {
+          const q = sq.question;
+          if (!q.includes("(P)") || !q.includes("(I)") || !q.includes("(C)")) return true;
+          const pMatch = q.match(/In\s+(.+?)\s+\(P\)/i);
+          if (!pMatch) return true;
+          const pText = pMatch[1].toLowerCase();
+          // Detect if comma-separated tags or intervention words contaminated Population
+          if (pText.includes(",") || pText.includes(scenario.intervention.toLowerCase()) || pText.includes(scenario.comparator.toLowerCase())) {
+            return true;
+          }
+          return false;
+        };
+
+        const hasMalformed = sqList.length < 4 || sqList.some(isMalformed);
+        gapAnalysis.suggestedQuestions = hasMalformed ? scenario.suggestedQuestions : sqList;
       }
       gapAnalysis.gaps = (Array.isArray(gapAnalysis.gaps) ? gapAnalysis.gaps : []).slice(0, 4);
       gapAnalysis.suggestedQuestions = (Array.isArray(gapAnalysis.suggestedQuestions) ? gapAnalysis.suggestedQuestions : []).slice(0, 4);

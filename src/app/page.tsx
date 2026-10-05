@@ -124,7 +124,7 @@ export default function Home() {
     sset(KEYS.input, toSessionInput(current, input));
     sset(KEYS.inputText, sessionSearchText(toSessionInput(current, input)));
     sset(KEYS.mode, mode);
-    router.push(mode === "gap" ? "/gap" : "/question");
+    router.push("/gap");
   };
 
   return (
@@ -225,7 +225,7 @@ export default function Home() {
 
           <div className="row">
             <button className="primary" onClick={start} disabled={!input.trim() || !canSubmit}>
-              {mode === "formulate" ? "🔍 Start formulation →" : "🗺 Map the evidence →"}
+              {mode === "formulate" ? "🔍 Map Evidence & Formulate PICO →" : "🗺 Map the evidence →"}
             </button>
           </div>
         </section>

@@ -36,6 +36,7 @@ export default function QuestionPage() {
   const [recommendedId, setRecommendedId] = useState<string>("");
   const [recommendedRationale, setRecommendedRationale] = useState<string>("");
   const [selectedOutcome, setSelectedOutcome] = useState<string>("");
+  const [customOutcome, setCustomOutcome] = useState<string>("");
   const [busy, setBusy] = useState<"loading" | "formulate" | null>("loading");
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -331,8 +332,8 @@ export default function QuestionPage() {
                 onClick={() => selectedOutcome && proceedToCommentary(selectedOutcome)}
               >
                 {selectedOutcome
-                  ? `Generate Full Scientific Commentary Paper with "${selectedOutcome}" ➜`
-                  : "Click an outcome above to continue ➜"}
+                  ? `Continue to Scientific Commentary with "${selectedOutcome}" ➜`
+                  : "Click an outcome card above to continue ➜"}
               </button>
             </div>
 
@@ -341,6 +342,40 @@ export default function QuestionPage() {
                 ? `Selected outcome: "${selectedOutcome}". Click above to immediately generate your Step 4 Scientific Commentary Paper.`
                 : "Select one outcome card above to proceed."}
             </p>
+
+            <div style={{ marginTop: 24, paddingTop: 18, borderTop: "1px solid var(--border, #e2e8f0)" }}>
+              <h4 style={{ margin: "0 0 8px 0", fontSize: "0.95rem", color: "var(--text-muted, #64748b)" }}>
+                ✏️ Or Enter a Custom Outcome (Optional)
+              </h4>
+              <p className="hint" style={{ marginBottom: 10 }}>
+                If you prefer an endpoint not listed in the cards above, type it below and click Continue.
+              </p>
+              <div className="row" style={{ gap: 10, alignItems: "center" }}>
+                <input
+                  className="free-input"
+                  type="text"
+                  aria-label="Custom clinical outcome"
+                  value={customOutcome}
+                  onChange={(e) => setCustomOutcome(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && customOutcome.trim()) {
+                      e.preventDefault();
+                      proceedToCommentary(customOutcome.trim());
+                    }
+                  }}
+                  placeholder="e.g., spontaneous preterm birth before 32 weeks, neonatal ICU stay..."
+                  style={{ flex: 1, padding: "10px 14px" }}
+                />
+                <button
+                  className="secondary"
+                  style={{ whiteSpace: "nowrap", padding: "10px 18px" }}
+                  disabled={!customOutcome.trim() || !!busy}
+                  onClick={() => customOutcome.trim() && proceedToCommentary(customOutcome.trim())}
+                >
+                  Continue with Custom Outcome ➜
+                </button>
+              </div>
+            </div>
           </section>
         )}
 

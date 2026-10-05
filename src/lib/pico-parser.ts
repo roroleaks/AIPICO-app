@@ -1,4 +1,5 @@
 import { KB, type SpecialtyKey } from "./kb.ts";
+import { parseClinicalScenario } from "./clinical-semantics.ts";
 
 export interface ExtractedPico {
   condition: string;
@@ -205,6 +206,18 @@ export function extractPicoFromQuestion(
   if (!outcome || outcome.length < 2) {
     const specKB = KB[specialty];
     outcome = specKB.outcomesRanked[0] || "primary clinical outcome";
+  }
+
+  // Guarantee condition does not contain comma-separated lists or mixed interventions
+  if (condition.includes(",") || condition.split(/\s+/).length > 5) {
+    const scenario = parseClinicalScenario(`${condition} ${topic}`);
+    condition = scenario.population;
+    if (!intervention || intervention === "evaluated clinical intervention") {
+      intervention = scenario.intervention;
+    }
+    if (!comparator || comparator === "standard care / placebo") {
+      comparator = scenario.comparator;
+    }
   }
 
   // Clean formatted question
