@@ -39,15 +39,44 @@ export default function QuestionPage() {
    * alone. On "fibroids, hysterectomy, menstrual blood loss, haemoglobin" that surfaced
    * "Patient-reported pain reduction" instead of "Menstrual blood loss reduction".
    */
+  function getLiteratureKeywords(): string[] {
+    const gapSnapshot = sget<{
+      topic?: string;
+      known?: Array<{ point?: string; references?: Array<{ title?: string }> }>;
+      uncertain?: Array<{ point?: string; references?: Array<{ title?: string }> }>;
+      gaps?: Array<{ gap?: string }>;
+    }>(KEYS.gap);
+    const kw: string[] = [];
+    if (gapSnapshot) {
+      if (gapSnapshot.topic) kw.push(gapSnapshot.topic);
+      if (Array.isArray(gapSnapshot.known)) {
+        gapSnapshot.known.forEach(k => {
+          if (k?.point) kw.push(k.point);
+          if (Array.isArray(k?.references)) {
+            k.references.forEach(r => { if (r?.title) kw.push(r.title); });
+          }
+        });
+      }
+      if (Array.isArray(gapSnapshot.uncertain)) {
+        gapSnapshot.uncertain.forEach(u => {
+          if (u?.point) kw.push(u.point);
+          if (Array.isArray(u?.references)) {
+            u.references.forEach(r => { if (r?.title) kw.push(r.title); });
+          }
+        });
+      }
+      if (Array.isArray(gapSnapshot.gaps)) {
+        gapSnapshot.gaps.forEach(g => { if (g?.gap) kw.push(g.gap); });
+      }
+    }
+    return kw;
+  }
+
   function originalQuestionText(): string {
     return sget<string>(KEYS.inputText) || sget<string>(KEYS.question) || "";
   }
 
   useEffect(() => { analysisRef.current = analysis; }, [analysis]);
-
-  // Pure and cheap: drives the counter and keeps the submit label honest about a typed outcome
-  // that would be refused on submit.
-  const freeTextOk = !!freeText.trim() && validateFreeTextOutcome(freeText).ok;
 
   interface RawClarify {
     done?: unknown;
@@ -70,10 +99,7 @@ export default function QuestionPage() {
     let outcomeSelection: OutcomeSelectionResponse | undefined;
 
     if (!done && field === "outcome") {
-      // The shared selector is the single source of truth on both sides. When the server sent a
-      // validated selection it is used; when it sent nothing usable, the same function is called
-      // here with the same context so an offline or malformed response still offers options that
-      // belong to this question instead of a generic chip list.
+      const literatureKw = getLiteratureKeywords();
       const selection = parseOutcomeSelectionResponse(c?.outcomeSelection, buildOutcomeContext(
         {
           specialty: a.specialty,
@@ -83,7 +109,7 @@ export default function QuestionPage() {
           questionType: a.questionType
         },
         {},
-        { originalInput: originalQuestionText(), population: a.condition }
+        { originalInput: originalQuestionText(), population: a.condition, keywords: literatureKw }
       ));
       outcomeSelection = selection.response;
       options = outcomeSelection.options.map(o => o.label);
@@ -99,20 +125,15 @@ export default function QuestionPage() {
       field: done ? null : field,
       questionText: typeof c?.questionText === "string" && c.questionText ? c.questionText : "Please specify:",
       options,
-      allowFreeText: true,
+      allowFreeText: false,
       source: c?.source === "ai" ? "ai" : c?.source === "hybrid" ? "hybrid" : "rules",
       rationale,
       outcomeSelection
     };
   }, []);
 
-  /**
-   * Builds a complete outcome clarification locally.
-   *
-   * Used where the flow deliberately overrides the server's field, so the screen keeps the ranked
-   * selection rather than dropping back to a flat label list.
-   */
   const outcomeClarify = useCallback((a: Analysis, questionText: string): Clarification => {
+    const literatureKw = getLiteratureKeywords();
     const selection = selectOutcomes(buildOutcomeContext(
       {
         specialty: a.specialty,
@@ -122,14 +143,14 @@ export default function QuestionPage() {
         questionType: a.questionType
       },
       {},
-      { originalInput: originalQuestionText(), population: a.condition }
+      { originalInput: originalQuestionText(), population: a.condition, keywords: literatureKw }
     ));
     return {
       done: false,
       field: "outcome",
       questionText,
       options: selection.options.map(o => o.label),
-      allowFreeText: true,
+      allowFreeText: false,
       source: selection.source,
       rationale: selection.recommendedOutcome.rationale,
       outcomeSelection: selection
@@ -291,24 +312,9 @@ export default function QuestionPage() {
     }
   }, [answered, runClarifyLoop, chatLog]);
 
-  const submitSelectedOutcomes = useCallback(() => {
-    const extra = freeText.trim();
-    // The 2-outcome cap must also cover free text, otherwise the button says
-    // "2 outcome(s)" while submitting three.
-    const typed = extra ? validateFreeTextOutcome(extra) : null;
-    if (typed && !typed.ok) {
-      setFreeTextError(typed.reason);
-      return;
-    }
-    const maxPick = 2;
-    const vals = Array.from(new Set([
-      ...selectedOutcomes,
-      ...(typed && typed.ok ? [typed.value] : [])
-    ])).slice(0, maxPick);
+  const submitSelectedOutcomes = useCallback((overrideVals?: string[]) => {
+    const vals = (overrideVals && overrideVals.length ? overrideVals : selectedOutcomes).slice(0, 2);
     if (!vals.length) return;
-    // The full sanitized label is stored, not the short display form: downstream search and
-    // evidence steps read this key, and a truncated "Neonatal intensive care adm…" would degrade
-    // the PubMed query built from it.
     sset(KEYS.outcomes, vals);
     if (typeof window !== "undefined") {
       window.sessionStorage.removeItem(KEYS.commentary);
@@ -317,7 +323,7 @@ export default function QuestionPage() {
     setFreeTextError(null);
     setSelectedOutcomes([]);
     answer("outcome", vals.join(" and "));
-  }, [selectedOutcomes, freeText, answer]);
+  }, [selectedOutcomes, answer]);
 
   useEffect(() => {
     const question = sget<string>(KEYS.question);
@@ -418,10 +424,13 @@ export default function QuestionPage() {
                                     onClick={() => {
                                       setSelectedOutcomes(prev =>
                                         prev.includes(o) ? prev.filter(x => x !== o)
-                                          : prev.length >= maxPick ? prev : [...prev, o]);
+                                          : prev.length >= maxPick ? [o] : [...prev, o]);
                                     }}
                                   >
-                                    <span className="outcome-chip-label">{o}</span>
+                                    <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
+                                      <span className="outcome-chip-label">{o}</span>
+                                      {sel && <span style={{ fontWeight: 700, fontSize: "0.85rem", color: "inherit" }}>✓ Selected</span>}
+                                    </div>
                                     <span className="outcome-chip-meta">
                                       {recommended && <span className="outcome-badge">Recommended</span>}
                                       {detail && <span className="outcome-category">{detail.category.replace(/-/g, " ")}</span>}
@@ -432,32 +441,26 @@ export default function QuestionPage() {
                               })}
                             </div>
                             {selection && (
-                              <p className="hint" style={{ marginTop: 10 }}>
-                                💡 {selection.recommendedOutcome.rationale}
+                              <p className="hint" style={{ marginTop: 12 }}>
+                                💡 <b>Evidence Grounding:</b> {selection.recommendedOutcome.rationale}
                               </p>
                             )}
-                            <div className="row" style={{ marginTop: 10 }}>
-                              <input
-                                className="free-input"
-                                value={freeText}
-                                aria-label="Add your own outcome"
-                                aria-invalid={!!freeTextError}
-                                aria-describedby={freeTextError ? "free-text-error" : undefined}
-                                onChange={e => { setFreeText(e.target.value); setFreeTextError(null); }}
-                                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); submitSelectedOutcomes(); } }}
-                                placeholder="Or type another outcome…"
-                              />
-                              <button className="primary"
-                                disabled={!selectedOutcomes.length && !freeText.trim()}
-                                onClick={submitSelectedOutcomes}>
-                                Continue with {Math.min(selectedOutcomes.length + (freeTextOk ? 1 : 0), maxPick)} outcome(s) ➜
+                            <div className="row" style={{ marginTop: 14 }}>
+                              <button
+                                className="primary"
+                                style={{ padding: "12px 28px", fontSize: "1rem" }}
+                                disabled={!selectedOutcomes.length}
+                                onClick={() => submitSelectedOutcomes()}
+                              >
+                                {selectedOutcomes.length
+                                  ? `Continue to Scientific Commentary with "${selectedOutcomes[0]}" ➜`
+                                  : "Choose an outcome above to continue ➜"}
                               </button>
                             </div>
-                            {freeTextError && <p id="free-text-error" className="hint outcome-error" role="alert">{freeTextError}</p>}
-                            <p className="hint" style={{ marginTop: 6 }} aria-live="polite">
-                              {atMax
-                                ? `Maximum of ${maxPick} outcomes reached — deselect one to choose another.`
-                                : `Pick up to ${maxPick} outcomes — the commentary will be written to match them.`}
+                            <p className="hint" style={{ marginTop: 8 }} aria-live="polite">
+                              {selectedOutcomes.length
+                                ? `Selected: ${selectedOutcomes.join(", ")}. Click above to proceed to Step 4.`
+                                : `Select one of the ${clarification.options.length} literature-derived outcomes above to generate your scientific commentary.`}
                             </p>
                           </>
                         );
@@ -465,6 +468,7 @@ export default function QuestionPage() {
                     </>
                   ) : (
                     <>
+                      <p className="hint">{clarification.questionText}</p>
                       <div className="chips">
                         {clarification.options.map(o => (
                           <button key={o} className="chip" onClick={() => {
@@ -473,19 +477,21 @@ export default function QuestionPage() {
                           }}>{o}</button>
                         ))}
                       </div>
-                      <div className="row" style={{ marginTop: 10 }}>
-                        <input
-                          className="free-input"
-                          value={freeText}
-                          onChange={e => setFreeText(e.target.value)}
-                          onKeyDown={e => { if (e.key === "Enter" && freeText.trim()) answer(clarification.field || "outcome", freeText.trim()); }}
-                          placeholder="Or type your own answer…"
-                        />
-                        <button className="primary" disabled={!freeText.trim()}
-                          onClick={() => answer(clarification.field || "outcome", freeText.trim())}>
-                          Answer ➜
-                        </button>
-                      </div>
+                      {(!clarification.options || clarification.options.length === 0) && (
+                        <div className="row" style={{ marginTop: 10 }}>
+                          <input
+                            className="free-input"
+                            value={freeText}
+                            onChange={e => setFreeText(e.target.value)}
+                            onKeyDown={e => { if (e.key === "Enter" && freeText.trim()) answer(clarification.field || "outcome", freeText.trim()); }}
+                            placeholder="Type your answer…"
+                          />
+                          <button className="primary" disabled={!freeText.trim()}
+                            onClick={() => answer(clarification.field || "outcome", freeText.trim())}>
+                            Answer ➜
+                          </button>
+                        </div>
+                      )}
                     </>
                   )}
                 </>

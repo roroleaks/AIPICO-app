@@ -42,7 +42,7 @@ function sessionInputSnapshot(): ClinicalInput | null {
   return cachedValue;
 }
 const serverSnapshot = (): null => null;
-const serverModeSnapshot = (): "formulate" => "formulate";
+const serverModeSnapshot = (): "gap" => "gap";
 const subscribeToNothing = () => () => {};
 // Stable empty array so the memoized parse is not recomputed on every render.
 const EMPTY_DECISIONS: CorrectionRecord[] = [];
@@ -50,9 +50,9 @@ const EMPTY_DECISIONS: CorrectionRecord[] = [];
 // must be read through the same snapshot path or the first client render differs from the
 // server HTML when the stored mode is "gap".
 let cachedModeRaw: string | null = null;
-let cachedModeValue: "formulate" | "gap" = "formulate";
+let cachedModeValue: "formulate" | "gap" = "gap";
 function sessionModeSnapshot(): "formulate" | "gap" {
-  if (typeof window === "undefined") return "formulate";
+  if (typeof window === "undefined") return "gap";
   let raw: string | null = null;
   try {
     raw = window.sessionStorage.getItem(KEYS.mode);
@@ -61,7 +61,7 @@ function sessionModeSnapshot(): "formulate" | "gap" {
   }
   if (raw !== cachedModeRaw) {
     cachedModeRaw = raw;
-    cachedModeValue = raw === "gap" ? "gap" : "formulate";
+    cachedModeValue = raw === "formulate" ? "formulate" : "gap";
   }
   return cachedModeValue;
 }
