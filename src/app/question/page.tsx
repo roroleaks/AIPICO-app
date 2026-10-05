@@ -1,51 +1,47 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatedProcessingIndicator } from "@/components/AnimatedProcessingIndicator";
-import { rationalOutcomes, type Analysis, type Clarification, type Formulation } from "@/lib/kb";
+import { KB, rationalOutcomes, type Analysis, type Formulation } from "@/lib/kb";
 import {
   buildOutcomeContext,
-  parseOutcomeSelectionResponse,
   selectOutcomes,
-  validateFreeTextOutcome,
   type OutcomeSelectionResponse
 } from "@/lib/outcome-selection";
 import { sget, sset, KEYS } from "@/lib/session";
 import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
+import { extractPicoFromQuestion, type ExtractedPico } from "@/lib/pico-parser";
+
+interface GapSnapshot {
+  topic?: string;
+  specialty?: string;
+  known?: Array<{ point?: string; references?: Array<{ title?: string }> }>;
+  uncertain?: Array<{ point?: string; references?: Array<{ title?: string }> }>;
+  gaps?: Array<{ gap?: string }>;
+  suggestedQuestions?: Array<{ question: string; rationale: string }>;
+}
+
+interface RenderedOutcome {
+  id: string;
+  label: string;
+  category: string;
+  rationale: string;
+}
 
 export default function QuestionPage() {
   const router = useRouter();
-  const [analysis, setAnalysis] = useState<Analysis | null>(null);
-  const [answered, setAnswered] = useState<Record<string, string>>({});
-  const [clarification, setClarification] = useState<Clarification | null>(null);
-  const [chatLog, setChatLog] = useState<{ q?: string; a?: string }[]>([]);
-  const [freeText, setFreeText] = useState("");
-  const [selectedOutcomes, setSelectedOutcomes] = useState<string[]>([]);
-  const [freeTextError, setFreeTextError] = useState<string | null>(null);
+  const [extractedPico, setExtractedPico] = useState<ExtractedPico | null>(null);
+  const [outcomeOptions, setOutcomeOptions] = useState<RenderedOutcome[]>([]);
+  const [recommendedId, setRecommendedId] = useState<string>("");
+  const [recommendedRationale, setRecommendedRationale] = useState<string>("");
+  const [selectedOutcome, setSelectedOutcome] = useState<string>("");
+  const [busy, setBusy] = useState<"loading" | "formulate" | null>("loading");
   const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>("intent");
-  const analysisRef = useRef<Analysis | null>(null);
 
-  const gapPath = useMemo(() => { try { return !!sget<unknown>(KEYS.gap); } catch { return false; } }, []);
-
-  /**
-   * What the clinician actually typed, for the outcome selector.
-   *
-   * The landing page stores the entry under `KEYS.inputText`; only the gap flow writes
-   * `KEYS.question`. Reading `KEYS.question` alone therefore handed the selector an empty string on
-   * the main path, so the keywords the clinician typed were dropped before scoring and the
-   * recommendation fell back to whichever generic patient-important outcome matched the condition
-   * alone. On "fibroids, hysterectomy, menstrual blood loss, haemoglobin" that surfaced
-   * "Patient-reported pain reduction" instead of "Menstrual blood loss reduction".
-   */
-  function getLiteratureKeywords(): string[] {
-    const gapSnapshot = sget<{
-      topic?: string;
-      known?: Array<{ point?: string; references?: Array<{ title?: string }> }>;
-      uncertain?: Array<{ point?: string; references?: Array<{ title?: string }> }>;
-      gaps?: Array<{ gap?: string }>;
-    }>(KEYS.gap);
+  // Collect literature keywords from Step 2 evidence map
+  const getLiteratureKeywords = useCallback((): string[] => {
+    const gapSnapshot = sget<GapSnapshot>(KEYS.gap);
     const kw: string[] = [];
     if (gapSnapshot) {
       if (gapSnapshot.topic) kw.push(gapSnapshot.topic);
@@ -70,94 +66,9 @@ export default function QuestionPage() {
       }
     }
     return kw;
-  }
-
-  function originalQuestionText(): string {
-    return sget<string>(KEYS.inputText) || sget<string>(KEYS.question) || "";
-  }
-
-  useEffect(() => { analysisRef.current = analysis; }, [analysis]);
-
-  interface RawClarify {
-    done?: unknown;
-    field?: unknown;
-    questionText?: unknown;
-    options?: unknown;
-    source?: unknown;
-    outcomeSelection?: unknown;
-  }
-
-  const normalizeClarify = useCallback((c: RawClarify, a: Analysis): Clarification => {
-    const done = c?.done === true || String(c?.done ?? "").toLowerCase() === "true";
-    const field = typeof c?.field === "string" && c.field ? c.field : "outcome";
-    const rawOptions = Array.isArray(c?.options)
-      ? c.options.filter((o): o is string => typeof o === "string" && o.trim().length > 0)
-      : [];
-    // De-duplicate: a repeated option would collide as a React key.
-    let options = Array.from(new Set(rawOptions.map(o => o.trim())));
-    let rationale: string | undefined;
-    let outcomeSelection: OutcomeSelectionResponse | undefined;
-
-    if (!done && field === "outcome") {
-      const literatureKw = getLiteratureKeywords();
-      const selection = parseOutcomeSelectionResponse(c?.outcomeSelection, buildOutcomeContext(
-        {
-          specialty: a.specialty,
-          condition: a.condition,
-          intervention: a.intervention,
-          comparator: a.comparator,
-          questionType: a.questionType
-        },
-        {},
-        { originalInput: originalQuestionText(), population: a.condition, keywords: literatureKw }
-      ));
-      outcomeSelection = selection.response;
-      options = outcomeSelection.options.map(o => o.label);
-      rationale = outcomeSelection.recommendedOutcome.rationale;
-    } else if (!options.length && !done) {
-      const logic = rationalOutcomes(a.condition, a.specialty);
-      options = [logic.primary, ...logic.alternatives.filter(o => o !== logic.primary)].slice(0, 6);
-      rationale = logic.rationale;
-    }
-
-    return {
-      done,
-      field: done ? null : field,
-      questionText: typeof c?.questionText === "string" && c.questionText ? c.questionText : "Please specify:",
-      options,
-      allowFreeText: false,
-      source: c?.source === "ai" ? "ai" : c?.source === "hybrid" ? "hybrid" : "rules",
-      rationale,
-      outcomeSelection
-    };
   }, []);
 
-  const outcomeClarify = useCallback((a: Analysis, questionText: string): Clarification => {
-    const literatureKw = getLiteratureKeywords();
-    const selection = selectOutcomes(buildOutcomeContext(
-      {
-        specialty: a.specialty,
-        condition: a.condition,
-        intervention: a.intervention,
-        comparator: a.comparator,
-        questionType: a.questionType
-      },
-      {},
-      { originalInput: originalQuestionText(), population: a.condition, keywords: literatureKw }
-    ));
-    return {
-      done: false,
-      field: "outcome",
-      questionText,
-      options: selection.options.map(o => o.label),
-      allowFreeText: false,
-      source: selection.source,
-      rationale: selection.recommendedOutcome.rationale,
-      outcomeSelection: selection
-    };
-  }, []);
-
-  const finishAndGo = useCallback((f: Formulation, ans: Record<string, string>) => {
+  const finishAndGo = useCallback((f: Formulation, chosenOutcome: string) => {
     const str = (v: unknown): string => (typeof v === "string" ? v : "");
     const normElement = (v: unknown): { label: string; value: string } | null => {
       const o = v as { label?: unknown; value?: unknown };
@@ -190,6 +101,7 @@ export default function QuestionPage() {
       }
       return "";
     };
+
     f.scores = Array.isArray(f.scores)
       ? f.scores.map(normScore).filter((s): s is { name: string; value: number } => !!s) : [];
     if (!f.scores.length) f.scores = [{ name: "Overall", value: 15 }];
@@ -199,179 +111,165 @@ export default function QuestionPage() {
       ? f.advisories.map(normAdvisory).filter(Boolean) : [];
     f.variants = Array.isArray(f.variants)
       ? f.variants.map(normVariant).filter((v): v is { question: string; rationale: string } => !!v) : [];
+
     sset(KEYS.formulation, f);
-    sset("cq_outcome", ans.outcome || "");
+    sset(KEYS.outcomes, [chosenOutcome]);
+    sset("cq_outcome", chosenOutcome);
     if (typeof window !== "undefined") {
       window.sessionStorage.removeItem(KEYS.commentary);
     }
     router.push("/paper");
   }, [router]);
 
-  const formulate = useCallback(async (a: Analysis, ans: Record<string, string>) => {
+  // Formulate PICO and navigate immediately to Step 4
+  const proceedToCommentary = useCallback(async (chosenOutcome: string) => {
+    if (!extractedPico || !chosenOutcome) return;
     setBusy("formulate");
-    let f: Formulation | null = null;
-    // A 400 that names missing PICO elements is the server refusing to fabricate a clinical
-    // question (F-05). Falling through to a local ruleFormulate would recompute exactly the
-    // placeholder we just rejected, so resume clarification for the element it names instead.
-    let resume: { field: string; questionText: string } | null = null;
-    try {
-      try {
-        const res = await fetch("/api/engine", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ stage: "formulate", analysis: a, answered: ans })
-        });
-        const parsed = await res.json();
-        if (parsed && parsed.finalQuestion && !parsed.error) f = parsed;
-        else if (parsed && parsed.error && parsed.field) {
-          resume = { field: parsed.field, questionText: parsed.questionText || "Please clarify." };
-        }
-      } catch {}
-      if (resume) {
-        setSelectedOutcomes([]);
-        setClarification({
-          done: false, field: resume.field, questionText: resume.questionText,
-          options: [], allowFreeText: true, source: "rules"
-        });
-        setChatLog(prev => [...prev, { q: resume!.questionText }]);
-        setBusy(null);
-        return;
-      }
-      if (!f) {
-        const { ruleFormulate } = await import("@/lib/rule-engine");
-        f = ruleFormulate(a, ans);
-      }
-      if (!f.finalQuestion) {
-        // The local fallback refused too. Ask for whatever it says is missing rather than
-        // rendering an empty question card.
-        const field = f.missingElements?.[0] || "condition";
-        const questionText = field === "intervention"
-          ? "What intervention are you considering?"
-          : "What is the clinical problem or population?";
-        setSelectedOutcomes([]);
-        setClarification({ done: false, field, questionText, options: [], allowFreeText: true, source: "rules" });
-        setChatLog(prev => [...prev, { q: questionText }]);
-        setBusy(null);
-        return;
-      }
-      finishAndGo(f, ans);
-    } catch {
-      const { ruleFormulate } = await import("@/lib/rule-engine");
-      finishAndGo(ruleFormulate(a, ans), ans);
-    }
-  }, [finishAndGo]);
 
-  const runClarifyLoop = useCallback(async (a: Analysis, ans: Record<string, string>, log: { q?: string; a?: string }[]) => {
-    setBusy("clarify");
-    let raw: RawClarify | null = null;
+    const a: Analysis = {
+      specialty: extractedPico.specialty,
+      specialtyLabel: KB[extractedPico.specialty].label,
+      condition: extractedPico.condition,
+      intervention: extractedPico.intervention,
+      comparator: extractedPico.comparator,
+      questionType: "Therapy / Prevention",
+      framework: "PICO",
+      missing: [],
+      interpretation: `PICO targeting ${extractedPico.condition} with ${extractedPico.intervention} vs ${extractedPico.comparator}`,
+      source: "rules"
+    };
+
+    const ans: Record<string, string> = {
+      condition: extractedPico.condition,
+      intervention: extractedPico.intervention,
+      comparator: extractedPico.comparator,
+      outcome: chosenOutcome
+    };
+
+    const { ruleFormulate } = await import("@/lib/rule-engine");
+    let f: Formulation = ruleFormulate(a, ans);
+
     try {
       const res = await fetch("/api/engine", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stage: "clarify", analysis: a, answered: ans })
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stage: "formulate",
+          analysis: a,
+          answered: ans,
+          selectedQuestion: extractedPico.cleanQuestion
+        }),
+        signal: AbortSignal.timeout(8000)
       });
-      raw = await res.json();
-    } catch {}
-    if (!raw) {
-      const { ruleClarify } = await import("@/lib/rule-engine");
-      raw = ruleClarify(a, ans);
-      setNotice("AI is busy — continuing in offline mode.");
+      if (res.ok) {
+        const parsed = await res.json();
+        if (parsed && parsed.finalQuestion && !parsed.error) {
+          f = parsed;
+        }
+      }
+    } catch {
+      // ruleFormulate fallback is already complete and verified
     }
-    const nc = normalizeClarify(raw, a);
-    if (gapPath && log.length === 0) {
-      Object.assign(nc, outcomeClarify(a, "Which outcomes should the evidence commentary target?"));
-    } else if (log.length >= 1) { nc.done = true; nc.field = null; }
-    if (nc.done && log.length === 0) {
-      Object.assign(nc, outcomeClarify(a, "What is your primary clinical outcome of interest?"));
-    }
-    setSelectedOutcomes([]);
-    setFreeTextError(null);
-    setClarification(nc);
-    setBusy(null);
-    if (nc.done) {
-      await formulate(a, ans);
-    } else {
-      setChatLog([...log, { q: nc.questionText }]);
-    }
-  }, [formulate, normalizeClarify, outcomeClarify, gapPath]);
 
-  const answer = useCallback(async (field: string, value: string) => {
-    try {
-      if (!field || !value) return;
-      const base = analysisRef.current;
-      if (!base) { setNotice("Session lost — please go back to Step 1."); return; }
-      const ans = { ...answered, [field]: value };
-      setAnswered(ans);
-      // Build the log once and pass that same value onward. Passing the stale
-      // `chatLog` closure made runClarifyLoop overwrite the just-recorded answer.
-      const nextLog = chatLog.length
-        ? [...chatLog.slice(0, -1), { ...chatLog[chatLog.length - 1], a: value }]
-        : chatLog;
-      setChatLog(nextLog);
-      await runClarifyLoop(base, ans, nextLog);
-    } catch (e) {
-      setNotice(`Answer failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }, [answered, runClarifyLoop, chatLog]);
-
-  const submitSelectedOutcomes = useCallback((overrideVals?: string[]) => {
-    const vals = (overrideVals && overrideVals.length ? overrideVals : selectedOutcomes).slice(0, 2);
-    if (!vals.length) return;
-    sset(KEYS.outcomes, vals);
-    if (typeof window !== "undefined") {
-      window.sessionStorage.removeItem(KEYS.commentary);
-    }
-    setFreeText("");
-    setFreeTextError(null);
-    setSelectedOutcomes([]);
-    answer("outcome", vals.join(" and "));
-  }, [selectedOutcomes, answer]);
+    finishAndGo(f, chosenOutcome);
+  }, [extractedPico, finishAndGo]);
 
   useEffect(() => {
     const question = sget<string>(KEYS.question);
-    // Prefer the normalized keyword string written at Step 1; fall back to the structured
-    // payload (and finally to a legacy raw string) so older sessions still resolve.
+    const gapSnapshot = sget<GapSnapshot>(KEYS.gap);
     const normalized = sget<string>(KEYS.inputText);
     const stored = readSessionInput(sget<unknown>(KEYS.input));
-    const text = question || normalized || (stored ? sessionSearchText(stored) : "");
-    if (!text) { router.replace("/"); return; }
-    (async () => {
-      let a: Analysis | null = null;
-      try {
-        const res = await fetch("/api/engine", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ stage: "intent", input: text })
-        });
-        a = await res.json();
-      } catch {}
-      if (!a || !a.specialty) {
-        const { ruleAnalyze } = await import("@/lib/rule-engine");
-        a = ruleAnalyze(text);
-        if (!a.specialty) {
-          setNotice("This could not be mapped to an Obstetrics & Gynecology context. Go back and rephrase.");
-          setBusy(null);
-          return;
-        }
-        setNotice("AI busy — offline mode.");
+    const fallbackText = question
+      || gapSnapshot?.suggestedQuestions?.[0]?.question
+      || normalized
+      || (stored ? sessionSearchText(stored) : "");
+
+    if (!fallbackText) {
+      router.replace("/");
+      return;
+    }
+
+    // Extract guaranteed P, I, C, O elements from selected PICO question and evidence map
+    const pico = extractPicoFromQuestion(
+      fallbackText,
+      gapSnapshot?.topic || normalized || "",
+      gapSnapshot?.specialty as any
+    );
+    setExtractedPico(pico);
+
+    // Build literature-grounded outcome options
+    const literatureKw = getLiteratureKeywords();
+    const context = buildOutcomeContext(
+      {
+        specialty: pico.specialty,
+        condition: pico.condition,
+        intervention: pico.intervention,
+        comparator: pico.comparator,
+        questionType: "Therapy / Prevention"
+      },
+      {},
+      {
+        originalInput: normalized || gapSnapshot?.topic || fallbackText,
+        population: pico.condition,
+        keywords: literatureKw
       }
-      setAnalysis(a);
-      analysisRef.current = a;
-      await runClarifyLoop(a, {}, []);
-    })();
-  }, [router, runClarifyLoop]);
+    );
+
+    const selection = selectOutcomes(context);
+    let options: RenderedOutcome[] = selection.options.map(o => ({
+      id: o.id,
+      label: o.label,
+      category: o.category,
+      rationale: o.rationale
+    }));
+
+    // Ensure 4 to 6 options are present
+    if (options.length < 4) {
+      const ranked = KB[pico.specialty].outcomesRanked;
+      for (const r of ranked) {
+        if (!options.some(o => o.label.toLowerCase() === r.toLowerCase())) {
+          options.push({
+            id: r.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+            label: r,
+            category: "clinical",
+            rationale: `Standard outcome for ${KB[pico.specialty].label} clinical questions.`
+          });
+        }
+        if (options.length >= 6) break;
+      }
+    }
+    options = options.slice(0, 6);
+
+    setOutcomeOptions(options);
+    setRecommendedId(selection.recommendedOutcome.id);
+    setRecommendedRationale(selection.recommendedOutcome.rationale);
+
+    // Pre-select the recommended primary outcome so the clinician can proceed in 1 click
+    const initialPick = options.find(o => o.id === selection.recommendedOutcome.id)?.label || options[0]?.label || "";
+    setSelectedOutcome(initialPick);
+
+    setBusy(null);
+  }, [getLiteratureKeywords, router]);
 
   return (
     <div className="wrap">
       <header className="hdr">
-        <h1>{gapPath ? "🎯 Step 3 · Choose Your Outcomes" : "💬 Step 3 · Interactive Clarification"}</h1>
-        <p>{gapPath ? "Pick the 1–2 outcomes the evidence commentary should target" : "A few targeted questions turn uncertainty into an answerable PICO"}</p>
+        <h1>🎯 Step 3 · Select Clinical Outcome</h1>
+        <p>Selected PICO question loaded from Evidence Map — choose 1 outcome to generate your commentary paper</p>
       </header>
 
       <main className="solo">
-        {analysis && (
+        {extractedPico && (
           <section className="card">
-            <span className="pill">🧠 Intent Recognition {analysis.source === "ai" ? "(AI)" : "(offline)"}</span>
-            <p><b>Specialty:</b> <span className="tag">{analysis.specialtyLabel}</span>
-              &nbsp;<b>Type:</b> <span className="tag">{analysis.questionType}</span> → <span className="tag">{analysis.framework}</span></p>
-            <p style={{ marginTop: 4 }}><b>Reading:</b> {analysis.interpretation}</p>
+            <span className="pill">💡 Target PICO Question · {KB[extractedPico.specialty]?.label || "Obstetrics & Gynecology"}</span>
+            <div className="final-q" style={{ marginTop: 10, marginBottom: 12 }}>
+              <b>{extractedPico.cleanQuestion}</b>
+            </div>
+            <div className="row" style={{ gap: 8, marginTop: 4 }}>
+              <span className="tag" title="Population">👥 <b>P:</b> {extractedPico.condition}</span>
+              <span className="tag" title="Intervention">💊 <b>I:</b> {extractedPico.intervention}</span>
+              <span className="tag" title="Comparator">⚖️ <b>C:</b> {extractedPico.comparator}</span>
+            </div>
           </section>
         )}
 
@@ -379,146 +277,97 @@ export default function QuestionPage() {
           <section className="card"><div className="advisory">⚠️ {notice}</div></section>
         )}
 
-        {chatLog.length > 0 && (
+        {outcomeOptions.length > 0 && busy !== "formulate" && (
           <section className="card">
-            {chatLog.map((m, i) => (
-              <div key={i} className="turn">
-                {m.q && <div className="bubble ai">{m.q}</div>}
-                {m.a && <div className="bubble user">{m.a}</div>}
-              </div>
-            ))}
-{clarification && !clarification.done && busy !== "clarify" && (
-                <>
-                  {clarification.field === "outcome" ? (
-                    <>
-                      <p className="hint">{clarification.questionText}</p>
-                      {(() => {
-                        const selection = clarification.outcomeSelection;
-                        const maxPick = selection?.maxSelections ?? 2;
-                        const recommendedId = selection?.recommendedOutcome.id;
-                        const chosen = selectedOutcomes.length;
-                        const atMax = chosen >= maxPick;
-                        const byLabel = new Map((selection?.options ?? []).map(o => [o.label, o]));
-                        return (
-                          <>
-                            <p className="hint" style={{ marginTop: 4 }}>
-                              {selection
-                                ? `These ${selection.options.length} options were selected for this question.`
-                                : "Suggested outcomes."}
-                            </p>
-                            <div className="chips outcome-chips" role="group" aria-label="Outcome options">
-                              {clarification.options.map(o => {
-                                const detail = byLabel.get(o);
-                                const sel = selectedOutcomes.includes(o);
-                                const full = atMax && !sel;
-                                const recommended = !!detail && detail.id === recommendedId;
-                                return (
-                                  <button
-                                    key={o}
-                                    type="button"
-                                    className={`chip outcome-chip ${sel ? "chip-on" : ""} ${recommended ? "chip-recommended" : ""}`}
-                                    aria-pressed={sel}
-                                    aria-label={`${o}${recommended ? ", recommended primary outcome" : ""}${detail ? `, ${detail.category} outcome` : ""}`}
-                                    disabled={full}
-                                    title={full ? `You can select up to ${maxPick} outcomes.` : detail?.rationale}
-                                    onClick={() => {
-                                      setSelectedOutcomes(prev =>
-                                        prev.includes(o) ? prev.filter(x => x !== o)
-                                          : prev.length >= maxPick ? [o] : [...prev, o]);
-                                    }}
-                                  >
-                                    <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
-                                      <span className="outcome-chip-label">{o}</span>
-                                      {sel && <span style={{ fontWeight: 700, fontSize: "0.85rem", color: "inherit" }}>✓ Selected</span>}
-                                    </div>
-                                    <span className="outcome-chip-meta">
-                                      {recommended && <span className="outcome-badge">Recommended</span>}
-                                      {detail && <span className="outcome-category">{detail.category.replace(/-/g, " ")}</span>}
-                                    </span>
-                                    {detail && <span className="outcome-why">{detail.rationale}</span>}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                            {selection && (
-                              <p className="hint" style={{ marginTop: 12 }}>
-                                💡 <b>Evidence Grounding:</b> {selection.recommendedOutcome.rationale}
-                              </p>
-                            )}
-                            <div className="row" style={{ marginTop: 14 }}>
-                              <button
-                                className="primary"
-                                style={{ padding: "12px 28px", fontSize: "1rem" }}
-                                disabled={!selectedOutcomes.length}
-                                onClick={() => submitSelectedOutcomes()}
-                              >
-                                {selectedOutcomes.length
-                                  ? `Continue to Scientific Commentary with "${selectedOutcomes[0]}" ➜`
-                                  : "Choose an outcome above to continue ➜"}
-                              </button>
-                            </div>
-                            <p className="hint" style={{ marginTop: 8 }} aria-live="polite">
-                              {selectedOutcomes.length
-                                ? `Selected: ${selectedOutcomes.join(", ")}. Click above to proceed to Step 4.`
-                                : `Select one of the ${clarification.options.length} literature-derived outcomes above to generate your scientific commentary.`}
-                            </p>
-                          </>
-                        );
-                      })()}
-                    </>
-                  ) : (
-                    <>
-                      <p className="hint">{clarification.questionText}</p>
-                      <div className="chips">
-                        {clarification.options.map(o => (
-                          <button key={o} className="chip" onClick={() => {
-                            const field = clarification.field || "outcome";
-                            answer(field, o);
-                          }}>{o}</button>
-                        ))}
-                      </div>
-                      {(!clarification.options || clarification.options.length === 0) && (
-                        <div className="row" style={{ marginTop: 10 }}>
-                          <input
-                            className="free-input"
-                            value={freeText}
-                            onChange={e => setFreeText(e.target.value)}
-                            onKeyDown={e => { if (e.key === "Enter" && freeText.trim()) answer(clarification.field || "outcome", freeText.trim()); }}
-                            placeholder="Type your answer…"
-                          />
-                          <button className="primary" disabled={!freeText.trim()}
-                            onClick={() => answer(clarification.field || "outcome", freeText.trim())}>
-                            Answer ➜
-                          </button>
-                        </div>
+            <h3 className="sec-h" style={{ marginTop: 0 }}>
+              📋 Literature-Derived Outcomes — Click 1 to continue (No manual typing needed)
+            </h3>
+            <p className="hint">
+              These 4–6 outcomes are ranked by clinical importance and grounded in current PubMed evidence. Click an outcome card below to select it.
+            </p>
+
+            <div className="chips outcome-chips" role="group" aria-label="Outcome options" style={{ marginTop: 14 }}>
+              {outcomeOptions.map(opt => {
+                const isSel = selectedOutcome === opt.label;
+                const isRec = opt.id === recommendedId;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    className={`chip outcome-chip ${isSel ? "chip-on" : ""} ${isRec ? "chip-recommended" : ""}`}
+                    aria-pressed={isSel}
+                    aria-label={`${opt.label}${isRec ? ", recommended primary outcome" : ""}`}
+                    onClick={() => setSelectedOutcome(opt.label)}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
+                      <span className="outcome-chip-label">{opt.label}</span>
+                      {isSel && (
+                        <span style={{ fontWeight: 700, fontSize: "0.85rem", color: isSel ? "#fff" : "inherit" }}>
+                          ✓ Selected
+                        </span>
                       )}
-                    </>
-                  )}
-                </>
-              )}
-             {busy === "clarify" && <AnimatedProcessingIndicator message="Thinking…" />}
+                    </div>
+                    <span className="outcome-chip-meta">
+                      {isRec && <span className="outcome-badge">Recommended</span>}
+                      <span className="outcome-category">{opt.category.replace(/-/g, " ")}</span>
+                    </span>
+                    <span className="outcome-why">{opt.rationale}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {recommendedRationale && (
+              <p className="hint" style={{ marginTop: 14 }}>
+                💡 <b>Evidence Grounding:</b> {recommendedRationale}
+              </p>
+            )}
+
+            <div className="row" style={{ marginTop: 16 }}>
+              <button
+                className="primary"
+                style={{ padding: "12px 28px", fontSize: "1rem" }}
+                disabled={!selectedOutcome || !!busy}
+                onClick={() => selectedOutcome && proceedToCommentary(selectedOutcome)}
+              >
+                {selectedOutcome
+                  ? `Generate Full Scientific Commentary Paper with "${selectedOutcome}" ➜`
+                  : "Click an outcome above to continue ➜"}
+              </button>
+            </div>
+
+            <p className="hint" style={{ marginTop: 8 }} aria-live="polite">
+              {selectedOutcome
+                ? `Selected outcome: "${selectedOutcome}". Click above to immediately generate your Step 4 Scientific Commentary Paper.`
+                : "Select one outcome card above to proceed."}
+            </p>
           </section>
         )}
 
-        {busy === "intent" && (
+        {busy === "loading" && (
           <section className="card">
             <AnimatedProcessingIndicator
-              message="Analyzing your clinical scenario…"
-              secondaryMessage="This should take just a moment."
+              message="Extracting PICO parameters & literature outcomes…"
+              secondaryMessage="Analyzing PubMed evidence to curate relevant clinical endpoints."
             />
           </section>
         )}
+
         {busy === "formulate" && (
           <section className="card">
             <AnimatedProcessingIndicator
-              message="Formulating your clinical questions…"
-              secondaryMessage="Refining the PICO parameters against clinical guidelines."
+              message="Formulating clinical question & evidence parameters…"
+              secondaryMessage="Preparing Vancouver-style commentary generation."
             />
           </section>
         )}
 
-        <div className="row"><button className="link" onClick={() => router.push("/")}>← Start over</button></div>
+        <div className="row" style={{ marginTop: 16 }}>
+          <button className="link" onClick={() => router.push("/gap")}>← Back to Evidence Map</button>
+          <button className="link" onClick={() => router.push("/")}>← Start over</button>
+        </div>
       </main>
+
       <footer>Version 3.0 · Copyright©RaoufRoshdy2026</footer>
     </div>
   );

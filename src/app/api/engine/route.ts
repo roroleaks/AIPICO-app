@@ -27,6 +27,7 @@ import type { AuditableRef } from "@/lib/relevance";
 import { finalizeClaims } from "@/lib/claim-finalization";
 import { validateDeliverableIntegrity } from "@/lib/deliverable-integrity";
 import { generateDeterministicGapAnalysis } from "@/lib/deterministic-gap.ts";
+import { extractPicoFromQuestion } from "@/lib/pico-parser";
 
 export const maxDuration = 60;
 
@@ -1437,6 +1438,30 @@ Respond ONLY with JSON:
       const parsed = readAnalysisStage(body, stage);
       if (!parsed.ok) return parsed.response;
       const { analysis, answered } = parsed;
+
+      // Ensure condition, intervention and comparator are populated from question/topic if missing
+      const textToExtract = String(body.selectedQuestion || analysis.interpretation || body.topic || "").trim();
+      if ((!answered.condition && !analysis.condition) || (!answered.intervention && !analysis.intervention)) {
+        if (textToExtract) {
+          const recovered = extractPicoFromQuestion(textToExtract, String(body.topic || ""));
+          if (!answered.condition && !analysis.condition) {
+            analysis.condition = recovered.condition;
+            answered.condition = recovered.condition;
+          }
+          if (!answered.intervention && !analysis.intervention) {
+            analysis.intervention = recovered.intervention;
+            answered.intervention = recovered.intervention;
+          }
+          if (!answered.comparator && !analysis.comparator) {
+            analysis.comparator = recovered.comparator;
+            answered.comparator = recovered.comparator;
+          }
+          if (!analysis.specialty) {
+            analysis.specialty = recovered.specialty;
+          }
+        }
+      }
+
       if (KEY && analysis?.specialty && isSpecialty(analysis.specialty)) {
         const outcomeLogic = rationalOutcomes(answered.condition || analysis.condition || "", analysis.specialty);
         const out = await callLLM(
