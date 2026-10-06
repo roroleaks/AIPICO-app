@@ -1,4 +1,4 @@
-import { checkCitations, filterByClaim, type AuditableRef, type PicoElement } from "./relevance.ts";
+import { checkCitations, type AuditableRef, type PicoElement } from "./relevance.ts";
 
 /**
  * Confidence thresholds and fallback triggers for the hybrid LLM/deterministic pipeline.
@@ -103,7 +103,6 @@ export function evaluateConfidence(
   elements: PicoElement[],
   config: ConfidenceGateConfig = DEFAULT_CONFIDENCE_CONFIG
 ): ConfidenceGateResult {
-  const startTime = Date.now();
   const gates: GateResult[] = [];
 
   // Gate 1: Citation Integrity

@@ -90,7 +90,7 @@ export function generateDeterministicCommentary(
   let popVal = cleanPhrase(byType.population?.value || "");
   let intVal = cleanPhrase(byType.intervention?.value || "");
   let compVal = cleanPhrase(byType.comparator?.value || "");
-  let outVal = cleanPhrase(byType.outcome?.value || outcomesText || "");
+  const outVal = cleanPhrase(byType.outcome?.value || outcomesText || "");
 
   if ((!popVal || !intVal) && question && question !== "the selected clinical question") {
     const parsed = extractPicoFromQuestion(question, question);

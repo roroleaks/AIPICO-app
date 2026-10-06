@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractPicoFromQuestion, detectSpecialty } from "./pico-parser.ts";
+import { extractPicoFromQuestion } from "./pico-parser.ts";
 
 test("extractPicoFromQuestion parses explicit (P), (I), (C), (O) markers", () => {
   const q = "In women with preterm birth risk (P), does vaginal progesterone (I) compared with cervical cerclage (C) improve primary patient-centered clinical outcomes (O)?";

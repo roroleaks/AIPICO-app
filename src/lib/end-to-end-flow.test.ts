@@ -26,7 +26,7 @@ test("End-to-End Clinical Flow: Step 1 -> Step 2 -> Step 3 -> Step 4", () => {
   assert.ok(selectedPico.length > 20, "Step 2: Clinician selected a valid PICO question");
 
   // Step 3: Automatic extraction of P, I, C, O (Zero manual typing needed)
-  const picoParsed = extractPicoFromQuestion(selectedPico, gapMap.topic, gapMap.specialty as any);
+  const picoParsed = extractPicoFromQuestion(selectedPico, gapMap.topic, gapMap.specialty as "obstetrics" | "gynecology" | "infertility");
   assert.ok(picoParsed.condition.length > 0, "Step 3: Population/condition extracted automatically");
   assert.ok(picoParsed.intervention.length > 0, "Step 3: Intervention extracted automatically");
   assert.ok(picoParsed.comparator.length > 0, "Step 3: Comparator extracted automatically");
@@ -113,4 +113,16 @@ test("End-to-End Clinical Flow: Step 1 -> Step 2 -> Step 3 -> Step 4", () => {
   assert.ok(commentary.discussion.length > 0, "Step 4: Discussion generated");
   assert.ok(commentary.conclusion.length > 0, "Step 4: Conclusion generated");
   assert.ok(commentary.references.length > 0, "Step 4: Verified references generated");
+
+  const integrity = validateDeliverableIntegrity({
+    fields: {
+      abstract: commentary.abstract,
+      introduction: commentary.introduction,
+      discussion: commentary.discussion,
+      conclusion: commentary.conclusion
+    },
+    references: commentary.references,
+    retainedRecords: [mockRef]
+  });
+  assert.ok(integrity.ok, "Step 4: Deliverable integrity is valid");
 });

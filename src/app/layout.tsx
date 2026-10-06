@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -12,8 +12,14 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
+};
+
 export const metadata: Metadata = {
-  title: "Clinical Question Assistant — Obs/Gyn",
+  title: "AI PICO v3.1 — Clinical Question Assistant · Obs/Gyn",
   description:
     "AI-assisted formulation of answerable clinical questions in Obstetrics and Gynecology (Obs/Gyn)",
 };

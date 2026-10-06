@@ -174,7 +174,9 @@ export default function Home() {
               <circle cx="11" cy="11" r="8" />
               <path d="M21 21l-4.3-4.3" />
             </svg>
-            <span className="title-main">AI PICO</span>
+            <span className="title-main">
+              AI PICO <span className="version-badge">v3.1</span>
+            </span>
           </div>
           <div className="hdr-center">
             <h1>From Clinical Uncertainty to Answerable Questions</h1>
@@ -213,9 +215,9 @@ export default function Home() {
             </button>
           </div>
 
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
             <span className="pill">📝 Step 1 · Clinical Input</span>
-            <div style={{ display: "flex", gap: 6, background: "#f1f5f9", padding: 3, borderRadius: 8 }}>
+            <div style={{ display: "flex", gap: 6, background: "#f1f5f9", padding: 3, borderRadius: 8, flexWrap: "wrap" }}>
               <button
                 type="button"
                 onClick={() => setEntryStyle("tags")}
@@ -452,7 +454,7 @@ export default function Home() {
         </section>
       </main>
 
-      <footer>Version 3.0 — modular steps · Educational tool: always verify formulated questions clinically.<br />Copyright©RaoufRoshdy2026</footer>
+      <footer>Version 3.1 — modular steps · Educational tool: always verify formulated questions clinically.<br />Copyright©RaoufRoshdy2026</footer>
     </div>
   );
 }

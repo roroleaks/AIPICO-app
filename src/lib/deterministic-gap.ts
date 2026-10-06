@@ -1,4 +1,4 @@
-import { KB, type SpecialtyKey } from "./kb.ts";
+import { type SpecialtyKey } from "./kb.ts";
 import { parseClinicalScenario } from "./clinical-semantics.ts";
 
 export interface DeterministicGapPoint {
@@ -116,30 +116,6 @@ export function generateDeterministicGapAnalysis(rawTopic: string): Deterministi
     known,
     uncertain,
     gaps,
-    suggestedQuestions: scenario.suggestedQuestions
+    suggestedQuestions: scenario.suggestedQuestions?.length ? scenario.suggestedQuestions : suggestedQuestions
   };
-}
-
-function specialtyInKb(s: string): s is SpecialtyKey {
-  return s === "obstetrics" || s === "gynecology" || s === "infertility";
-}
-
-function extractCondition(text: string): string {
-  const t = text.toLowerCase();
-  for (const spec of Object.values(KB)) {
-    for (const c of spec.conditions) {
-      if (t.includes(c.toLowerCase())) return c;
-    }
-  }
-  return text.slice(0, 80).trim() || "the clinical condition";
-}
-
-function extractIntervention(text: string): string {
-  const t = text.toLowerCase();
-  for (const spec of Object.values(KB)) {
-    for (const i of spec.interventions) {
-      if (t.includes(i.toLowerCase())) return i;
-    }
-  }
-  return "the evaluated intervention";
 }

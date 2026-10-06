@@ -7,21 +7,7 @@ import type { AuditableRef } from "@/lib/relevance";
 export const runtime = "nodejs";
 export const maxDuration = 20;
 
-interface PicoRow { label: string; value: string }
-interface PdfSection { heading?: string; blocks: string[] }
 
-interface PdfPayload {
-  docType?: string;
-  title?: string;
-  meta?: string;
-  pico?: PicoRow[];
-  outcomes?: string[];
-  keywords?: string[];
-  sections?: PdfSection[];
-  references?: string[];
-  /** The retained records behind `references`, so the export can be checked server-side. */
-  retainedReferences?: AuditableRef[];
-}
 
 const picoRowSchema = z.object({
   label: z.string().max(200),

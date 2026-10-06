@@ -7,7 +7,7 @@ import type { Formulation } from "@/lib/kb";
 import { sget, sset, KEYS } from "@/lib/session";
 import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
 import { NO_LITERATURE_MESSAGE, NO_LITERATURE_HINT } from "@/lib/clinical-keywords";
-import { formatReference, formatVancouverReference } from "@/lib/relevance";
+import { formatVancouverReference } from "@/lib/relevance";
 import { validateDeliverableIntegrity } from "@/lib/deliverable-integrity";
 
 interface ReferenceItem { pmid: string; title: string; authors: string; year: string; journal: string; doi?: string; url: string }
@@ -560,7 +560,7 @@ ${bibliography}
       <main className="solo">
         {(commentary || commentaryLoading || commentaryError) && (
           <section className="card" ref={commentaryRef}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
               <span className="pill">📄 Scientific Commentary Paper</span>
               <div className="row">
                 {exportError && <div className="advisory">{exportError}</div>}
@@ -693,18 +693,20 @@ ${bibliography}
                           {matched < a.length && (
                             <div className="advisory">⚠️ {a.length - matched} of {a.length} reference(s) did not fully match the selected PICO elements. A reference with an unmatched element may still be contextually related rather than directly supporting that specific element of the question.</div>
                           )}
-                          <table className="pico"><tbody>
-                            <tr><td><b>Design</b></td><td><b>Reference</b></td><td><b>Population</b></td><td><b>Intervention</b></td><td><b>Comparator</b></td><td><b>Outcome</b></td></tr>
-                            {baseAudits.map(({ ref, audit: x }) => (
-                              <tr key={x.pmid}>
-                                <td>{x.design}</td>
-                                <td><a href={x.url} target="_blank" rel="noopener noreferrer" className="ref-link">{ref.slice(0, 46)}{ref.length > 46 ? "…" : ""}</a></td>
-                                <td>{x.population ? "✓" : "—"}</td>
-                                <td>{x.intervention ? "✓" : "—"}</td>
-                                <td>{x.comparator ? "✓" : "—"}</td>
-                                <td>{x.outcome ? "✓" : "—"}</td>
-                              </tr>))}
-                          </tbody></table>
+                          <div className="table-responsive">
+                            <table className="pico"><tbody>
+                              <tr><td><b>Design</b></td><td><b>Reference</b></td><td><b>Population</b></td><td><b>Intervention</b></td><td><b>Comparator</b></td><td><b>Outcome</b></td></tr>
+                              {baseAudits.map(({ ref, audit: x }) => (
+                                <tr key={x.pmid}>
+                                  <td>{x.design}</td>
+                                  <td><a href={x.url} target="_blank" rel="noopener noreferrer" className="ref-link">{ref.slice(0, 46)}{ref.length > 46 ? "…" : ""}</a></td>
+                                  <td>{x.population ? "✓" : "—"}</td>
+                                  <td>{x.intervention ? "✓" : "—"}</td>
+                                  <td>{x.comparator ? "✓" : "—"}</td>
+                                  <td>{x.outcome ? "✓" : "—"}</td>
+                                </tr>))}
+                            </tbody></table>
+                          </div>
                           {c.uncited.length > 0 && (
                             <div className="advisory">⚠️ {c.uncited.length} reference(s) listed but never cited in text: {c.uncited.map(u => `"${u.slice(0, 44)}${u.length > 44 ? "…" : ""}"`).join("; ")}</div>
                           )}
@@ -760,10 +762,12 @@ ${bibliography}
 
         <section className="card">
           <span className="pill">🎯 Your Answerable Question — pick one of the options</span>
-          <table className="pico"><tbody>
-            {formulation.elements.map(e => <tr key={e.label}><td>{e.label}</td><td>{e.value}</td></tr>)}
-            <tr><td>Question</td><td>{activeQuestion}</td></tr>
-          </tbody></table>
+          <div className="table-responsive">
+            <table className="pico"><tbody>
+              {formulation.elements.map(e => <tr key={e.label}><td>{e.label}</td><td>{e.value}</td></tr>)}
+              <tr><td>Question</td><td>{activeQuestion}</td></tr>
+            </tbody></table>
+          </div>
           {formulation.variants && formulation.variants.length > 1 && (
             <>
               <p className="hint" style={{ marginTop: 12 }}>Four ways to ask it — select your favourite:</p>
@@ -826,7 +830,7 @@ ${bibliography}
 
         <div className="row"><button className="link" onClick={() => router.push("/")}>← Start a new question</button></div>
       </main>
-      <footer>Version 3.0 · Copyright©RaoufRoshdy2026</footer>
+      <footer>Version 3.1 · Copyright©RaoufRoshdy2026</footer>
     </div>
   );
 }

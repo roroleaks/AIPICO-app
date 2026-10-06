@@ -3,11 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatedProcessingIndicator } from "@/components/AnimatedProcessingIndicator";
-import { KB, rationalOutcomes, type Analysis, type Formulation } from "@/lib/kb";
+import { KB, type Analysis, type Formulation, type SpecialtyKey } from "@/lib/kb";
 import {
   buildOutcomeContext,
-  selectOutcomes,
-  type OutcomeSelectionResponse
+  selectOutcomes
 } from "@/lib/outcome-selection";
 import { sget, sset, KEYS } from "@/lib/session";
 import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
@@ -176,80 +175,94 @@ export default function QuestionPage() {
   }, [extractedPico, finishAndGo]);
 
   useEffect(() => {
-    const question = sget<string>(KEYS.question);
-    const gapSnapshot = sget<GapSnapshot>(KEYS.gap);
-    const normalized = sget<string>(KEYS.inputText);
-    const stored = readSessionInput(sget<unknown>(KEYS.input));
-    const fallbackText = question
-      || gapSnapshot?.suggestedQuestions?.[0]?.question
-      || normalized
-      || (stored ? sessionSearchText(stored) : "");
+    let isCancelled = false;
+    const timer = setTimeout(() => {
+      if (isCancelled) return;
+      try {
+        const question = sget<string>(KEYS.question);
+        const gapSnapshot = sget<GapSnapshot>(KEYS.gap);
+        const normalized = sget<string>(KEYS.inputText);
+        const stored = readSessionInput(sget<unknown>(KEYS.input));
+        const fallbackText = question
+          || gapSnapshot?.suggestedQuestions?.[0]?.question
+          || normalized
+          || (stored ? sessionSearchText(stored) : "");
 
-    if (!fallbackText) {
-      router.replace("/");
-      return;
-    }
-
-    // Extract guaranteed P, I, C, O elements from selected PICO question and evidence map
-    const pico = extractPicoFromQuestion(
-      fallbackText,
-      gapSnapshot?.topic || normalized || "",
-      gapSnapshot?.specialty as any
-    );
-    setExtractedPico(pico);
-
-    // Build literature-grounded outcome options
-    const literatureKw = getLiteratureKeywords();
-    const context = buildOutcomeContext(
-      {
-        specialty: pico.specialty,
-        condition: pico.condition,
-        intervention: pico.intervention,
-        comparator: pico.comparator,
-        questionType: "Therapy / Prevention"
-      },
-      {},
-      {
-        originalInput: normalized || gapSnapshot?.topic || fallbackText,
-        population: pico.condition,
-        keywords: literatureKw
-      }
-    );
-
-    const selection = selectOutcomes(context);
-    let options: RenderedOutcome[] = selection.options.map(o => ({
-      id: o.id,
-      label: o.label,
-      category: o.category,
-      rationale: o.rationale
-    }));
-
-    // Ensure 4 to 6 options are present
-    if (options.length < 4) {
-      const ranked = KB[pico.specialty].outcomesRanked;
-      for (const r of ranked) {
-        if (!options.some(o => o.label.toLowerCase() === r.toLowerCase())) {
-          options.push({
-            id: r.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-            label: r,
-            category: "clinical",
-            rationale: `Standard outcome for ${KB[pico.specialty].label} clinical questions.`
-          });
+        if (!fallbackText) {
+          router.replace("/");
+          return;
         }
-        if (options.length >= 6) break;
+
+        // Extract guaranteed P, I, C, O elements from selected PICO question and evidence map
+        const pico = extractPicoFromQuestion(
+          fallbackText,
+          gapSnapshot?.topic || normalized || "",
+          gapSnapshot?.specialty as SpecialtyKey | undefined
+        );
+        setExtractedPico(pico);
+
+        // Build literature-grounded outcome options
+        const literatureKw = getLiteratureKeywords();
+        const context = buildOutcomeContext(
+          {
+            specialty: pico.specialty,
+            condition: pico.condition,
+            intervention: pico.intervention,
+            comparator: pico.comparator,
+            questionType: "Therapy / Prevention"
+          },
+          {},
+          {
+            originalInput: normalized || gapSnapshot?.topic || fallbackText,
+            population: pico.condition,
+            keywords: literatureKw
+          }
+        );
+
+        const selection = selectOutcomes(context);
+        let options: RenderedOutcome[] = selection.options.map(o => ({
+          id: o.id,
+          label: o.label,
+          category: o.category,
+          rationale: o.rationale
+        }));
+
+        // Ensure 4 to 6 options are present
+        if (options.length < 4) {
+          const ranked = KB[pico.specialty].outcomesRanked;
+          for (const r of ranked) {
+            if (!options.some(o => o.label.toLowerCase() === r.toLowerCase())) {
+              options.push({
+                id: r.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+                label: r,
+                category: "clinical",
+                rationale: `Standard outcome for ${KB[pico.specialty].label} clinical questions.`
+              });
+            }
+            if (options.length >= 6) break;
+          }
+        }
+        options = options.slice(0, 6);
+
+        setOutcomeOptions(options);
+        setRecommendedId(selection.recommendedOutcome.id);
+        setRecommendedRationale(selection.recommendedOutcome.rationale);
+
+        // Pre-select the recommended primary outcome so the clinician can proceed in 1 click
+        const initialPick = options.find(o => o.id === selection.recommendedOutcome.id)?.label || options[0]?.label || "";
+        setSelectedOutcome(initialPick);
+
+        setBusy(null);
+      } catch (err: unknown) {
+        setNotice(err instanceof Error ? err.message : "Error extracting clinical outcomes.");
+        setBusy(null);
       }
-    }
-    options = options.slice(0, 6);
+    }, 0);
 
-    setOutcomeOptions(options);
-    setRecommendedId(selection.recommendedOutcome.id);
-    setRecommendedRationale(selection.recommendedOutcome.rationale);
-
-    // Pre-select the recommended primary outcome so the clinician can proceed in 1 click
-    const initialPick = options.find(o => o.id === selection.recommendedOutcome.id)?.label || options[0]?.label || "";
-    setSelectedOutcome(initialPick);
-
-    setBusy(null);
+    return () => {
+      isCancelled = true;
+      clearTimeout(timer);
+    };
   }, [getLiteratureKeywords, router]);
 
   return (
@@ -403,7 +416,7 @@ export default function QuestionPage() {
         </div>
       </main>
 
-      <footer>Version 3.0 · Copyright©RaoufRoshdy2026</footer>
+      <footer>Version 3.1 · Copyright©RaoufRoshdy2026</footer>
     </div>
   );
 }

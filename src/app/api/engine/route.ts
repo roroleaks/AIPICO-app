@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { KB, QUESTION_TYPES, rationalOutcomes, type Analysis } from "@/lib/kb";
+import { KB, QUESTION_TYPES, rationalOutcomes, type Analysis, type SpecialtyKey } from "@/lib/kb";
 import { applyOutcomeAdvisory } from "@/lib/outcome-selection";
 import { ruleAnalyze, ruleClarify, ruleFormulate } from "@/lib/rule-engine";
 // Claim-specific filtering boundary. The engine imports these rather than keeping its own
@@ -849,7 +849,7 @@ export async function POST(req: NextRequest) {
         const parsed = extractPicoFromQuestion(
           String(selectedQuestion || topic || ""),
           String(topic || ""),
-          (gapAnalysis as any)?.specialty
+          (gapAnalysis as { specialty?: SpecialtyKey } | undefined)?.specialty
         );
         if (parsed.condition) elements.push({ label: "Population", value: parsed.condition });
         if (parsed.intervention) elements.push({ label: "Intervention", value: parsed.intervention });
@@ -936,7 +936,6 @@ export async function POST(req: NextRequest) {
         authors: r.authors, year: r.year, title: r.title, journal: r.journal,
         doi: r.doi, url: r.url, abstract: (r.context || "").slice(0, 500)
       }));
-      const strictOutcomes = outcomesArr.length > 0;
       // No record survived the claim filter: there is nothing to comment on. Calling the model
       // here would only invite it to assert findings it has no source for, so the request is
       // answered with the explicit no-evidence state instead of a commentary.

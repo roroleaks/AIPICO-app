@@ -173,7 +173,7 @@ export default function GapPage() {
 
         {gap && !isEmptyResult(gap) && (
           <section className="card" ref={mapRef}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
               <span className="pill">🗺️ Evidence Map · {gap.topic}</span>
               <div className="row">
                 {exportError && <div className="advisory">{exportError}</div>}
@@ -258,7 +258,7 @@ export default function GapPage() {
           </section>
         )}
       </main>
-      <footer>Version 3.0 · Copyright©RaoufRoshdy2026</footer>
+      <footer>Version 3.1 · Copyright©RaoufRoshdy2026</footer>
     </div>
   );
 }
