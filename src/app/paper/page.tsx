@@ -55,6 +55,57 @@ interface CitationChecks {
 }
 interface ExcludedRef { pmid: string; title: string; reason: string; url: string }
 
+function FormattedPaperSection({ content }: { content: string }) {
+  if (!content) return null;
+  const blocks = content.split(/\n{2,}/).map(b => b.trim()).filter(Boolean);
+  return (
+    <div className="paper-section-body" style={{ lineHeight: 1.7, fontSize: "0.97rem", color: "#1e293b" }}>
+      {blocks.map((block, idx) => {
+        if (block.startsWith("#### ")) {
+          const headingText = block.replace(/^####\s+/, "");
+          return (
+            <h4
+              key={idx}
+              style={{
+                fontSize: "1.05rem",
+                fontWeight: 700,
+                color: "#0f766e",
+                marginTop: 22,
+                marginBottom: 8,
+                borderBottom: "1px solid #e2e8f0",
+                paddingBottom: 4
+              }}
+            >
+              {headingText}
+            </h4>
+          );
+        }
+        if (block.startsWith("- ")) {
+          const items = block.split(/\n-\s+/).map(it => it.replace(/^- /, "").trim()).filter(Boolean);
+          return (
+            <ul key={idx} style={{ paddingLeft: 22, margin: "10px 0", listStyleType: "disc" }}>
+              {items.map((item, iIdx) => {
+                const parts = item.split(/\*\*(.*?)\*\*/);
+                return (
+                  <li key={iIdx} style={{ marginBottom: 6 }}>
+                    {parts.map((p, pIdx) => (pIdx % 2 === 1 ? <strong key={pIdx} style={{ color: "#0f172a" }}>{p}</strong> : p))}
+                  </li>
+                );
+              })}
+            </ul>
+          );
+        }
+        const parts = block.split(/\*\*(.*?)\*\*/);
+        return (
+          <p key={idx} style={{ marginBottom: 12 }}>
+            {parts.map((p, pIdx) => (pIdx % 2 === 1 ? <strong key={pIdx} style={{ color: "#0f172a" }}>{p}</strong> : p))}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function PaperPage() {
   const router = useRouter();
   const curRefAudit = (c: CommentaryPaper): RefAudit[] =>
@@ -557,10 +608,10 @@ ${bibliography}
                 )}
                 <h2 style={{ marginBottom: 12 }}>{commentary.title}</h2>
                 <p style={{ fontSize: ".9rem", color: "var(--muted)", marginBottom: 16 }}>Keywords: {commentary.keywords.join(", ")}</p>
-                <h3 className="sec-h">Abstract</h3><p>{commentary.abstract}</p>
-                <h3 className="sec-h">Introduction</h3><p>{commentary.introduction}</p>
-                <h3 className="sec-h">Discussion</h3><div style={{ whiteSpace: "pre-wrap" }}>{commentary.discussion}</div>
-                <h3 className="sec-h">Conclusion</h3><p>{commentary.conclusion}</p>
+                <h3 className="sec-h">Abstract</h3><FormattedPaperSection content={commentary.abstract} />
+                <h3 className="sec-h">Introduction</h3><FormattedPaperSection content={commentary.introduction} />
+                <h3 className="sec-h">Discussion</h3><FormattedPaperSection content={commentary.discussion} />
+                <h3 className="sec-h">Conclusion</h3><FormattedPaperSection content={commentary.conclusion} />
                 {!!commentary.references.length && (
                   <><h3 className="sec-h">References (Vancouver Style)</h3>
                     <ol className="refs-numbered">{commentary.references.map((ref, i) => <li key={i}>{vancouverFromString(ref, i + 1)}</li>)}</ol></>

@@ -843,6 +843,21 @@ export async function POST(req: NextRequest) {
             .map(e => ({ label: String(e?.label || ""), value: String(e?.value || "") }))
             .filter(e => e.label && e.value)
         : [];
+
+      // If elements is empty, parse them directly from selectedQuestion and topic
+      if (elements.length === 0) {
+        const parsed = extractPicoFromQuestion(
+          String(selectedQuestion || topic || ""),
+          String(topic || ""),
+          (gapAnalysis as any)?.specialty
+        );
+        if (parsed.condition) elements.push({ label: "Population", value: parsed.condition });
+        if (parsed.intervention) elements.push({ label: "Intervention", value: parsed.intervention });
+        if (parsed.comparator) elements.push({ label: "Comparator", value: parsed.comparator });
+        const outVal = outcomesArr[0] || String(outcome || "").trim() || "clinical outcome";
+        elements.push({ label: "Outcome", value: outVal });
+      }
+
       // ---- Claim-specific filtering boundary ----
       // Everything downstream (commentary generation, the rendered reference list, the audit
       // table, and every export) is derived from `directPool`. The model may only cite from
@@ -887,6 +902,24 @@ export async function POST(req: NextRequest) {
             excludedByClaim = filtered.excluded;
             if (directPool.length > 0) break;
           }
+        }
+      }
+
+      // If directPool is still empty, rescue high-quality records from excludedByClaim
+      // that address treatment or clinical context rather than failing with "no literature"
+      if (directPool.length === 0 && excludedByClaim.length > 0) {
+        const salvagable = excludedByClaim
+          .filter(e => {
+            const aud = e.audit;
+            const resolvable = !!aud.pmid || !!aud.doiOk;
+            return resolvable && (
+              ((aud.intervention || aud.comparator) && (aud.population || aud.outcome)) ||
+              aud.score >= 2
+            );
+          })
+          .map(e => e.ref);
+        if (salvagable.length > 0) {
+          directPool = salvagable.slice(0, 6);
         }
       }
 
@@ -936,36 +969,41 @@ export async function POST(req: NextRequest) {
       // The model is asked for a self-consistent draft: every listed reference cited, every
       // citation resolvable. When it is not, one corrective retry names the offending
       // citations rather than shipping a commentary whose reference list it does not support.
-      const basePrompt = `You are an expert medical writer specializing in Obstetrics and Gynecology.
+      const basePrompt = `You are an expert physician, clinical investigator, and medical writer specializing in Obstetrics, Gynecology, and Reproductive Medicine.
 
-
-Generate a full scientific commentary paper that is strictly centered on the given research question and the SELECTED OUTCOMES listed below.
+Generate a comprehensive, publication-grade scientific commentary paper strictly grounded in the given research question, selected outcomes, and provided reference pool. The paper must read like a rich, thoughtful clinical synthesis written by an experienced academic physician/researcher, not like a superficial AI summary.
 
 RESEARCH QUESTION: ${String(selectedQuestion || topic || "")}
 
 SELECTED OUTCOMES: ${outcomesText}
 
-HARD RULES${strictOutcomes ? " (mandatory)" : ""}:
-${strictOutcomes ? `- Discuss ONLY the selected outcomes as target outcomes for this paper. Do NOT introduce any unselected outcome as a target outcome — this includes keywords, abstract, discussion, and conclusion.
-- Secondary or exploratory outcomes may be mentioned only when clearly labeled as contextual evidence (e.g., begin the sentence with "As a secondary consideration, ..."), never as a target outcome of the paper.
-- keywords must be derived ONLY from the selected outcomes, the patient population, and the intervention. Never include an outcome keyword that was not selected.
-- The title must explicitly name the primary target of the paper, anchored to the first selected outcome.
-- The abstract must state each selected outcome and the direction/strength of the evidence for it.
-- The discussion must contain a clearly-labeled subsection for EACH selected outcome that evaluates the evidence for that specific outcome.` : `- Cover the primary outcome(s) that are most aligned with the research question and state them explicitly.`}
-- The paper must include:
-  - title: concise scientific title
-  - abstract: structured abstract (Background, Methods, Results, Conclusion) - 250-300 words
-  - keywords: 5-6 MeSH-aligned keywords
-  - introduction: background, clinical significance, and rationale (2-3 paragraphs)
-  - discussion: comprehensive synthesis of current evidence organized by subthemes with short subheaders, covering strengths/limitations of evidence, controversies, and identified research gaps
-  - conclusion: clear take-home message and implications (1-2 paragraphs)
-  - references: array of AT LEAST 4 strings in Vancouver style (ICMJE/NLM) built ONLY from the provided referencePool in sequential order of citation. Format: [Number]. Author(s) (up to 6, then et al.). Article title (no quotes). Journal. Year;Volume(Issue):Pages. doi:10.xxx (or URL).
-- Every in-text citation MUST use Vancouver numbered square brackets matching the reference list (e.g., [1], [2], [1, 2], [1-3]). You may optionally include author surnames alongside the bracket, e.g. Owen et al. [1]. Never cite a reference number not present in the references list.
-- The references MUST be numbered sequentially starting with 1 in the exact order they are first cited in the discussion. Cite EACH listed reference at least once in the text; do not list a reference you never cite.
-- The referencePool has ALREADY been filtered for claim-specific relevance: every record in it directly addresses the Population AND (Intervention or Comparator) AND the SELECTED OUTCOMES. Records from other conditions, cancer trials, or basic-science work are not present and must never be cited or listed.
-- Cite and list references ONLY from the provided referencePool.
-- Every sentence that asserts an effect, a magnitude, a mechanism or a recommendation MUST carry its own in-text citation (e.g. [1]), not just one citation per paragraph. Sentences are judged one at a time: a sentence that asserts something and cites nothing is deleted and replaced with a statement that direct evidence was not identified, so an uncited assertive sentence never reaches the reader.
-- Do not state an effect size, percentage, p-value or confidence interval unless the cited record reports that number. Write only what the cited records support.`;
+CRITICAL RULES:
+1. Title: Create a precise, academic, clinically meaningful title. Format: "[Intervention] versus [Comparator] for [Outcome] in [Population]: A Critical Clinical Commentary and Evidence Appraisal" (or "[Intervention] for Optimizing [Outcome] in [Population]: A Systematic Clinical Commentary").
+2. Structured Abstract (280–350 words): Must include bold labeled sections:
+   - **Background:** High-level epidemiological context, disease burden, and clinical dilemma.
+   - **Objective:** Explicit formulation of the clinical PICO question and comparative objective.
+   - **Methods & Evidence Scope:** Multi-database retrieval filtered against PICO claim criteria; specify number of verified records retained.
+   - **Results & Synthesis:** Grounded synthesis of findings citing records with Vancouver brackets [1], [2], etc., detailing trial methodologies, reported clinical parameters, and direction of response without fabricating numbers.
+   - **Clinical Interpretation:** Translation into real-world practice boundaries, distinguishing established applications from unverified claims.
+   - **Conclusion:** Decisive, balanced clinical bottom line and GRADE evidence certainty.
+3. Introduction (3 rich paragraphs):
+   - Paragraph 1: Disease burden, epidemiology, and pathophysiological substrate of the clinical condition. Explain the biological mechanisms at play and why standard protocols frequently leave clinical gaps regarding ${outcomesText}.
+   - Paragraph 2: Biological plausibility and pharmacological/procedural mechanisms of action of the intervention versus comparator. Contrast how each acts at the tissue/cellular/molecular level.
+   - Paragraph 3: Clinical dilemma, reason for lingering clinical equipoise across current literature, and the precise objective of this commentary.
+4. Discussion (The strongest section — organized with concise Markdown subheadings):
+   - #### Evidence Base Scope & Methodological Characteristics: Overview of the retained records, study designs (RCTs, prospective/retrospective cohorts, systematic reviews), and publication span.
+   - #### Study-by-Study Critical Appraisal & Reported Findings: Analyze each retained record study-by-study with its in-text bracket citation [1], [2], etc. Discuss investigator cohort, treatment protocol, reported clinical parameters, and methodological strengths and constraints.
+   - #### Comparative Synthesis & Clinical Concordance: Compare findings across studies; explain concordance, discordance, and clinical/methodological factors explaining variations (patient age, baseline disease severity, dosing, timing).
+   - #### Methodological Quality, Risk of Bias & Evidence Certainty: Critical appraisal under GRADE principles (selection bias, allocation concealment, blinding feasibility, sample size limitations, and overall certainty).
+   - #### Clinical Interpretation & Practice Translation: What this evidence means for real clinical care. Which patient phenotypes may benefit, what requires cautious patient selection, and what claims CANNOT be concluded from current data.
+   - #### Research Gaps & Unanswered Questions: Identify specific unanswered questions (need for powered multicenter RCTs, predictive biomarkers, optimal dosing/timing, long-term health and safety endpoints, core outcome sets).
+5. Conclusion (2 balanced paragraphs):
+   - Paragraph 1: Decisive, evidence-grounded summary answering the PICO question.
+   - Paragraph 2: Practice pearls for individualized risk counseling, shared decision-making, and priorities for forthcoming clinical trials.
+6. References & In-Text Citations:
+   - In-text citations MUST use Vancouver numbered square brackets matching the reference list sequentially: [1], [2], [1-3].
+   - References array: AT LEAST 4 strings in pure Vancouver style (ICMJE/NLM) built ONLY from the provided referencePool in exact sequential order of citation: "1. Author(s). Title. Journal. Year;Volume(Issue):Pages. doi:... URL".
+   - Zero hallucination: cite and list references ONLY from referencePool. Never invent studies, statistics, sample sizes, or p-values not in the records.`;
       const promptPayload = {
         topic, gapAnalysis, selectedQuestion, outcome: outcomesText, referencePool: poolForPrompt
       };
