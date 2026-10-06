@@ -1003,7 +1003,8 @@ CRITICAL RULES:
 6. References & In-Text Citations:
    - In-text citations MUST use Vancouver numbered square brackets matching the reference list sequentially: [1], [2], [1-3].
    - References array: AT LEAST 4 strings in pure Vancouver style (ICMJE/NLM) built ONLY from the provided referencePool in exact sequential order of citation: "1. Author(s). Title. Journal. Year;Volume(Issue):Pages. doi:... URL".
-   - Zero hallucination: cite and list references ONLY from referencePool. Never invent studies, statistics, sample sizes, or p-values not in the records.`;
+   - Zero hallucination: cite and list references ONLY from referencePool. Never invent studies, statistics, sample sizes, or p-values not in the records.
+7. Mandatory Citation on Assertive Sentences: Every factual or assertive sentence discussing biological mechanisms, clinical burden, outcomes, trial observations, or clinical recommendations MUST carry an in-text numerical bracket citation (e.g. [1], [2], or [1-3]). The automated claim validation gate checks each sentence individually, and any assertive sentence without a citation bracket will be flagged. Ensure comprehensive in-text citation coverage across all sections.`;
       const promptPayload = {
         topic, gapAnalysis, selectedQuestion, outcome: outcomesText, referencePool: poolForPrompt
       };
