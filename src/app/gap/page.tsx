@@ -35,6 +35,7 @@ export default function GapPage() {
   const mapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    let isMounted = true;
     const normalized = sget<string>(KEYS.inputText);
     const stored = readSessionInput(sget<unknown>(KEYS.input));
     const input = normalized || (stored ? sessionSearchText(stored) : "");
@@ -45,22 +46,30 @@ export default function GapPage() {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ stage: "gap", input })
         });
+        if (!isMounted) return;
         // Surface the server's own diagnostic instead of replacing it with a generic string.
         if (!res.ok) {
           const body = await res.json().catch(() => null as { error?: string } | null);
-          setError(body?.error || `The evidence mapping service returned an error (${res.status}). Please try again.`);
+          if (isMounted) setError(body?.error || `The evidence mapping service returned an error (${res.status}). Please try again.`);
           return;
         }
         const data: GapResult & { error?: string } = await res.json();
+        if (!isMounted) return;
         if (data?.error && !Array.isArray(data.known)) {
           setError(data.error);
         } else {
           setGap(data);
+          if (Array.isArray(data.suggestedQuestions) && data.suggestedQuestions.length > 0) {
+            setSelected(data.suggestedQuestions[0].question);
+          }
         }
       } catch {
-        setError("The evidence mapping service did not respond. Please go back and retry.");
+        if (isMounted) setError("The evidence mapping service did not respond. Please go back and retry.");
       }
     })();
+    return () => {
+      isMounted = false;
+    };
   }, [router]);
 
   const vancouverPlain = (r: Reference) => {

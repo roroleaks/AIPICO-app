@@ -146,7 +146,7 @@ export async function POST(req: Request) {
       doc.font(FONT_O).fontSize(8.5).fillColor(muted);
       const fLeftF: number = doc.page.margins.left;
       const fRightF: number = doc.page.width - doc.page.margins.right;
-      doc.text("Clinical Question Assistant — Copyright©RaoufRoshdy2026", fLeftF, doc.page.height - doc.page.margins.bottom + 4, { width: fRightF - doc.page.margins.left - 170, lineBreak: false });
+      doc.text("AI PICO v3.1 — Copyright©RaoufRoshdy2026", fLeftF, doc.page.height - doc.page.margins.bottom + 4, { width: fRightF - doc.page.margins.left - 170, lineBreak: false });
       doc.text(new Date().toLocaleDateString(), fRightF, doc.page.height - doc.page.margins.bottom + 4, { width: 120, align: "right", lineBreak: false });
     };
 

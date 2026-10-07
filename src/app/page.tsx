@@ -31,7 +31,11 @@ function sessionInputSnapshot(): ClinicalInput | null {
   }
   if (raw !== cachedRaw) {
     cachedRaw = raw;
-    cachedValue = raw ? readSessionInput(JSON.parse(raw)) : null;
+    try {
+      cachedValue = raw ? readSessionInput(JSON.parse(raw)) : null;
+    } catch {
+      cachedValue = raw ? readSessionInput(raw) : null;
+    }
   }
   return cachedValue;
 }
@@ -90,8 +94,33 @@ export default function Home() {
     () => resolveCorrections(parseInput(input), decisions),
     [input, decisions]
   );
-  const countHint = keywordCountHint(parsed);
-  const validationMessage = validateKeywords(parsed);
+
+  const structuredValidationError = useMemo(() => {
+    if (entryStyle !== "structured") return null;
+    if (!structP.trim()) return "Please enter the Population / Clinical Problem (P).";
+    if (!structI.trim()) return "Please enter the Intervention / Therapy (I).";
+    if (!structC.trim() && !structO.trim()) {
+      return "Please specify a Comparator / Control (C) or a Target Outcome (O) (or both).";
+    }
+    if (parsed.logicalCount > 6) {
+      return `${parsed.logicalCount} keywords detected — maximum is 6.`;
+    }
+    return null;
+  }, [entryStyle, structP, structI, structC, structO, parsed.logicalCount]);
+
+  const countHint = useMemo(() => {
+    if (entryStyle === "structured") {
+      const filled = [structP, structI, structC, structO].filter(s => s.trim().length > 0).length;
+      if (filled === 0) return "";
+      if (!structP.trim() || !structI.trim()) {
+        return `${filled} structured field${filled === 1 ? "" : "s"} entered — Population (P) and Intervention (I) are required.`;
+      }
+      return `${filled} structured PICO field${filled === 1 ? "" : "s"} entered.`;
+    }
+    return keywordCountHint(parsed);
+  }, [entryStyle, structP, structI, structC, structO, parsed]);
+
+  const validationMessage = entryStyle === "structured" ? structuredValidationError : validateKeywords(parsed);
   const canSubmit = validationMessage === null;
 
   const liveMessage = input.trim() ? validationMessage : null;
@@ -156,7 +185,7 @@ export default function Home() {
 
   const start = () => {
     const current = resolveCorrections(parseInput(input), decisions);
-    const err = validateKeywords(current);
+    const err = entryStyle === "structured" ? structuredValidationError : validateKeywords(current);
     if (err) { setTagError(err); return; }
     setTagError(null);
     sset(KEYS.input, toSessionInput(current, input));
