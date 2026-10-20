@@ -199,10 +199,14 @@ export default function Home() {
       <header className="hdr">
         <div className="hdr-inner">
           <div className="hdr-left">
-            <svg className="lens-icon" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="11" cy="11" r="8" />
-              <path d="M21 21l-4.3-4.3" />
-            </svg>
+            <Image
+              src="/icon-192.png"
+              alt="AI PICO Logo"
+              width={36}
+              height={36}
+              style={{ borderRadius: 8, marginRight: 8, boxShadow: "0 2px 8px rgba(15, 118, 110, 0.25)" }}
+              priority
+            />
             <span className="title-main">
               AI PICO <span className="version-badge">v3.1</span>
             </span>
