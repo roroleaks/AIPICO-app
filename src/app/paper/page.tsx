@@ -55,6 +55,44 @@ interface CitationChecks {
 }
 interface ExcludedRef { pmid: string; title: string; reason: string; url: string }
 
+function renderWithUpperCitations(text: string): React.ReactNode {
+  if (!text) return null;
+  // Match bracketed Vancouver citation patterns: e.g. [1], [1, 2], [1-3], [1, 3, 5-7]
+  const citationRegex = /(\[[\d\s,\-]+\])/g;
+  const parts = text.split(citationRegex);
+  if (parts.length <= 1) return text;
+
+  return parts.map((seg, sIdx) => {
+    if (seg.startsWith("[") && seg.endsWith("]") && /^\[[\d\s,\-]+\]$/.test(seg)) {
+      const firstNumMatch = seg.match(/\d+/);
+      const firstNum = firstNumMatch ? firstNumMatch[0] : "";
+      return (
+        <sup
+          key={sIdx}
+          className="vancouver-citation"
+          title={`Vancouver Reference ${seg} — click to view`}
+          onClick={(e) => {
+            if (!firstNum) return;
+            e.preventDefault();
+            const target = document.getElementById(`ref-${firstNum}`);
+            if (target) {
+              target.scrollIntoView({ behavior: "smooth", block: "center" });
+              target.style.transition = "background-color 0.4s ease";
+              target.style.backgroundColor = "#ccfbf1";
+              setTimeout(() => {
+                target.style.backgroundColor = "transparent";
+              }, 1500);
+            }
+          }}
+        >
+          {seg}
+        </sup>
+      );
+    }
+    return seg;
+  });
+}
+
 function FormattedPaperSection({ content }: { content: string }) {
   if (!content) return null;
   const blocks = content.split(/\n{2,}/).map(b => b.trim()).filter(Boolean);
@@ -88,7 +126,15 @@ function FormattedPaperSection({ content }: { content: string }) {
                 const parts = item.split(/\*\*(.*?)\*\*/);
                 return (
                   <li key={iIdx} style={{ marginBottom: 6 }}>
-                    {parts.map((p, pIdx) => (pIdx % 2 === 1 ? <strong key={pIdx} style={{ color: "#0f172a" }}>{p}</strong> : p))}
+                    {parts.map((p, pIdx) =>
+                      pIdx % 2 === 1 ? (
+                        <strong key={pIdx} style={{ color: "#0f172a" }}>
+                          {renderWithUpperCitations(p)}
+                        </strong>
+                      ) : (
+                        <span key={pIdx}>{renderWithUpperCitations(p)}</span>
+                      )
+                    )}
                   </li>
                 );
               })}
@@ -98,7 +144,15 @@ function FormattedPaperSection({ content }: { content: string }) {
         const parts = block.split(/\*\*(.*?)\*\*/);
         return (
           <p key={idx} style={{ marginBottom: 12 }}>
-            {parts.map((p, pIdx) => (pIdx % 2 === 1 ? <strong key={pIdx} style={{ color: "#0f172a" }}>{p}</strong> : p))}
+            {parts.map((p, pIdx) =>
+              pIdx % 2 === 1 ? (
+                <strong key={pIdx} style={{ color: "#0f172a" }}>
+                  {renderWithUpperCitations(p)}
+                </strong>
+              ) : (
+                <span key={pIdx}>{renderWithUpperCitations(p)}</span>
+              )
+            )}
           </p>
         );
       })}
@@ -528,6 +582,59 @@ ${bibliography}
     }, slug(commentary.title) + "-commentary.pdf", "commentary");
   };
 
+  const exportCommentaryWord = () => {
+    if (!commentary) return;
+    const esc = (s: unknown): string =>
+      String(s ?? "").replace(/[&<>"']/g, c =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+
+    const formatNarrativeForWord = (text: string): string => {
+      const escaped = esc(text);
+      const withHeadings = escaped.replace(/^####\s+(.+)$/gm, '<h4 style="color:#0f766e;margin-top:16px;margin-bottom:6px;">$1</h4>');
+      const withBold = withHeadings.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      const withSup = withBold.replace(/(\[[\d\s,\-]+\])/g, '<sup style="font-size:75%;color:#0f766e;font-weight:bold;">$1</sup>');
+      return withSup.split(/\n{2,}/).map(p => `<p style="margin-bottom:12px;line-height:1.6;">${p}</p>`).join("");
+    };
+
+    const refs = commentary.references.length ? commentary.references.map((r, i) => vancouverFromString(r, i + 1)) : [];
+    if (refs.length && !guardDeliverable(refs, "Commentary Word")) return;
+
+    const html = `<html><head><meta charset="utf-8">
+<style>
+body { font-family: Calibri, Arial, sans-serif; font-size: 11pt; line-height: 1.6; color: #1e293b; padding: 24px; }
+h1 { font-size: 18pt; color: #0f172a; margin-bottom: 8px; }
+h2 { font-size: 13pt; color: #0f766e; margin-top: 18px; border-bottom: 1px solid #cbd5e1; padding-bottom: 4px; }
+h4 { font-size: 11pt; color: #0f766e; margin-top: 14px; margin-bottom: 4px; }
+sup { font-size: 75%; vertical-align: super; font-weight: bold; color: #0f766e; }
+ol { margin-left: 20px; }
+li { margin-bottom: 8px; }
+</style>
+</head><body>
+<h1>${esc(commentary.title)}</h1>
+<p><b>Keywords:</b> ${esc(commentary.keywords.join(", "))}</p>
+<h2>Abstract</h2>
+${formatNarrativeForWord(commentary.abstract)}
+<h2>Introduction</h2>
+${formatNarrativeForWord(commentary.introduction)}
+<h2>Discussion</h2>
+${formatNarrativeForWord(commentary.discussion)}
+<h2>Conclusion</h2>
+${formatNarrativeForWord(commentary.conclusion)}
+${refs.length ? `<h2>References (Vancouver Style)</h2><ol>${refs.map(r => `<li>${esc(r)}</li>`).join("")}</ol>` : ""}
+<p style="margin-top:24px;font-size:9pt;color:#64748b;">AI PICO v3.1 — Copyright©RaoufRoshdy2026</p>
+</body></html>`;
+
+    const blob = new Blob(["\ufeff" + html], { type: "application/msword" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = slug(commentary.title) + "-commentary.doc";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
+
   const total = formulation ? formulation.scores.reduce((x, s) => x + (s.value || 0), 0) : 0;
   const maxTotal = formulation ? formulation.scores.length * 20 : 100;
 
@@ -569,6 +676,7 @@ ${bibliography}
                 {hasNoReferences && (
                   <span className="hint" style={{ marginTop: 0 }}>No references to export</span>
                 )}
+                {commentary && <button className="secondary" onClick={exportCommentaryWord}>📄 Commentary (Word)</button>}
                 {commentary && <button className="secondary" disabled={!!exporting} onClick={exportCommentaryToPDF}>{exporting === "commentary" ? "⏳ Generating commentary PDF…" : "🖨️ Download Commentary PDF"}</button>}
               </div>
             </div>
@@ -614,7 +722,7 @@ ${bibliography}
                 <h3 className="sec-h">Conclusion</h3><FormattedPaperSection content={commentary.conclusion} />
                 {!!commentary.references.length && (
                   <><h3 className="sec-h">References (Vancouver Style)</h3>
-                    <ol className="refs-numbered">{commentary.references.map((ref, i) => <li key={i}>{vancouverFromString(ref, i + 1)}</li>)}</ol></>
+                    <ol className="refs-numbered">{commentary.references.map((ref, i) => <li key={i} id={`ref-${i + 1}`}>{vancouverFromString(ref, i + 1)}</li>)}</ol></>
                 )}
                 {/* Filtering summary: how many records were retrieved, how many survived the
                     claim-specific filter, and what was dropped. Contextual records are listed

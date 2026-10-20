@@ -509,6 +509,32 @@ button.link {
   color: #b3261e;
 }
 
+/* Vancouver Citation Superscript ("Upper Case") Style */
+.vancouver-citation {
+  font-size: 0.74em;
+  line-height: 0;
+  vertical-align: baseline;
+  position: relative;
+  top: -0.48em;
+  font-weight: 700;
+  color: var(--accent);
+  padding: 0 1.5px;
+  cursor: pointer;
+  user-select: text;
+  transition: color 0.15s ease, text-decoration 0.15s ease;
+}
+
+.vancouver-citation:hover {
+  color: #0f766e;
+  text-decoration: underline;
+}
+
+.refs-numbered li {
+  scroll-margin-top: 80px;
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+
 /* PICO Question & Variants */
 .final-q {
   background: var(--accent-light);
@@ -959,5 +985,11 @@ footer {
   .refs-numbered {
     margin-left: 16px;
     font-size: 0.82rem;
+  }
+
+  .vancouver-citation {
+    font-size: 0.78em;
+    padding: 0 1px;
+    touch-action: manipulation;
   }
 }
