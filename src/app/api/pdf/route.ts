@@ -3,11 +3,14 @@ import { z } from "zod";
 import PDFDocument from "pdfkit";
 import { validateDeliverableIntegrity } from "@/lib/deliverable-integrity";
 import type { AuditableRef } from "@/lib/relevance";
+import {
+  transformCitationsInText,
+  formatBibliographyList,
+  type CitationStyle
+} from "@/lib/citation-formatter";
 
 export const runtime = "nodejs";
 export const maxDuration = 20;
-
-
 
 const picoRowSchema = z.object({
   label: z.string().max(200),
@@ -37,6 +40,7 @@ const pdfPayloadSchema = z.object({
   docType: z.string().max(100).optional().nullable(),
   title: z.string().min(1).max(500),
   meta: z.string().max(500).optional().nullable(),
+  citationStyle: z.enum(["vancouver", "apa", "harvard"]).optional().nullable(),
   pico: z.array(picoRowSchema).optional().nullable(),
   outcomes: z.array(z.string().max(500)).optional().nullable(),
   keywords: z.array(z.string().max(100)).optional().nullable(),
@@ -112,7 +116,10 @@ export async function POST(req: Request) {
       }
     }
 
-    const doc = new PDFDocument({ size: "A4", margin: 56, compress: false, bufferPages: true });
+    const style: CitationStyle = body.citationStyle || "vancouver";
+    const records = (body.retainedReferences || []) as AuditableRef[];
+
+    const doc = new PDFDocument({ size: "A4", margin: 54, compress: false, bufferPages: true });
     const chunks: Buffer[] = [];
     doc.on("data", (c: Buffer) => chunks.push(c));
 
@@ -122,7 +129,7 @@ export async function POST(req: Request) {
     const teal = "#0f6b6b";
     const ink = "#1c2430";
     const muted = "#8a95a0";
-    const lineGap = 14;
+    const lineGap = 13;
 
     const wrap = (text: string, width: number): string[] => {
       const out: string[] = [];
@@ -130,7 +137,7 @@ export async function POST(req: Request) {
         let line = "";
         for (const word of hard.split(/\s+/).filter(Boolean)) {
           const cand = line ? `${line} ${word}` : word;
-          if (!line || doc.widthOfString(cand, { font: FONT, size: 11 } as never) <= width) line = cand;
+          if (!line || doc.widthOfString(cand, { font: FONT, size: 10.5 } as never) <= width) line = cand;
           else { out.push(line); line = word; }
         }
         if (line) out.push(line);
@@ -139,117 +146,200 @@ export async function POST(req: Request) {
     };
 
     const ensure = (needed: number) => {
-      if (doc.y + needed > doc.page.height - doc.page.margins.bottom) doc.addPage();
+      if (doc.y + needed > doc.page.height - doc.page.margins.bottom - 20) doc.addPage();
     };
 
-    const footer = () => {
+    const header = (pageNum: number) => {
+      if (pageNum === 0) return; // omit running header on page 1
+      doc.font(FONT_O).fontSize(8).fillColor(muted);
+      const fLeft: number = doc.page.margins.left;
+      const fRight: number = doc.page.width - doc.page.margins.right;
+      doc.text("AI PICO v3.1 · Clinical Evidence Commentary · Obstetrics & Gynecology", fLeft, 26, {
+        width: fRight - fLeft,
+        align: "right",
+        lineBreak: false
+      });
+      doc.moveTo(fLeft, 38).lineTo(fRight, 38).strokeColor("#cbd5e1").lineWidth(0.5).stroke();
+    };
+
+    const footer = (pageNum: number, totalPages: number) => {
       doc.font(FONT_O).fontSize(8.5).fillColor(muted);
-      const fLeftF: number = doc.page.margins.left;
-      const fRightF: number = doc.page.width - doc.page.margins.right;
-      doc.text("AI PICO v3.1 — Copyright©RaoufRoshdy2026", fLeftF, doc.page.height - doc.page.margins.bottom + 4, { width: fRightF - doc.page.margins.left - 170, lineBreak: false });
-      doc.text(new Date().toLocaleDateString(), fRightF, doc.page.height - doc.page.margins.bottom + 4, { width: 120, align: "right", lineBreak: false });
+      const fLeft: number = doc.page.margins.left;
+      const fRight: number = doc.page.width - doc.page.margins.right;
+      const bottomY = doc.page.height - doc.page.margins.bottom + 8;
+      doc.moveTo(fLeft, bottomY - 6).lineTo(fRight, bottomY - 6).strokeColor("#cbd5e1").lineWidth(0.5).stroke();
+      doc.text("AI PICO v3.1 — Copyright©RaoufRoshdy2026", fLeft, bottomY, {
+        width: 220,
+        lineBreak: false
+      });
+      doc.text(`Page ${pageNum + 1} of ${totalPages}`, fLeft, bottomY, {
+        width: fRight - fLeft,
+        align: "center",
+        lineBreak: false
+      });
+      doc.text(new Date().toLocaleDateString(), fRight - 100, bottomY, {
+        width: 100,
+        align: "right",
+        lineBreak: false
+      });
     };
 
     const title = String(body.title).trim();
     doc.font(FONT_B).fontSize(8).fillColor(muted).text(String(body.docType || "Document").toUpperCase(), { align: "center" });
+    doc.moveDown(0.4);
+    doc.font(FONT_B).fontSize(18).fillColor(ink).text(title, { align: "center" });
+    doc.moveDown(0.4);
+    doc.font(FONT_O).fontSize(9.5).fillColor(muted).text(
+      `${String(body.meta || "")} · Citation Style: ${style === "vancouver" ? "Vancouver (Uppercase / No Brackets)" : style.toUpperCase()}`,
+      { align: "center" }
+    );
+    doc.moveDown(0.8);
+
+    // Educational Disclaimer Callout Banner
+    ensure(46);
+    const discTop = doc.y;
+    const boxW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    doc.rect(doc.page.margins.left, discTop, boxW, 36).fill("#f0fdfa");
+    doc.rect(doc.page.margins.left, discTop, 4, 36).fill(teal);
+    doc.font(FONT_B).fontSize(8.5).fillColor(teal).text("EDUCATIONAL DISCLAIMER:", doc.page.margins.left + 12, discTop + 5);
+    doc.font(FONT_O).fontSize(8).fillColor("#334155").text(
+      "This material is synthesized for clinical decision-support and educational planning. It does not replace individualized clinical judgment or critical appraisal of primary peer-reviewed literature.",
+      doc.page.margins.left + 12,
+      discTop + 16,
+      { width: boxW - 24, lineGap: 2 }
+    );
+    doc.y = discTop + 44;
     doc.moveDown(0.5);
-    doc.font(FONT_B).fontSize(19).fillColor(ink).text(title, { align: "center" });
-    doc.moveDown(0.5);
-    doc.font(FONT_O).fontSize(9.5).fillColor(muted).text(String(body.meta || ""), { align: "center" });
-    doc.moveDown(1.2);
 
     if (Array.isArray(body.pico) && body.pico.length) {
       ensure(60);
-      doc.font(FONT_B).fontSize(13).fillColor(teal).text("Clinical Question (PICO)");
-      doc.moveDown(0.4);
+      doc.font(FONT_B).fontSize(12.5).fillColor(teal).text("Clinical Question (PICO)");
+      doc.moveDown(0.35);
       const half = doc.page.width - doc.page.margins.left - doc.page.margins.right - 6;
       for (const row of body.pico.filter(r => r && r.label)) {
         ensure(40);
         const label = String(row.label);
         const value = String(row.value || "");
-        const labelW = doc.widthOfString(label, { font: FONT_B, size: 10 } as never) + 12;
+        const labelW = doc.widthOfString(label, { font: FONT_B, size: 9.5 } as never) + 12;
         const top = doc.y;
-        const labelH = 22;
+        const labelH = 20;
         doc.rect(doc.page.margins.left, top, labelW, labelH).fill("#e3f2f2");
-        doc.font(FONT_B).fontSize(10).fillColor(teal).text(label, doc.page.margins.left + 6, top + 3);
-        doc.fillColor(ink).font(FONT).fontSize(10.5);
+        doc.font(FONT_B).fontSize(9.5).fillColor(teal).text(label, doc.page.margins.left + 6, top + 3);
+        doc.fillColor(ink).font(FONT).fontSize(10);
         const vLines = wrap(value, half - labelW);
         doc.text(vLines.join("\n") || "", doc.page.margins.left + labelW + 8, top + 3, { width: half - labelW, lineGap: 3 });
-        doc.rect(doc.page.margins.left, top, half, Math.max(labelH, vLines.length * 16)).stroke("#b9c2cc");
-        doc.moveDown(Math.max(labelH, vLines.length * 16) / 12 + 0.3);
+        doc.rect(doc.page.margins.left, top, half, Math.max(labelH, vLines.length * 15)).stroke("#b9c2cc");
+        doc.moveDown(Math.max(labelH, vLines.length * 15) / 12 + 0.3);
       }
-      doc.moveDown(0.6);
+      doc.moveDown(0.5);
     }
 
     if (Array.isArray(body.outcomes) && body.outcomes.length) {
-      ensure(40);
-      doc.font(FONT_B).fontSize(13).fillColor(teal).text("Selected Outcomes");
-      doc.moveDown(0.35);
-      doc.font(FONT).fontSize(10.5).fillColor(ink);
+      ensure(36);
+      doc.font(FONT_B).fontSize(12).fillColor(teal).text("Selected Outcomes");
+      doc.moveDown(0.3);
+      doc.font(FONT).fontSize(10).fillColor(ink);
       body.outcomes.forEach((o, i) => {
-        ensure(20);
+        ensure(18);
         doc.text(`  ${i + 1}.  ${o}`, doc.page.margins.left + 6, doc.y, { width: doc.page.width - doc.page.margins.left - doc.page.margins.right - 18, lineGap: 3 });
-        doc.moveDown(0.35);
+        doc.moveDown(0.3);
       });
-      doc.moveDown(0.4);
+      doc.moveDown(0.35);
     }
 
     if (Array.isArray(body.keywords) && body.keywords.length) {
       ensure(20);
-      doc.font(FONT_O).fontSize(10).fillColor("#444d58").text(`Keywords: ${body.keywords.join("; ")}`, { width: doc.page.width - doc.page.margins.left - doc.page.margins.right, lineGap: 3 });
-      doc.moveDown(0.6);
+      doc.font(FONT_O).fontSize(9.5).fillColor("#444d58").text(`Keywords: ${body.keywords.join("; ")}`, { width: doc.page.width - doc.page.margins.left - doc.page.margins.right, lineGap: 3 });
+      doc.moveDown(0.5);
     }
 
     if (Array.isArray(body.sections)) {
       for (const section of body.sections) {
         if (!section || !Array.isArray(section.blocks) || !section.blocks.length) continue;
         if (section.heading) {
-          ensure(46);
-          doc.font(FONT_B).fontSize(13).fillColor(teal).text(String(section.heading));
-          doc.moveDown(0.15);
+          ensure(44);
+          doc.font(FONT_B).fontSize(12.5).fillColor(teal).text(String(section.heading));
+          doc.moveDown(0.12);
           doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).strokeColor(teal).lineWidth(1.2).stroke();
-          doc.moveDown(0.4);
+          doc.moveDown(0.35);
         }
         for (const block of section.blocks) {
-          const text = String(block || "").replace(/\*\*/g, "").replace(/[*_#`~]/g, "").trim();
-          if (!text) continue;
-          const shortHead = text.length < 70 && !/[.!?]\s*$/.test(text);
-          if (shortHead) {
+          const rawText = String(block || "").replace(/[*_#`~]/g, "").trim();
+          if (!rawText) continue;
+
+          const isSubhead = rawText.startsWith("#### ") || (rawText.length < 75 && !/[.!?]\s*$/.test(rawText));
+          if (isSubhead) {
             ensure(24);
-            doc.font(FONT_B).fontSize(11).fillColor("#14535a").text(text, { width: doc.page.width - doc.page.margins.left - doc.page.margins.right, lineGap: 3 });
+            const cleanSub = rawText.replace(/^####\s+/, "");
+            doc.font(FONT_B).fontSize(10.5).fillColor("#14535a").text(cleanSub, { width: doc.page.width - doc.page.margins.left - doc.page.margins.right, lineGap: 3 });
             doc.moveDown(0.25);
             continue;
           }
-          ensure(22);
-          doc.font(FONT).fontSize(11).fillColor(ink);
-          const lines = wrap(text, doc.page.width - doc.page.margins.left - doc.page.margins.right);
+
+          // Bullet points
+          if (rawText.startsWith("- ")) {
+            const items = rawText.split(/\n-\s+/).map(it => it.replace(/^- /, "").trim()).filter(Boolean);
+            for (const item of items) {
+              ensure(20);
+              const textWithCites = style === "vancouver"
+                ? item.replace(/\[([\d\s,\-]+)\]/g, "$1") // uppercase style with NO brackets
+                : transformCitationsInText(item, records, style);
+              doc.font(FONT).fontSize(10.5).fillColor(ink);
+              const lines = wrap(`•  ${textWithCites}`, doc.page.width - doc.page.margins.left - doc.page.margins.right - 14);
+              doc.text(lines.join("\n"), doc.page.margins.left + 10, doc.y, { width: doc.page.width - doc.page.margins.left - doc.page.margins.right - 14, lineGap: 3 });
+              doc.moveDown(0.3);
+            }
+            continue;
+          }
+
+          // Standard narrative paragraph
+          ensure(24);
+          doc.font(FONT).fontSize(10.5).fillColor(ink);
+
+          // For Vancouver: "note that vancover must be uppercase and with no barckets"
+          // We remove brackets from citations: [1, 2] -> 1, 2
+          const textWithCites = style === "vancouver"
+            ? rawText.replace(/\[([\d\s,\-]+)\]/g, "$1")
+            : transformCitationsInText(rawText, records, style);
+
+          const lines = wrap(textWithCites, doc.page.width - doc.page.margins.left - doc.page.margins.right);
           doc.text(lines.join("\n"), { align: "justify", lineGap });
-          doc.moveDown(0.45);
+          doc.moveDown(0.4);
         }
       }
     }
 
-    if (Array.isArray(body.references) && body.references.length) {
+    // References section
+    const bibList = formatBibliographyList(records, style);
+    const refsToRender = bibList.length
+      ? bibList.map(b => b.text)
+      : (body.references || []);
+
+    if (refsToRender.length) {
       ensure(46);
-      doc.font(FONT_B).fontSize(13).fillColor(teal).text("References");
-      doc.moveDown(0.15);
+      doc.font(FONT_B).fontSize(12.5).fillColor(teal).text(
+        `References (${style === "vancouver" ? "Vancouver Style — Sequential" : style === "apa" ? "APA 7th Edition — Alphabetical" : "Harvard Style — Alphabetical"})`
+      );
+      doc.moveDown(0.12);
       doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).strokeColor(teal).lineWidth(1.2).stroke();
-      doc.moveDown(0.4);
-      doc.font(FONT).fontSize(10).fillColor(ink);
+      doc.moveDown(0.35);
+      doc.font(FONT).fontSize(9.5).fillColor(ink);
       const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-      body.references.forEach((r, i) => {
+      refsToRender.forEach((r, i) => {
         const text = String(r || "").replace(/^\[?\d+\]?[\.\)]?\s*/, "");
-        const lines = wrap(`${i + 1}.  ${text}`, width - 10);
-        ensure(lines.length * 15 + 8);
+        const prefix = style === "vancouver" ? `${i + 1}.  ` : "";
+        const lines = wrap(`${prefix}${text}`, width - 10);
+        ensure(lines.length * 14 + 6);
         doc.text(lines.join("\n"), doc.page.margins.left, doc.y, { width: width - 10, lineGap: 3 });
-        doc.moveDown(lines.length * 0.6 + 0.4);
+        doc.moveDown(lines.length * 0.5 + 0.35);
       });
     }
 
     const range = doc.bufferedPageRange();
     for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
-      footer();
+      header(i);
+      footer(i, range.count);
     }
     doc.flushPages();
     doc.end();

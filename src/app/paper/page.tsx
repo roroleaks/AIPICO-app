@@ -8,7 +8,13 @@ import { sget, sset, KEYS } from "@/lib/session";
 import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
 import { NO_LITERATURE_MESSAGE, NO_LITERATURE_HINT } from "@/lib/clinical-keywords";
 import { formatVancouverReference } from "@/lib/relevance";
+import type { AuditableRef } from "@/lib/relevance";
 import { validateDeliverableIntegrity } from "@/lib/deliverable-integrity";
+import {
+  type CitationStyle,
+  transformCitationsInText,
+  formatBibliographyList
+} from "@/lib/citation-formatter";
 
 interface ReferenceItem { pmid: string; title: string; authors: string; year: string; journal: string; doi?: string; url: string }
 type PubMedResult = ReferenceItem;
@@ -55,22 +61,34 @@ interface CitationChecks {
 }
 interface ExcludedRef { pmid: string; title: string; reason: string; url: string }
 
-function renderWithUpperCitations(text: string): React.ReactNode {
+function renderWithUpperCitations(
+  text: string,
+  style: CitationStyle = "vancouver",
+  records: AuditableRef[] = []
+): React.ReactNode {
   if (!text) return null;
-  // Match bracketed Vancouver citation patterns: e.g. [1], [1, 2], [1-3], [1, 3, 5-7]
+
+  if (style !== "vancouver") {
+    // For APA and Harvard, format in-text citations as parenthetical (Author et al., Year)
+    return transformCitationsInText(text, records, style);
+  }
+
+  // Vancouver citation style:
+  // Strictly UPPERCASE / SUPERSCRIPT with NO BRACKETS (e.g. 1, 2 or 1-3)
   const citationRegex = /(\[[\d\s,\-]+\])/g;
   const parts = text.split(citationRegex);
   if (parts.length <= 1) return text;
 
   return parts.map((seg, sIdx) => {
     if (seg.startsWith("[") && seg.endsWith("]") && /^\[[\d\s,\-]+\]$/.test(seg)) {
-      const firstNumMatch = seg.match(/\d+/);
+      const cleanNums = seg.replace(/^\[/, "").replace(/\]$/, "").trim();
+      const firstNumMatch = cleanNums.match(/\d+/);
       const firstNum = firstNumMatch ? firstNumMatch[0] : "";
       return (
         <sup
           key={sIdx}
           className="vancouver-citation"
-          title={`Vancouver Reference ${seg} — click to view`}
+          title={`Vancouver Reference ${cleanNums} — click to view`}
           onClick={(e) => {
             if (!firstNum) return;
             e.preventDefault();
@@ -85,7 +103,7 @@ function renderWithUpperCitations(text: string): React.ReactNode {
             }
           }}
         >
-          {seg}
+          {cleanNums}
         </sup>
       );
     }
@@ -93,7 +111,15 @@ function renderWithUpperCitations(text: string): React.ReactNode {
   });
 }
 
-function FormattedPaperSection({ content }: { content: string }) {
+function FormattedPaperSection({
+  content,
+  style = "vancouver",
+  records = []
+}: {
+  content: string;
+  style?: CitationStyle;
+  records?: AuditableRef[];
+}) {
   if (!content) return null;
   const blocks = content.split(/\n{2,}/).map(b => b.trim()).filter(Boolean);
   return (
@@ -129,10 +155,10 @@ function FormattedPaperSection({ content }: { content: string }) {
                     {parts.map((p, pIdx) =>
                       pIdx % 2 === 1 ? (
                         <strong key={pIdx} style={{ color: "#0f172a" }}>
-                          {renderWithUpperCitations(p)}
+                          {renderWithUpperCitations(p, style, records)}
                         </strong>
                       ) : (
-                        <span key={pIdx}>{renderWithUpperCitations(p)}</span>
+                        <span key={pIdx}>{renderWithUpperCitations(p, style, records)}</span>
                       )
                     )}
                   </li>
@@ -147,10 +173,10 @@ function FormattedPaperSection({ content }: { content: string }) {
             {parts.map((p, pIdx) =>
               pIdx % 2 === 1 ? (
                 <strong key={pIdx} style={{ color: "#0f172a" }}>
-                  {renderWithUpperCitations(p)}
+                  {renderWithUpperCitations(p, style, records)}
                 </strong>
               ) : (
-                <span key={pIdx}>{renderWithUpperCitations(p)}</span>
+                <span key={pIdx}>{renderWithUpperCitations(p, style, records)}</span>
               )
             )}
           </p>
@@ -235,6 +261,10 @@ export default function PaperPage() {
     if (Array.isArray(arr) && arr.length) return arr.filter(o => typeof o === "string" && o.trim());
     const o = sget<string>("cq_outcome");
     return o ? o.split(/\s+and\s+|\s*,\s*/).filter(Boolean) : [];
+  });
+  const [citationStyle, setCitationStyle] = useState<CitationStyle>(() => {
+    const s = sget<CitationStyle>(KEYS.citationStyle);
+    return s && (s === "vancouver" || s === "apa" || s === "harvard") ? s : "vancouver";
   });
   const [variantIdx, setVariantIdx] = useState(0);
   const [commentary, setCommentary] = useState<CommentaryPaper | null>(() => {
@@ -483,43 +513,48 @@ export default function PaperPage() {
     }, slug(activeQuestion) + "-question.pdf", "question");
   };
 
-  const exportWord = () => {
+  const exportWord = async () => {
     if (!formulation) return;
-    // This document is real HTML, so every interpolated value must be escaped or
-    // markup in the question/elements would execute when the file is opened.
-    const esc = (s: unknown): string =>
-      String(s ?? "").replace(/[&<>"']/g, c =>
-        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
-    // The bibliography is the same filtered set the screen and the PDF exports use, never the
-    // raw search pool, so a Word copy cannot reintroduce a source the claim filter rejected.
-    const refs = commentary?.fetchedReferences?.length
-      ? commentary.fetchedReferences
-      : commentary?.references?.length
-        ? commentary.references
-        : [];
-    const bibliography = refs.length
-      ? `<h2>References (Vancouver Style)</h2>
-<ol>${refs.map((r, i) => `<li>${esc(typeof r === "string" ? r : vancouverPlain(r, i + 1))}</li>`).join("")}</ol>`
-      : "";
-    if (refs.length && !guardDeliverable(refs.map((r, i) => (typeof r === "string" ? r : vancouverPlain(r, i + 1))), "Word export")) return;
-    const html = `<html><head><meta charset="utf-8"></head><body>
-<h1>${esc(activeQuestion)}</h1>
-<h2>Framework: ${esc(formulation.framework)}</h2>
-<table border="1" cellpadding="6" style="border-collapse:collapse">
-${formulation.elements.map(e => `<tr><td><b>${esc(e.label)}</b></td><td>${esc(e.value)}</td></tr>`).join("")}
-</table>
-${bibliography}
-<p>Generated by Clinical Question Assistant — ${new Date().toLocaleDateString()}</p>
-</body></html>`;
-    const blob = new Blob(["﻿" + html], { type: "application/msword" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "clinical-question.doc";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    setExporting("question");
+    setExportError(null);
+    try {
+      const payload = {
+        title: activeQuestion,
+        meta: `Generated ${new Date().toLocaleDateString()} · Obstetrics & Gynecology`,
+        citationStyle,
+        pico: picoPayload(),
+        outcomes: outcomes.length ? outcomes : undefined,
+        sections: [
+          {
+            heading: `Structured Clinical Question Framework (${formulation.framework})`,
+            blocks: [
+              activeQuestion,
+              "Clinical Domain: Obstetrics & Gynecology"
+            ]
+          }
+        ]
+      };
+
+      const res = await fetch("/api/docx", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error("Failed to export Word document.");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = slug(activeQuestion) + "-question.docx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (e) {
+      setExportError("⚠️ Word export failed: " + (e instanceof Error ? e.message : "unknown error"));
+    } finally {
+      setExporting(null);
+    }
   };
 
   const exportRefsPDF = (items: ReferenceItem[], docTitle: string, header: string, kind: "sources" | "pubmed") => {
@@ -568,6 +603,7 @@ ${bibliography}
       docType: "Scientific Commentary",
       title: commentary.title,
       meta: `Obstetrics & Gynecology · Generated ${new Date().toLocaleDateString()}`,
+      citationStyle,
       pico: picoPayload(),
       outcomes: outcomes.length ? outcomes : undefined,
       keywords: Array.isArray(commentary.keywords) ? commentary.keywords : undefined,
@@ -582,57 +618,60 @@ ${bibliography}
     }, slug(commentary.title) + "-commentary.pdf", "commentary");
   };
 
-  const exportCommentaryWord = () => {
+  const exportCommentaryWord = async () => {
     if (!commentary) return;
-    const esc = (s: unknown): string =>
-      String(s ?? "").replace(/[&<>"']/g, c =>
-        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+    setExporting("commentary");
+    setExportError(null);
+    try {
+      const discussionBlocks = commentary.discussion.split(/\n{1,}/).map(b => b.trim()).filter(Boolean);
+      const refs = commentary.references.length ? commentary.references.map((r, i) => vancouverFromString(r, i + 1)) : [];
+      if (refs.length && !guardDeliverable(refs, "Commentary Word")) {
+        setExporting(null);
+        return;
+      }
 
-    const formatNarrativeForWord = (text: string): string => {
-      const escaped = esc(text);
-      const withHeadings = escaped.replace(/^####\s+(.+)$/gm, '<h4 style="color:#0f766e;margin-top:16px;margin-bottom:6px;">$1</h4>');
-      const withBold = withHeadings.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-      const withSup = withBold.replace(/(\[[\d\s,\-]+\])/g, '<sup style="font-size:75%;color:#0f766e;font-weight:bold;">$1</sup>');
-      return withSup.split(/\n{2,}/).map(p => `<p style="margin-bottom:12px;line-height:1.6;">${p}</p>`).join("");
-    };
+      const payload = {
+        title: commentary.title,
+        meta: `Obstetrics & Gynecology · Generated ${new Date().toLocaleDateString()}`,
+        citationStyle,
+        pico: picoPayload(),
+        outcomes: outcomes.length ? outcomes : undefined,
+        keywords: Array.isArray(commentary.keywords) ? commentary.keywords : undefined,
+        sections: [
+          { heading: "Structured Abstract", blocks: [commentary.abstract] },
+          { heading: "Introduction", blocks: paras(commentary.introduction) },
+          { heading: "Thematic Evidence Discussion", blocks: discussionBlocks.length ? discussionBlocks : [commentary.discussion] },
+          { heading: "Clinical Conclusion", blocks: [commentary.conclusion] }
+        ],
+        references: refs.length ? refs : undefined,
+        retainedReferences: retainedPayload()
+      };
 
-    const refs = commentary.references.length ? commentary.references.map((r, i) => vancouverFromString(r, i + 1)) : [];
-    if (refs.length && !guardDeliverable(refs, "Commentary Word")) return;
-
-    const html = `<html><head><meta charset="utf-8">
-<style>
-body { font-family: Calibri, Arial, sans-serif; font-size: 11pt; line-height: 1.6; color: #1e293b; padding: 24px; }
-h1 { font-size: 18pt; color: #0f172a; margin-bottom: 8px; }
-h2 { font-size: 13pt; color: #0f766e; margin-top: 18px; border-bottom: 1px solid #cbd5e1; padding-bottom: 4px; }
-h4 { font-size: 11pt; color: #0f766e; margin-top: 14px; margin-bottom: 4px; }
-sup { font-size: 75%; vertical-align: super; font-weight: bold; color: #0f766e; }
-ol { margin-left: 20px; }
-li { margin-bottom: 8px; }
-</style>
-</head><body>
-<h1>${esc(commentary.title)}</h1>
-<p><b>Keywords:</b> ${esc(commentary.keywords.join(", "))}</p>
-<h2>Abstract</h2>
-${formatNarrativeForWord(commentary.abstract)}
-<h2>Introduction</h2>
-${formatNarrativeForWord(commentary.introduction)}
-<h2>Discussion</h2>
-${formatNarrativeForWord(commentary.discussion)}
-<h2>Conclusion</h2>
-${formatNarrativeForWord(commentary.conclusion)}
-${refs.length ? `<h2>References (Vancouver Style)</h2><ol>${refs.map(r => `<li>${esc(r)}</li>`).join("")}</ol>` : ""}
-<p style="margin-top:24px;font-size:9pt;color:#64748b;">AI PICO v3.1 — Copyright©RaoufRoshdy2026</p>
-</body></html>`;
-
-    const blob = new Blob(["\ufeff" + html], { type: "application/msword" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = slug(commentary.title) + "-commentary.doc";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+      const res = await fetch("/api/docx", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        let msg = "Word export failed. Please retry.";
+        try { const j = await res.json(); if (j && j.error) msg = j.error; } catch {}
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      if (!blob.size) throw new Error("Unexpected empty response from Word service.");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = slug(commentary.title) + "-commentary.docx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (e) {
+      setExportError("⚠️ Word export failed: " + (e instanceof Error ? e.message : "unknown error"));
+    } finally {
+      setExporting(null);
+    }
   };
 
   const total = formulation ? formulation.scores.reduce((x, s) => x + (s.value || 0), 0) : 0;
@@ -676,8 +715,8 @@ ${refs.length ? `<h2>References (Vancouver Style)</h2><ol>${refs.map(r => `<li>$
                 {hasNoReferences && (
                   <span className="hint" style={{ marginTop: 0 }}>No references to export</span>
                 )}
-                {commentary && <button className="secondary" onClick={exportCommentaryWord}>📄 Commentary (Word)</button>}
-                {commentary && <button className="secondary" disabled={!!exporting} onClick={exportCommentaryToPDF}>{exporting === "commentary" ? "⏳ Generating commentary PDF…" : "🖨️ Download Commentary PDF"}</button>}
+                {commentary && <button className="secondary" disabled={!!exporting} onClick={exportCommentaryWord}>{exporting === "commentary" ? "⏳ Generating .docx…" : "📄 Commentary (.docx)"}</button>}
+                {commentary && <button className="secondary" disabled={!!exporting} onClick={exportCommentaryToPDF}>{exporting === "commentary" ? "⏳ Generating PDF…" : "🖨️ Download Commentary PDF"}</button>}
               </div>
             </div>
             {!commentary && commentaryLoading && (
@@ -714,15 +753,99 @@ ${refs.length ? `<h2>References (Vancouver Style)</h2><ol>${refs.map(r => `<li>$
                     💡 <b>Evidence Grounding:</b> {commentary.notice}
                   </div>
                 )}
+                {/* Citation Style Switcher Bar */}
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    gap: 10,
+                    marginBottom: 16,
+                    padding: "10px 14px",
+                    background: "#f0fdfa",
+                    borderRadius: 8,
+                    border: "1px solid #ccfbf1"
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#0f766e" }}>
+                      📖 Active Citation Style:
+                    </span>
+                    <span className="pill" style={{ background: "#0f766e", color: "#fff", fontSize: "0.82rem", fontWeight: 700 }}>
+                      {citationStyle === "vancouver" ? "Vancouver (Uppercase / No Brackets)" : citationStyle.toUpperCase()}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {(["vancouver", "apa", "harvard"] as const).map(st => (
+                      <button
+                        key={st}
+                        type="button"
+                        className={`chip ${citationStyle === st ? "chip-on" : ""}`}
+                        style={{ padding: "4px 12px", fontSize: "0.82rem", height: "auto", cursor: "pointer" }}
+                        onClick={() => {
+                          setCitationStyle(st);
+                          sset(KEYS.citationStyle, st);
+                        }}
+                      >
+                        {st === "vancouver" ? "1. Vancouver" : st === "apa" ? "2. APA (7th)" : "3. Harvard"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <h2 style={{ marginBottom: 12 }}>{commentary.title}</h2>
                 <p style={{ fontSize: ".9rem", color: "var(--muted)", marginBottom: 16 }}>Keywords: {commentary.keywords.join(", ")}</p>
-                <h3 className="sec-h">Abstract</h3><FormattedPaperSection content={commentary.abstract} />
-                <h3 className="sec-h">Introduction</h3><FormattedPaperSection content={commentary.introduction} />
-                <h3 className="sec-h">Discussion</h3><FormattedPaperSection content={commentary.discussion} />
-                <h3 className="sec-h">Conclusion</h3><FormattedPaperSection content={commentary.conclusion} />
+                <h3 className="sec-h">Abstract</h3>
+                <FormattedPaperSection
+                  content={commentary.abstract}
+                  style={citationStyle}
+                  records={(commentary.fetchedReferences || []) as AuditableRef[]}
+                />
+                <h3 className="sec-h">Introduction</h3>
+                <FormattedPaperSection
+                  content={commentary.introduction}
+                  style={citationStyle}
+                  records={(commentary.fetchedReferences || []) as AuditableRef[]}
+                />
+                <h3 className="sec-h">Discussion</h3>
+                <FormattedPaperSection
+                  content={commentary.discussion}
+                  style={citationStyle}
+                  records={(commentary.fetchedReferences || []) as AuditableRef[]}
+                />
+                <h3 className="sec-h">Conclusion</h3>
+                <FormattedPaperSection
+                  content={commentary.conclusion}
+                  style={citationStyle}
+                  records={(commentary.fetchedReferences || []) as AuditableRef[]}
+                />
                 {!!commentary.references.length && (
-                  <><h3 className="sec-h">References (Vancouver Style)</h3>
-                    <ol className="refs-numbered">{commentary.references.map((ref, i) => <li key={i} id={`ref-${i + 1}`}>{vancouverFromString(ref, i + 1)}</li>)}</ol></>
+                  <>
+                    <h3 className="sec-h">
+                      References ({citationStyle === "vancouver" ? "Vancouver Style — Sequential" : citationStyle === "apa" ? "APA 7th Edition — Alphabetical" : "Harvard Style — Alphabetical"})
+                    </h3>
+                    {citationStyle === "vancouver" ? (
+                      <ol className="refs-numbered">
+                        {commentary.references.map((ref, i) => (
+                          <li key={i} id={`ref-${i + 1}`}>
+                            {vancouverFromString(ref, i + 1)}
+                          </li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <ul className="refs-alphabetical" style={{ listStyleType: "none", paddingLeft: 0 }}>
+                        {formatBibliographyList(
+                          (commentary.fetchedReferences || []) as AuditableRef[],
+                          citationStyle
+                        ).map((item, i) => (
+                          <li key={i} id={`ref-${i + 1}`} style={{ paddingLeft: 24, textIndent: -24, marginBottom: 10, lineHeight: 1.6 }}>
+                            {item.text}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
                 )}
                 {/* Filtering summary: how many records were retrieved, how many survived the
                     claim-specific filter, and what was dropped. Contextual records are listed
@@ -904,7 +1027,7 @@ ${refs.length ? `<h2>References (Vancouver Style)</h2><ol>${refs.map(r => `<li>$
               {pubmedLoading ? "⏳ Searching…" : "📚 Evidence on PubMed"}
             </button>
             <button className="secondary" disabled={!!exporting} onClick={exportQuestionPDF}>{exporting === "question" ? "⏳ Generating PDF…" : "🖨️ Question as PDF"}</button>
-            <button className="secondary" onClick={exportWord}>📄 Word</button>
+            <button className="secondary" disabled={!!exporting} onClick={exportWord}>{exporting === "question" ? "⏳ Generating .docx…" : "📄 Question as Word (.docx)"}</button>
             <button className="secondary" onClick={() => navigator.clipboard.writeText(activeQuestion)}>📋 Copy</button>
           </div>
         </section>

@@ -1,4 +1,4 @@
-# AIPICO — Clinical Question Assistant (Obstetrics & Gynecology)
+# AIPICO v3.1 — Clinical Question Assistant (Obstetrics & Gynecology)
 
 Turns a clinical question into a structured PICO, retrieves candidate literature, and
 generates a commentary in which **every citation resolves to a source that survived a
@@ -12,6 +12,21 @@ intervention the reader did not ask about into the discussion, or attribute a fi
 the wrong author. Those failures are invisible to the reader and easy to miss in review.
 So the rule here is that unsupported content is not allowed to reach a deliverable — it is
 removed, rewritten into an explicit limitation, or the export is refused.
+
+---
+
+### Key Capabilities in v3.1:
+1. **Multi-Style Citation Architecture:**
+   - **Vancouver (ICMJE/NLM):** Sequential uppercase superscript in-text citations with **NO brackets** (e.g., `¹`, `¹ ²`, `¹⁻³`) and numbered bibliography.
+   - **APA 7th Edition:** Author-date parenthetical citations `(Author et al., Year)` and alphabetical references.
+   - **Harvard Style:** Author-year citations `(Author et al. Year)` and alphabetical bibliography with full identifiers.
+2. **Interactive Citation Selection (Step 3 & Step 4):**
+   - Clinicians can select their preferred citation format in Step 3 (`/question`) or toggle between Vancouver, APA, and Harvard dynamically in Step 4 (`/paper`).
+3. **Publication-Ready Microsoft Word (.docx) Export:**
+   - Native binary `.docx` generation via `/api/docx` and the `docx` library.
+   - Features standard 1-inch margins, running headers, running footers with Word page numbers (`Page X of Y`), Arial typography, structured PICO table, educational disclaimer callout, and formatted in-text citations.
+4. **Publication-Ready PDF Export:**
+   - Vector PDF generation via `/api/pdf` and PDFKit featuring running headers (page 2+), running footers with page numbering, educational disclaimer callout, and formatted citations.
 
 ---
 
@@ -58,7 +73,7 @@ npm run build      # production build
 npm run start      # serve the production build
 npm run lint       # eslint
 npm run typecheck  # tsc --noEmit
-npm test           # node:test — 169 tests
+npm test           # node:test — 359 tests
 ```
 
 Deploy:
@@ -76,12 +91,14 @@ host's secret store rather than a file you might later commit.
 
 ## Tests
 
-169 tests, no test framework beyond `node:test` and `node:assert`. They encode clinical and
+359 tests, no test framework beyond `node:test` and `node:assert`. They encode clinical and
 editorial rules rather than implementation details:
 
 | File | What it protects |
 |---|---|
 | `production-fixtures.test.ts` | Real production shapes: relevant short-cervix evidence retained; cancer / PCOS / endometriosis / neonatal / wrong-population / wrong-intervention records excluded; the zero-support case emits the exact published message and fabricates nothing |
+| `citation-formatter.test.ts` | CF1–CF8: Multi-style citation formatting (Vancouver uppercase no-brackets, APA 7th author-date, Harvard author-year, bibliography sorting) |
+| `vancouver-style.test.ts` | V1–V8: ICMJE/NLM Vancouver styling, sequential bracket checks, and deliverable integrity |
 | `citation-integrity-regression.test.ts` | T1–T15 citation and reference regressions |
 | `citation-slot-parsing.test.ts` | Multi-citation, multi-year, name-only and bracket variants |
 | `claim-finalization.test.ts` | Supported, unsupported, off-PICO, contradictory and cross-field claims, plus run-to-run determinism |
@@ -96,16 +113,18 @@ editorial rules rather than implementation details:
 
 ```
 src/app/
-  page.tsx            question entry
-  question/           clarification flow
-  paper/              PICO selection, commentary, every export action
-  gap/                evidence mapping
+  page.tsx            Step 1: Clinical question and PICO input
+  gap/                Step 2: Research gap & evidence mapping
+  question/           Step 3: Outcome & citation style selection
+  paper/              Step 4: Commentary synthesis, quality scores, live style switcher, and deliverables
   api/engine/         retrieval, claim filtering, commentary, claim audit
-  api/pdf/            PDF rendering + server-side integrity refusal (422)
+  api/docx/           native publication-grade Microsoft Word (.docx) export with headers, footers & page numbers
+  api/pdf/            vector PDF rendering + server-side integrity refusal (422)
   api/pubmed/         direct PubMed lookup
 src/lib/
-  evidence-set.ts     canonical identity and cross-provider dedup
-  relevance.ts        PICO matching, citation parsing, reconciliation
+  citation-formatter.ts multi-style citation transformations (Vancouver, APA, Harvard)
+  evidence-set.ts       canonical identity and cross-provider dedup
+  relevance.ts          PICO matching, citation parsing, reconciliation
   claim-finalization.ts
   deliverable-integrity.ts
   clinical-keywords.ts  vocabulary, corrections, no-evidence messaging

@@ -11,6 +11,7 @@ import {
 import { sget, sset, KEYS } from "@/lib/session";
 import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
 import { extractPicoFromQuestion, type ExtractedPico } from "@/lib/pico-parser";
+import type { CitationStyle } from "@/lib/citation-formatter";
 
 interface GapSnapshot {
   topic?: string;
@@ -36,6 +37,7 @@ export default function QuestionPage() {
   const [recommendedRationale, setRecommendedRationale] = useState<string>("");
   const [selectedOutcome, setSelectedOutcome] = useState<string>("");
   const [customOutcome, setCustomOutcome] = useState<string>("");
+  const [citationStyle, setCitationStyle] = useState<CitationStyle>("vancouver");
   const [busy, setBusy] = useState<"loading" | "formulate" | null>("loading");
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -115,11 +117,12 @@ export default function QuestionPage() {
     sset(KEYS.formulation, f);
     sset(KEYS.outcomes, [chosenOutcome]);
     sset("cq_outcome", chosenOutcome);
+    sset(KEYS.citationStyle, citationStyle);
     if (typeof window !== "undefined") {
       window.sessionStorage.removeItem(KEYS.commentary);
     }
     router.push("/paper");
-  }, [router]);
+  }, [citationStyle, router]);
 
   // Formulate PICO and navigate immediately to Step 4
   const proceedToCommentary = useCallback(async (chosenOutcome: string) => {
@@ -252,6 +255,11 @@ export default function QuestionPage() {
         const initialPick = options.find(o => o.id === selection.recommendedOutcome.id)?.label || options[0]?.label || "";
         setSelectedOutcome(initialPick);
 
+        const storedStyle = sget<CitationStyle>(KEYS.citationStyle);
+        if (storedStyle && (storedStyle === "vancouver" || storedStyle === "apa" || storedStyle === "harvard")) {
+          setCitationStyle(storedStyle);
+        }
+
         setBusy(null);
       } catch (err: unknown) {
         setNotice(err instanceof Error ? err.message : "Error extracting clinical outcomes.");
@@ -337,26 +345,7 @@ export default function QuestionPage() {
               </p>
             )}
 
-            <div className="row" style={{ marginTop: 16 }}>
-              <button
-                className="primary"
-                style={{ padding: "12px 28px", fontSize: "1rem" }}
-                disabled={!selectedOutcome || !!busy}
-                onClick={() => selectedOutcome && proceedToCommentary(selectedOutcome)}
-              >
-                {selectedOutcome
-                  ? `Continue to Scientific Commentary with "${selectedOutcome}" ➜`
-                  : "Click an outcome card above to continue ➜"}
-              </button>
-            </div>
-
-            <p className="hint" style={{ marginTop: 8 }} aria-live="polite">
-              {selectedOutcome
-                ? `Selected outcome: "${selectedOutcome}". Click above to immediately generate your Step 4 Scientific Commentary Paper.`
-                : "Select one outcome card above to proceed."}
-            </p>
-
-            <div style={{ marginTop: 24, paddingTop: 18, borderTop: "1px solid var(--border, #e2e8f0)" }}>
+            <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border, #e2e8f0)" }}>
               <h4 style={{ margin: "0 0 8px 0", fontSize: "0.95rem", color: "var(--text-muted, #64748b)" }}>
                 ✏️ Or Enter a Custom Outcome (Optional)
               </h4>
@@ -385,10 +374,110 @@ export default function QuestionPage() {
                   disabled={!customOutcome.trim() || !!busy}
                   onClick={() => customOutcome.trim() && proceedToCommentary(customOutcome.trim())}
                 >
-                  Continue with Custom Outcome ➜
+                  Select Custom Outcome ➜
                 </button>
               </div>
             </div>
+
+            <div style={{ marginTop: 24, paddingTop: 18, borderTop: "1px solid var(--border, #e2e8f0)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <h4 style={{ margin: 0, fontSize: "1.05rem", color: "#0f766e", fontWeight: 700 }}>
+                  📖 Citation & Reference Style for PDF & Word Export
+                </h4>
+                <span className="pill" style={{ background: "#ccfbf1", color: "#0f766e", fontSize: "0.8rem", fontWeight: 600 }}>
+                  Active: {citationStyle === "vancouver" ? "Vancouver (Uppercase / No Brackets)" : citationStyle.toUpperCase()}
+                </span>
+              </div>
+              <p className="hint" style={{ marginBottom: 12 }}>
+                Select how citations in the text narrative and the final reference list should be formatted in your publication deliverables:
+              </p>
+
+              <div
+                className="citation-style-options"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  gap: 12,
+                  marginTop: 10
+                }}
+              >
+                {/* 1. Vancouver */}
+                <button
+                  type="button"
+                  className={`chip outcome-chip ${citationStyle === "vancouver" ? "chip-on" : ""}`}
+                  style={{ textAlign: "left", padding: "14px 16px", cursor: "pointer", height: "auto" }}
+                  onClick={() => setCitationStyle("vancouver")}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", marginBottom: 4 }}>
+                    <strong style={{ fontSize: "0.98rem" }}>1. Vancouver (ICMJE/NLM)</strong>
+                    <span className="outcome-badge" style={{ background: "#0f766e", color: "#fff" }}>Recommended</span>
+                  </div>
+                  <div style={{ fontSize: "0.84rem", opacity: 0.9, lineHeight: 1.4 }}>
+                    <b>In-Text:</b> Uppercase superscript with <b>NO brackets</b> (¹, ² or 1, 2)
+                  </div>
+                  <div style={{ fontSize: "0.8rem", color: citationStyle === "vancouver" ? "#e0f2fe" : "#64748b", marginTop: 4 }}>
+                    <b>References:</b> Sequential numbered bibliography. Standard in clinical and medical journals.
+                  </div>
+                </button>
+
+                {/* 2. APA */}
+                <button
+                  type="button"
+                  className={`chip outcome-chip ${citationStyle === "apa" ? "chip-on" : ""}`}
+                  style={{ textAlign: "left", padding: "14px 16px", cursor: "pointer", height: "auto" }}
+                  onClick={() => setCitationStyle("apa")}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", marginBottom: 4 }}>
+                    <strong style={{ fontSize: "0.98rem" }}>2. APA (7th Edition)</strong>
+                    {citationStyle === "apa" && <span style={{ fontWeight: 700, fontSize: "0.85rem", color: "#fff" }}>✓ Selected</span>}
+                  </div>
+                  <div style={{ fontSize: "0.84rem", opacity: 0.9, lineHeight: 1.4 }}>
+                    <b>In-Text:</b> Author-date parentheses: <i>(Owen &amp; Hankins, 2020)</i>
+                  </div>
+                  <div style={{ fontSize: "0.8rem", color: citationStyle === "apa" ? "#e0f2fe" : "#64748b", marginTop: 4 }}>
+                    <b>References:</b> Alphabetical list by author surname with year in parentheses.
+                  </div>
+                </button>
+
+                {/* 3. Harvard */}
+                <button
+                  type="button"
+                  className={`chip outcome-chip ${citationStyle === "harvard" ? "chip-on" : ""}`}
+                  style={{ textAlign: "left", padding: "14px 16px", cursor: "pointer", height: "auto" }}
+                  onClick={() => setCitationStyle("harvard")}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", marginBottom: 4 }}>
+                    <strong style={{ fontSize: "0.98rem" }}>3. Harvard Style</strong>
+                    {citationStyle === "harvard" && <span style={{ fontWeight: 700, fontSize: "0.85rem", color: "#fff" }}>✓ Selected</span>}
+                  </div>
+                  <div style={{ fontSize: "0.84rem", opacity: 0.9, lineHeight: 1.4 }}>
+                    <b>In-Text:</b> Author-year format: <i>(Owen and Hankins 2020)</i>
+                  </div>
+                  <div style={{ fontSize: "0.8rem", color: citationStyle === "harvard" ? "#e0f2fe" : "#64748b", marginTop: 4 }}>
+                    <b>References:</b> Alphabetical bibliography with full publisher details.
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            <div className="row" style={{ marginTop: 22 }}>
+              <button
+                className="primary"
+                style={{ padding: "14px 30px", fontSize: "1.05rem", fontWeight: 600 }}
+                disabled={!selectedOutcome || !!busy}
+                onClick={() => selectedOutcome && proceedToCommentary(selectedOutcome)}
+              >
+                {selectedOutcome
+                  ? `Generate Scientific Commentary with "${selectedOutcome}" (${citationStyle === "vancouver" ? "Vancouver Style" : citationStyle.toUpperCase()}) ➜`
+                  : "Click an outcome card above to continue ➜"}
+              </button>
+            </div>
+
+            <p className="hint" style={{ marginTop: 8 }} aria-live="polite">
+              {selectedOutcome
+                ? `Selected outcome: "${selectedOutcome}" · Citation style: ${citationStyle.toUpperCase()}. Click above to generate your Step 4 Scientific Commentary Paper.`
+                : "Select one outcome card above to proceed."}
+            </p>
           </section>
         )}
 

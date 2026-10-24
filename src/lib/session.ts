@@ -21,5 +21,6 @@ export const KEYS = {
   question: "cq_question",
   formulation: "cq_formulation",
   commentary: "cq_commentary",
-  outcomes: "cq_outcomes"
+  outcomes: "cq_outcomes",
+  citationStyle: "cq_citation_style"
 };
