@@ -304,3 +304,65 @@ export function buildCacheKey(input: ClinicalSearchInput): string {
     sanitizePhrase(input.comparator)
   ].join("\u0000");
 }
+
+export interface ScopeCheckResult {
+  inScope: boolean;
+  specialty?: string;
+  reason?: string;
+}
+
+const OBGYN_TERMS: readonly string[] = [
+  "pregnan", "gestat", "matern", "fet", "labor", "labour", "birth", "deliver",
+  "cervix", "cervical", "uter", "endometri", "ovari", "oocyte", "embryo", "placenta",
+  "preeclampsia", "eclampsia", "infertil", "fertili", "ivf", "icsi", "iui", "menopaus",
+  "menstrua", "vagin", "vulv", "pcos", "polycystic ovary", "progesteron", "cerclage",
+  "misoprostol", "oxytocin", "tocoly", "amniotic", "antenatal", "perinatal", "postpartum",
+  "lochia", "chori", "ectopic", "fallopian", "trimester", "peripartum", "stillbirth",
+  "contracept", "tubal", "gynecolog", "obstetric", "follicl", "dhea", "amh", "hyster",
+  "salping", "cord", "neonat", "recurrent loss", "miscarriage", "abortion"
+];
+
+const OUT_OF_SCOPE_SPECIALTIES: readonly { specialty: string; terms: readonly string[] }[] = [
+  {
+    specialty: "Cardiology",
+    terms: ["myocardial infarction", "stemi", "nstemi", "cardiac arrest", "heart failure", "atrial fibrillation", "statin", "primary pci", "angioplasty", "coronary artery", "bypass graft", "atherosclerosis"]
+  },
+  {
+    specialty: "Neurology",
+    terms: ["ischemic stroke", "intracranial aneurysm", "alzheimer", "parkinson", "tenecteplase", "alteplase", "epilepsy", "multiple sclerosis", "glioblastoma"]
+  },
+  {
+    specialty: "Orthopedics & Rheumatology",
+    terms: ["osteoarthritis", "knee replacement", "hip fracture", "rheumatoid arthritis", "hyaluronic acid injection", "rotator cuff"]
+  },
+  {
+    specialty: "Gastroenterology",
+    terms: ["ulcerative colitis", "crohn", "inflammatory bowel", "vedolizumab", "colonoscopy", "cirrhosis", "hepatitis c", "peptic ulcer"]
+  },
+  {
+    specialty: "Dermatology",
+    terms: ["plaque psoriasis", "psoriasis", "melanoma", "eczema", "secukinumab", "ustekinumab", "atopic dermatitis", "vitiligo"]
+  }
+];
+
+export function checkQueryScope(input: ClinicalSearchInput): ScopeCheckResult {
+  const allText = [input.population, input.intervention, input.comparator, input.outcome]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const hasObGynContext = OBGYN_TERMS.some(t => allText.includes(t));
+
+  for (const { specialty, terms } of OUT_OF_SCOPE_SPECIALTIES) {
+    const hasDisciplineMatch = terms.some(t => allText.includes(t));
+    if (hasDisciplineMatch && !hasObGynContext) {
+      return {
+        inScope: false,
+        specialty,
+        reason: `Query appears to fall under ${specialty} and lacks Obstetrics & Gynecology context.`
+      };
+    }
+  }
+
+  return { inScope: true };
+}
