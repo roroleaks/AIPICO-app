@@ -281,7 +281,7 @@ export function buildCandidates(input: ClinicalSearchInput): string[] {
   const candidates: string[] = [];
   for (const raw of ordered) {
     if (!raw) continue;
-    const candidate = `${raw} AND ${HUMAN_SUBJECT_FILTER}`;
+    const candidate = `(${raw}) NOT (animals[mh] NOT humans[mh])`;
     if (seen.has(candidate)) continue;
     seen.add(candidate);
     candidates.push(candidate);
