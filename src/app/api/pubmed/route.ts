@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { SingleFlight, TtlLruCache } from "@/lib/pubmed-cache";
-import { buildCacheKey, buildCandidates, checkQueryScope, type ClinicalSearchInput } from "@/lib/pubmed-query";
+import { buildCacheKey, buildCandidates, checkQueryScope, checkQueryVagueness, type ClinicalSearchInput } from "@/lib/pubmed-query";
 
 // Candidate fallback plus rate-limit backoff can legitimately take longer than one probe.
 export const maxDuration = 60;
@@ -196,6 +196,19 @@ export async function POST(req: NextRequest) {
     intervention: body.intervention,
     comparator: body.comparator
   };
+
+  const vagueness = checkQueryVagueness(input);
+  if (vagueness.isVague) {
+    return NextResponse.json(
+      {
+        results: [],
+        error: vagueness.reason,
+        clarificationRequired: true,
+        prompt: vagueness.prompt
+      },
+      { status: 422 }
+    );
+  }
 
   const scope = checkQueryScope(input);
   if (!scope.inScope) {

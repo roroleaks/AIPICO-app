@@ -366,3 +366,40 @@ export function checkQueryScope(input: ClinicalSearchInput): ScopeCheckResult {
 
   return { inScope: true };
 }
+
+export interface VaguenessCheckResult {
+  isVague: boolean;
+  reason?: string;
+  prompt?: string;
+}
+
+const CLINICAL_STOPWORDS = new Set([
+  "women", "woman", "female", "females", "patient", "patients", "person", "people", "adult", "adults",
+  "treatment", "treatments", "therapy", "therapies", "intervention", "interventions", "management", "care",
+  "pill", "pills", "drug", "drugs", "medicine", "medicines", "medication", "medications",
+  "better", "best", "good", "bad", "cure", "cures", "control", "controls", "standard", "usual", "none",
+  "outcome", "outcomes", "effect", "effects", "result", "results", "relief", "stops", "improves",
+  "disease", "diseases", "condition", "conditions", "illness", "illnesses", "problem", "problems",
+  "symptom", "symptoms", "pain", "bleeding", "pregnancy"
+]);
+
+export function checkQueryVagueness(input: ClinicalSearchInput): VaguenessCheckResult {
+  const terms = [input.population, input.intervention].filter(Boolean).join(" ").toLowerCase();
+  const words = terms.split(/[^a-z0-9]+/).filter(w => w.length > 2);
+  if (!words.length) {
+    return {
+      isVague: true,
+      reason: "Query is missing both population and intervention terms.",
+      prompt: "Please provide a clinical condition and intervention."
+    };
+  }
+  const specificWords = words.filter(w => !CLINICAL_STOPWORDS.has(w));
+  if (specificWords.length === 0) {
+    return {
+      isVague: true,
+      reason: "Query is too vague to retrieve meaningful clinical evidence. Please specify a distinct condition and intervention.",
+      prompt: "Please provide a specific clinical condition (e.g. preeclampsia, thin endometrium) and intervention."
+    };
+  }
+  return { isVague: false };
+}
