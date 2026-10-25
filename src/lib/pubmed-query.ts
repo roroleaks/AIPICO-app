@@ -87,6 +87,10 @@ export const MESH_DESCRIPTORS: Readonly<Record<string, readonly string[]>> = {
   "diminished ovarian reserve": ["Ovarian Reserve", "Primary Ovarian Insufficiency"],
   "recurrent implantation failure": ["Embryo Implantation", "Infertility, Female"],
   "thin endometrium": ["Endometrium", "Endometrial Thickness"],
+  "prp": ["Platelet-Rich Plasma"],
+  "platelet-rich plasma": ["Platelet-Rich Plasma"],
+  "intrauterine prp": ["Platelet-Rich Plasma", "Endometrium"],
+  "prp intrauterine": ["Platelet-Rich Plasma", "Endometrium"],
 
   // Assisted reproduction
   "in vitro fertilization": ["Fertilization in Vitro"],
@@ -247,6 +251,8 @@ const MAX_CANDIDATES = 8;
  * broad untagged arms at the end are what stop a slightly over-specified PICO from reporting a
  * false zero.
  */
+export const HUMAN_SUBJECT_FILTER = "NOT (animals[mh] NOT humans[mh])";
+
 export function buildCandidates(input: ClinicalSearchInput): string[] {
   const population = buildConceptClause(input.population);
   const outcome = buildConceptClause(input.outcome);
@@ -265,7 +271,7 @@ export function buildCandidates(input: ClinicalSearchInput): string[] {
     [population, outcome].filter(Boolean).join(" AND "),
     intervention,
     population,
-    outcome,
+    // Note: single-arm outcome alone is excluded to prevent off-target drift (DEF-011)
     [broadPopulation, broadIntervention && `(${broadIntervention})`, broadOutcome]
       .filter(Boolean)
       .join(" AND ")
@@ -273,8 +279,10 @@ export function buildCandidates(input: ClinicalSearchInput): string[] {
 
   const seen = new Set<string>();
   const candidates: string[] = [];
-  for (const candidate of ordered) {
-    if (!candidate || seen.has(candidate)) continue;
+  for (const raw of ordered) {
+    if (!raw) continue;
+    const candidate = `${raw} AND ${HUMAN_SUBJECT_FILTER}`;
+    if (seen.has(candidate)) continue;
     seen.add(candidate);
     candidates.push(candidate);
     if (candidates.length >= MAX_CANDIDATES) break;
