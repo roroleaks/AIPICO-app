@@ -119,7 +119,8 @@ export async function POST(req: Request) {
     const style: CitationStyle = body.citationStyle || "vancouver";
     const records = (body.retainedReferences || []) as AuditableRef[];
 
-    const doc = new PDFDocument({ size: "A4", margin: 54, compress: false, bufferPages: true });
+    const PAGE_MARGIN = 54;
+    const doc = new PDFDocument({ size: "A4", margin: PAGE_MARGIN, compress: false, bufferPages: true });
     const chunks: Buffer[] = [];
     doc.on("data", (c: Buffer) => chunks.push(c));
 
@@ -152,8 +153,8 @@ export async function POST(req: Request) {
     const header = (pageNum: number) => {
       if (pageNum === 0) return; // omit running header on page 1
       doc.font(FONT_O).fontSize(8).fillColor(muted);
-      const fLeft: number = doc.page.margins.left;
-      const fRight: number = doc.page.width - doc.page.margins.right;
+      const fLeft: number = PAGE_MARGIN;
+      const fRight: number = doc.page.width - PAGE_MARGIN;
       doc.text("AI PICO v3.1 · Clinical Evidence Commentary · Obstetrics & Gynecology", fLeft, 26, {
         width: fRight - fLeft,
         align: "right",
@@ -164,9 +165,9 @@ export async function POST(req: Request) {
 
     const footer = (pageNum: number, totalPages: number) => {
       doc.font(FONT_O).fontSize(8.5).fillColor(muted);
-      const fLeft: number = doc.page.margins.left;
-      const fRight: number = doc.page.width - doc.page.margins.right;
-      const bottomY = doc.page.height - doc.page.margins.bottom + 8;
+      const fLeft: number = PAGE_MARGIN;
+      const fRight: number = doc.page.width - PAGE_MARGIN;
+      const bottomY = doc.page.height - PAGE_MARGIN + 8;
       doc.moveTo(fLeft, bottomY - 6).lineTo(fRight, bottomY - 6).strokeColor("#cbd5e1").lineWidth(0.5).stroke();
       doc.text("AI PICO v3.1 — Copyright©RaoufRoshdy2026", fLeft, bottomY, {
         width: 220,
@@ -338,8 +339,14 @@ export async function POST(req: Request) {
     const range = doc.bufferedPageRange();
     for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
+      const oldBottom = doc.page.margins.bottom;
+      const oldTop = doc.page.margins.top;
+      doc.page.margins.bottom = 0;
+      doc.page.margins.top = 0;
       header(i);
       footer(i, range.count);
+      doc.page.margins.bottom = oldBottom;
+      doc.page.margins.top = oldTop;
     }
     doc.flushPages();
     doc.end();
