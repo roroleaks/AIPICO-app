@@ -8,6 +8,7 @@ import {
   formatBibliographyList,
   type CitationStyle
 } from "./citation-formatter.ts";
+import type { ProvenanceMetadata } from "./provenance.ts";
 
 export interface PicoRow {
   label: string;
@@ -30,6 +31,7 @@ export interface PdfPayload {
   sections?: PdfSection[] | null;
   references?: string[] | null;
   retainedReferences?: any[] | null;
+  provenance?: ProvenanceMetadata | null;
 }
 
 function resolveFontsDir(): string {
@@ -253,6 +255,39 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
         doc.moveDown(0.4);
       }
     }
+  }
+
+  // Methods & Provenance section
+  if (body.provenance) {
+    const prov = body.provenance;
+    ensure(46);
+    doc.font(FONT_B).fontSize(12.5).fillColor(teal).text("Methods and Provenance");
+    doc.moveDown(0.12);
+    doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).strokeColor(teal).lineWidth(1.2).stroke();
+    doc.moveDown(0.35);
+
+    const items: [string, string][] = [];
+    if (prov.retrievedAt) items.push(["Retrieval Date/Time", String(prov.retrievedAt)]);
+    if (prov.sources) {
+      const s = Array.isArray(prov.sources) ? prov.sources.join(", ") : String(prov.sources);
+      items.push(["Sources Queried", s]);
+    }
+    if (prov.queryStrings) {
+      const q = Array.isArray(prov.queryStrings) ? prov.queryStrings.join(" | ") : String(prov.queryStrings);
+      if (q) items.push(["Search Queries", q]);
+    }
+    if (prov.engine) items.push(["Engine Path", String(prov.engine)]);
+    if (prov.promptVersion) items.push(["Prompt Version", String(prov.promptVersion)]);
+    if (prov.buildCommit) items.push(["App Build Commit", String(prov.buildCommit)]);
+
+    const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    for (const [lbl, val] of items) {
+      ensure(18);
+      doc.font(FONT_B).fontSize(9).fillColor(teal).text(`${lbl}: `, doc.page.margins.left, doc.y, { continued: true });
+      doc.font(FONT).fontSize(9).fillColor(ink).text(val, { width, lineGap: 2 });
+      doc.moveDown(0.25);
+    }
+    doc.moveDown(0.3);
   }
 
   // References section

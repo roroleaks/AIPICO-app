@@ -3,6 +3,7 @@ import { z } from "zod";
 import { validateDeliverableIntegrity } from "@/lib/deliverable-integrity";
 import type { AuditableRef } from "@/lib/relevance";
 import { buildPdfBuffer } from "@/lib/pdf-generator";
+import { provenanceSchema } from "@/lib/provenance";
 
 export const runtime = "nodejs";
 export const maxDuration = 20;
@@ -42,6 +43,7 @@ const pdfPayloadSchema = z.object({
   sections: z.array(pdfSectionSchema).optional().nullable(),
   references: z.array(z.string().max(2000)).optional().nullable(),
   retainedReferences: z.array(auditableRefSchema).optional().nullable(),
+  provenance: provenanceSchema.optional().nullable(),
 });
 
 const BODY_MAX = 400_000;
