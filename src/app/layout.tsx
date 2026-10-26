@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { CANONICAL_URL } from "@/lib/site-config";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -23,7 +24,10 @@ export const metadata: Metadata = {
   title: "AI PICO v3.1 — Clinical Question Assistant · Obs/Gyn",
   description:
     "AI-assisted formulation of answerable clinical questions and evidence synthesis in Obstetrics and Gynecology (Obs/Gyn)",
-  metadataBase: new URL("https://aipico.vercel.app"),
+  metadataBase: new URL(CANONICAL_URL),
+  alternates: {
+    canonical: "/",
+  },
   applicationName: "AI PICO",
   appleWebApp: {
     capable: true,
@@ -46,7 +50,7 @@ export const metadata: Metadata = {
     title: "AI PICO v3.1 — Clinical Question Assistant · Obs/Gyn",
     description:
       "AI-assisted formulation of answerable clinical questions and evidence synthesis in Obstetrics and Gynecology (Obs/Gyn)",
-    url: "https://aipico.vercel.app",
+    url: CANONICAL_URL,
     siteName: "AI PICO",
     images: [
       {
