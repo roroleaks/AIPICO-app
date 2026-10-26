@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { z } from "zod";
 import { validateDeliverableIntegrity } from "@/lib/deliverable-integrity.ts";
 import { provenanceSchema } from "@/lib/provenance.ts";
 import { buildDocxBuffer } from "@/lib/docx-generator.ts";
 import type { CitationStyle } from "@/lib/citation-formatter.ts";
 import type { AuditableRef } from "@/lib/relevance.ts";
+import { isAllowedOrigin, corsHeaders } from "@/lib/security-headers";
 
 export const runtime = "nodejs";
 export const maxDuration = 25;
@@ -44,25 +46,36 @@ const docxPayloadSchema = z.object({
   provenance: provenanceSchema.optional().nullable()
 });
 
-export async function POST(req: Request) {
+/** Handle CORS preflight for /api/docx */
+export async function OPTIONS(req: NextRequest): Promise<NextResponse> {
+  const origin = req.headers.get("origin");
+  if (isAllowedOrigin(origin)) {
+    return new NextResponse(null, { status: 204, headers: corsHeaders(origin!) });
+  }
+  return new NextResponse(null, { status: 403 });
+}
+
+export async function POST(req: NextRequest): Promise<NextResponse> {
+  const origin = req.headers.get("origin");
+  const cors = isAllowedOrigin(origin) ? corsHeaders(origin!) : {};
   try {
     const raw = await req.text();
     if (!raw || raw.length > 500_000) {
-      return NextResponse.json({ error: "Payload too large or empty." }, { status: 400 });
+      return NextResponse.json({ error: "Payload too large or empty." }, { status: 400, headers: cors });
     }
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+      return NextResponse.json({ error: "Invalid JSON body." }, { status: 400, headers: cors });
     }
 
     const parseResult = docxPayloadSchema.safeParse(parsed);
     if (!parseResult.success) {
       return NextResponse.json(
         { error: "Invalid parameters: " + parseResult.error.issues.map(e => e.message).join(", ") },
-        { status: 400 }
+        { status: 400, headers: cors }
       );
     }
 
@@ -90,7 +103,7 @@ export async function POST(req: Request) {
               : "Export refused: references did not match the validated evidence set.",
             integrity
           },
-          { status: 422 }
+          { status: 422, headers: cors }
         );
       }
     }
@@ -104,6 +117,7 @@ export async function POST(req: Request) {
 
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
+        ...cors,
         "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "Content-Disposition": `attachment; filename="${safeTitle}.docx"`,
         "Cache-Control": "no-store"
@@ -111,6 +125,6 @@ export async function POST(req: Request) {
     });
   } catch (err) {
     console.error("DOCX generation error:", err);
-    return NextResponse.json({ error: "Failed to generate Word document." }, { status: 500 });
+    return NextResponse.json({ error: "Failed to generate Word document." }, { status: 500, headers: cors });
   }
 }

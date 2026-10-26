@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { SingleFlight, TtlLruCache } from "@/lib/pubmed-cache";
 import { buildCacheKey, buildCandidates, checkQueryScope, checkQueryVagueness, type ClinicalSearchInput } from "@/lib/pubmed-query";
+import { isAllowedOrigin, corsHeaders } from "@/lib/security-headers";
 
 // Candidate fallback plus rate-limit backoff can legitimately take longer than one probe.
 export const maxDuration = 60;
@@ -170,7 +171,18 @@ const pubmedSchema = z.object({
   comparator: z.string().max(500).optional().nullable(),
 });
 
+/** Handle CORS preflight for /api/pubmed */
+export async function OPTIONS(req: NextRequest): Promise<NextResponse> {
+  const origin = req.headers.get("origin");
+  if (isAllowedOrigin(origin)) {
+    return new NextResponse(null, { status: 204, headers: corsHeaders(origin!) });
+  }
+  return new NextResponse(null, { status: 403 });
+}
+
 export async function POST(req: NextRequest) {
+  const origin = req.headers.get("origin");
+  const cors = isAllowedOrigin(origin) ? corsHeaders(origin!) : {};
   let json: unknown;
   try {
     json = await req.json();
@@ -178,14 +190,14 @@ export async function POST(req: NextRequest) {
     // Every error path here used to answer 200, so monitoring and uptime checks saw a
     // permanently healthy endpoint. The client reads `error` from the body either way, so
     // these statuses make the failures observable without changing what the UI renders.
-    return NextResponse.json({ results: [], error: "Invalid JSON body" }, { status: 400 });
+    return NextResponse.json({ results: [], error: "Invalid JSON body" }, { status: 400, headers: cors });
   }
 
   const parseResult = pubmedSchema.safeParse(json);
   if (!parseResult.success) {
     return NextResponse.json(
       { results: [], error: "Invalid parameters: " + parseResult.error.issues.map(e => e.message).join(", ") },
-      { status: 400 }
+      { status: 400, headers: cors }
     );
   }
 
@@ -206,7 +218,7 @@ export async function POST(req: NextRequest) {
         clarificationRequired: true,
         prompt: vagueness.prompt
       },
-      { status: 422 }
+      { status: 422, headers: cors }
     );
   }
 
@@ -219,18 +231,18 @@ export async function POST(req: NextRequest) {
         outOfScope: true,
         specialty: scope.specialty
       },
-      { status: 422 }
+      { status: 422, headers: cors }
     );
   }
 
   if (!buildCandidates(input).length) {
-    return NextResponse.json({ results: [], error: "Provide at least one search term." }, { status: 400 });
+    return NextResponse.json({ results: [], error: "Provide at least one search term." }, { status: 400, headers: cors });
   }
 
   const cacheKey = buildCacheKey(input);
   try {
     const cached = searchCache.get(cacheKey);
-    if (cached) return NextResponse.json({ ...cached, cached: true });
+    if (cached) return NextResponse.json({ ...cached, cached: true }, { headers: cors });
 
     // Single-flight keyed on the same key as the cache: a burst of identical requests that all
     // missed at once shares one upstream ladder instead of one ladder per request.
@@ -243,7 +255,7 @@ export async function POST(req: NextRequest) {
       if (fresh.results.length) searchCache.set(cacheKey, fresh);
       return fresh;
     });
-    return NextResponse.json({ ...payload, cached: false });
+    return NextResponse.json({ ...payload, cached: false }, { headers: cors });
   } catch (e) {
     // The error object only, never the request URL: that URL carries the NCBI API key.
     console.error("[pubmed] search failed:", e);
@@ -251,6 +263,6 @@ export async function POST(req: NextRequest) {
     // this as 200 told callers the search succeeded and returned zero results, which reads as
     // "no evidence exists" rather than "the search could not run" - a distinction that matters
     // a great deal in an evidence-synthesis tool.
-    return NextResponse.json({ results: [], error: "PubMed search failed" }, { status: 502 });
+    return NextResponse.json({ results: [], error: "PubMed search failed" }, { status: 502, headers: cors });
   }
 }

@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { z } from "zod";
 import { validateDeliverableIntegrity } from "@/lib/deliverable-integrity";
 import type { AuditableRef } from "@/lib/relevance";
 import { buildPdfBuffer } from "@/lib/pdf-generator";
 import { provenanceSchema } from "@/lib/provenance";
+import { isAllowedOrigin, corsHeaders } from "@/lib/security-headers";
 
 export const runtime = "nodejs";
 export const maxDuration = 20;
@@ -48,11 +50,22 @@ const pdfPayloadSchema = z.object({
 
 const BODY_MAX = 400_000;
 
-export async function POST(req: Request) {
+/** Handle CORS preflight for /api/pdf */
+export async function OPTIONS(req: NextRequest): Promise<NextResponse> {
+  const origin = req.headers.get("origin");
+  if (isAllowedOrigin(origin)) {
+    return new NextResponse(null, { status: 204, headers: corsHeaders(origin!) });
+  }
+  return new NextResponse(null, { status: 403 });
+}
+
+export async function POST(req: NextRequest): Promise<NextResponse> {
+  const origin = req.headers.get("origin");
+  const cors = isAllowedOrigin(origin) ? corsHeaders(origin!) : {};
   try {
     const raw = await req.text();
     if (!raw || raw.length > BODY_MAX) {
-      return NextResponse.json({ error: "Payload too large or empty." }, { status: 400 });
+      return NextResponse.json({ error: "Payload too large or empty." }, { status: 400, headers: cors });
     }
     // Malformed JSON is a client error. Letting JSON.parse throw into the outer catch reported
     // it as HTTP 500 "PDF generation failed", which told the caller to retry a request that
@@ -61,17 +74,17 @@ export async function POST(req: Request) {
     try {
       parsed = JSON.parse(raw);
     } catch {
-      return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+      return NextResponse.json({ error: "Invalid JSON body." }, { status: 400, headers: cors });
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return NextResponse.json({ error: "Request body must be a JSON object." }, { status: 400 });
+      return NextResponse.json({ error: "Request body must be a JSON object." }, { status: 400, headers: cors });
     }
 
     const parseResult = pdfPayloadSchema.safeParse(parsed);
     if (!parseResult.success) {
       return NextResponse.json(
         { error: "Invalid parameters: " + parseResult.error.issues.map(e => e.message).join(", ") },
-        { status: 400 }
+        { status: 400, headers: cors }
       );
     }
     const body = parseResult.data;
@@ -86,7 +99,7 @@ export async function POST(req: Request) {
     if (!hasReferences && !hasSections) {
       return NextResponse.json(
         { error: "No references or sections available to export." },
-        { status: 400 }
+        { status: 400, headers: cors }
       );
     }
     // Server-side half of the parity gate. The browser already checks this, but the browser is
@@ -108,7 +121,7 @@ export async function POST(req: Request) {
               : "Export refused: references did not match the validated evidence set.",
             integrity
           },
-          { status: 422 }
+          { status: 422, headers: cors }
         );
       }
     }
@@ -119,6 +132,7 @@ export async function POST(req: Request) {
 
     return new NextResponse(new Uint8Array(pdf), {
       headers: {
+        ...cors,
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename="${safe}.pdf"`,
         "Cache-Control": "no-store"
@@ -126,6 +140,6 @@ export async function POST(req: Request) {
     });
   } catch (e) {
     console.error("PDF generation failed:", e);
-    return NextResponse.json({ error: "PDF generation failed. Please retry." }, { status: 500 });
+    return NextResponse.json({ error: "PDF generation failed. Please retry." }, { status: 500, headers: cors });
   }
 }

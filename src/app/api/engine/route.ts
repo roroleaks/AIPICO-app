@@ -29,6 +29,7 @@ import { validateDeliverableIntegrity } from "@/lib/deliverable-integrity";
 import { generateDeterministicGapAnalysis } from "@/lib/deterministic-gap.ts";
 import { extractPicoFromQuestion } from "@/lib/pico-parser";
 import { parseClinicalScenario } from "@/lib/clinical-semantics";
+import { isAllowedOrigin, corsHeaders } from "@/lib/security-headers";
 
 export const maxDuration = 60;
 
@@ -752,7 +753,30 @@ const commentaryZodSchema = z.object({
   })).optional().nullable(),
 });
 
+/** Handle CORS preflight for /api/engine */
+export async function OPTIONS(req: NextRequest): Promise<NextResponse> {
+  const origin = req.headers.get("origin");
+  if (isAllowedOrigin(origin)) {
+    return new NextResponse(null, { status: 204, headers: corsHeaders(origin!) });
+  }
+  return new NextResponse(null, { status: 403 });
+}
+
+/** Attach CORS headers to a completed NextResponse without altering the body. */
+function withCors(res: NextResponse, cors: Record<string, string>): NextResponse {
+  for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
+  return res;
+}
+
 export async function POST(req: NextRequest) {
+  const origin = req.headers.get("origin");
+  const cors = isAllowedOrigin(origin) ? corsHeaders(origin!) : {};
+  const res = await postHandler(req);
+  for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
+  return res;
+}
+
+async function postHandler(req: NextRequest) {
   let body: Record<string, unknown>;
   try {
     body = await req.json();
