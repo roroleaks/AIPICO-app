@@ -17,6 +17,7 @@ import {
 import type { KeywordCorrection, CorrectionRecord } from "@/lib/clinical-input";
 import type { ClinicalInput } from "@/lib/clinical-input";
 import { parseClinicalScenario } from "@/lib/clinical-semantics";
+import { PhiNotice } from "@/components/PhiNotice";
 
 // sessionStorage is browser-only, so it cannot be read while rendering on the server.
 let cachedRaw: string | null = null;
@@ -478,6 +479,8 @@ export default function Home() {
           {alertMessage && (
             <div className="advisory" role="alert" aria-live="polite" style={{ marginTop: 10 }}>⚠️ {alertMessage}</div>
           )}
+
+          <PhiNotice />
 
           <div className="row" style={{ marginTop: 16 }}>
             <button className="primary" onClick={start} disabled={!input.trim() || !canSubmit} style={{ padding: "12px 28px", fontSize: "1rem" }}>
