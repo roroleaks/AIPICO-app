@@ -30,6 +30,7 @@ import { generateDeterministicGapAnalysis } from "@/lib/deterministic-gap.ts";
 import { extractPicoFromQuestion } from "@/lib/pico-parser";
 import { parseClinicalScenario } from "@/lib/clinical-semantics";
 import { isAllowedOrigin, corsHeaders } from "@/lib/security-headers";
+import { checkRateLimit } from "@/lib/rate-limiter";
 
 export const maxDuration = 60;
 
@@ -771,6 +772,22 @@ function withCors(res: NextResponse, cors: Record<string, string>): NextResponse
 export async function POST(req: NextRequest) {
   const origin = req.headers.get("origin");
   const cors = isAllowedOrigin(origin) ? corsHeaders(origin!) : {};
+
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "127.0.0.1";
+  const limit = await checkRateLimit(ip, "engine", 10, 60);
+  if (!limit.success) {
+    return NextResponse.json(
+      { error: "Too many requests. Please wait and try again." },
+      {
+        status: 429,
+        headers: {
+          ...cors,
+          "Retry-After": String(Math.ceil((limit.reset - Date.now()) / 1000)),
+        },
+      }
+    );
+  }
+
   const res = await postHandler(req);
   for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
   return res;

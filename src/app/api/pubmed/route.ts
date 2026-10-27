@@ -3,6 +3,7 @@ import { z } from "zod";
 import { SingleFlight, TtlLruCache } from "@/lib/pubmed-cache";
 import { buildCacheKey, buildCandidates, checkQueryScope, checkQueryVagueness, type ClinicalSearchInput } from "@/lib/pubmed-query";
 import { isAllowedOrigin, corsHeaders } from "@/lib/security-headers";
+import { checkRateLimit } from "@/lib/rate-limiter";
 
 // Candidate fallback plus rate-limit backoff can legitimately take longer than one probe.
 export const maxDuration = 60;
@@ -183,6 +184,22 @@ export async function OPTIONS(req: NextRequest): Promise<NextResponse> {
 export async function POST(req: NextRequest) {
   const origin = req.headers.get("origin");
   const cors = isAllowedOrigin(origin) ? corsHeaders(origin!) : {};
+
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "127.0.0.1";
+  const limit = await checkRateLimit(ip, "pubmed", 30, 60);
+  if (!limit.success) {
+    return NextResponse.json(
+      { results: [], error: "Too many requests. Please wait and try again." },
+      {
+        status: 429,
+        headers: {
+          ...cors,
+          "Retry-After": String(Math.ceil((limit.reset - Date.now()) / 1000)),
+        },
+      }
+    );
+  }
+
   let json: unknown;
   try {
     json = await req.json();

@@ -6,6 +6,7 @@ import type { AuditableRef } from "@/lib/relevance";
 import { buildPdfBuffer } from "@/lib/pdf-generator";
 import { provenanceSchema } from "@/lib/provenance";
 import { isAllowedOrigin, corsHeaders } from "@/lib/security-headers";
+import { checkRateLimit } from "@/lib/rate-limiter";
 
 export const runtime = "nodejs";
 export const maxDuration = 20;
@@ -62,6 +63,22 @@ export async function OPTIONS(req: NextRequest): Promise<NextResponse> {
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const origin = req.headers.get("origin");
   const cors = isAllowedOrigin(origin) ? corsHeaders(origin!) : {};
+
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "127.0.0.1";
+  const limit = await checkRateLimit(ip, "pdf", 10, 60);
+  if (!limit.success) {
+    return NextResponse.json(
+      { error: "Too many requests. Please wait and try again." },
+      {
+        status: 429,
+        headers: {
+          ...cors,
+          "Retry-After": String(Math.ceil((limit.reset - Date.now()) / 1000)),
+        },
+      }
+    );
+  }
+
   try {
     const raw = await req.text();
     if (!raw || raw.length > BODY_MAX) {
