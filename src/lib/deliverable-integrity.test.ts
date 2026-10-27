@@ -252,6 +252,29 @@ test("drops non-object retainedRecords without failing the whole call", () => {
   assert.deepEqual(r.malformedReferences, []);
 });
 
+test("accepts references when provided under retainedReferences alias", () => {
+  const result = validateDeliverableIntegrity({
+    fields: {
+      abstract: "Short cervix confers risk of preterm birth.",
+      discussion: "Cerclage remains standard (Paladino 2026)."
+    },
+    references: [REF_B],
+    retainedReferences: RECORDS
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+});
+
+test("refuses tampered reference when provided under retainedReferences alias", () => {
+  const result = validateDeliverableIntegrity({
+    fields: { discussion: "Fabricated claim cited here [1]." },
+    references: ["1. Fabricated Author. Nonexistent Paper. 2026."],
+    retainedReferences: RECORDS
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.unresolvedReferences.length > 0, "Unresolved reference must be caught");
+  assert.equal(result.unresolvedReferences[0], "1. Fabricated Author. Nonexistent Paper. 2026.");
+});
+
 test("reports non-string narrative field values", () => {
   const r = validateDeliverableIntegrity({
     fields: { abstract: "ok", discussion: 7 } as unknown as Record<string, string>,
