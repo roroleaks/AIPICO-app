@@ -78,6 +78,9 @@ export const CLINICAL_PHRASES: string[] = [
   "cervical cerclage", "transcervical cerclage", "emergency cerclage",
   "selective cerclage", "progesterone supplementation", "neonatal morbidity",
   "gestational age", "small for gestational age", "gestational age at delivery",
+  "labor and delivery", "in vitro fertilization", "polycystic ovary syndrome",
+  "signs and symptoms", "safety and efficacy", "induction of labor",
+  "trial of labor after cesarean", "singleton or twin pregnancy", "diabetes and pregnancy",
   // Interventions and supplements
   "vitamin D", "vitamin E", "vitamin C", "coenzyme Q10",
   "omega-3", "folic acid", "iron supplementation", "tranexamic acid",
@@ -135,6 +138,8 @@ const STOPWORDS = new Set([
   "than", "compared", "about", "after", "before", "during", "into"
 ]);
 
+const PHRASE_CONNECTORS = new Set(["and", "or", "of", "in"]);
+
 /**
  * Dashes are ambiguous: `short cervix - cerclage` separates two keywords, while
  * `co-enzyme Q10` and `myo-inositol` contain an internal hyphen. A dash therefore only
@@ -145,7 +150,7 @@ const HARD_SEPARATORS = /[,;\r\n]+/;
 // A dash is a separator only when whitespace-adjacent, which keeps internal hyphens
 // (`co-enzyme`, `myo-inositol`, `PGT-A`) intact. Repeated dash runs are handled by
 // splitting repeatedly in `splitChunks`.
-const DASH_SEPARATOR = /\s[-–—]+\s*|^\s*[-–—]+|\s*[-–—]+$/g;
+const DASH_SEPARATOR = /(?:\s+[-–—]+|[-–—]+\s+|^\s*[-–—]+|\s*[-–—]+$)/g;
 
 function splitChunks(raw: string): string[] {
   return raw
@@ -391,14 +396,24 @@ export function parseClinicalKeywords(input: string, extraVocab: string[] = []):
       // Unrecognised words are one medical term, not one keyword each. The user already
       // declared the term boundary with a comma; "amniotic fluid embolism" is a single
       // clinical concept, and counting its three words inflated the total and could push a
-      // valid search past the maximum. Only stopwords break the run, so filler such as
-      // "cerclage vs none" still separates into its two real terms.
+      // valid search past the maximum. Only non-connecting stopwords break the run, so filler
+      // such as "cerclage vs none" still separates into its two real terms while conjunctions
+      // and prepositions within phrases ("labor and delivery", "X and Y", "A or B") remain intact.
       const run: string[] = [];
       while (i < words.length) {
         const word = words[i];
-        if (STOPWORDS.has(word)) break;
 
-        if (run.length > 0) {
+        // If the run is empty and the current word is "a", allow it if followed by a connector (e.g. "a or b", "a and b")
+        const isLeadingConnectorOperand = run.length === 0 && (word === "a" || word === "an") && i + 1 < words.length && (words[i + 1] === "or" || words[i + 1] === "and");
+
+        // A connector ("and", "or", "of", "in") inside a phrase connects two terms if flanked by words
+        const isInternalConnector = run.length > 0 && PHRASE_CONNECTORS.has(word) && i + 1 < words.length && !STOPWORDS.has(words[i + 1]);
+
+        if (STOPWORDS.has(word) && !isLeadingConnectorOperand && !isInternalConnector) {
+          break;
+        }
+
+        if (run.length > 0 && !isInternalConnector) {
           // Stop the run if a known multi-word or single-word term starts here.
           // This prevents greedy unrecognised runs from swallowing and splitting
           // down-stream clinical phrases like "short cervix" or "preterm birth".
@@ -523,8 +538,9 @@ export function validateKeywords(parsed: ParsedKeywords): string | null {
     : `${detected} detected — maximum is ${MAX_KEYWORDS}.`;
 
   return `Please enter ${MIN_KEYWORDS}–${MAX_KEYWORDS} clinically meaningful keywords or phrases. `
-    + `Multi-word clinical expressions such as “short cervix”, “preterm birth”, “vitamin D”, `
-    + `and “endometrial hyperplasia” count as one keyword each. `
+    + `Multi-word clinical expressions such as “labor and delivery”, “short cervix”, “preterm birth”, `
+    + `and “vitamin D” count as one keyword each. `
+    + `Conjunctions such as “and” or “or” do not split a phrase. `
     + `Separate terms with commas, dashes, semicolons, or new lines. `
     + `Your current entry contains ${why} `
     + `Include terms that describe the condition or population, intervention, comparator, and outcome. `
