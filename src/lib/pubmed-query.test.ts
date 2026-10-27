@@ -198,3 +198,19 @@ test("boundary test suite: specialty scope gating and vagueness checks (DEF-012,
     assert.equal(vagueness.isVague, true, `Expected ${c.name} to be flagged as isVague: true`);
   }
 });
+
+test("conjunction tokens split into operands with AND/OR and preserve MeSH descriptors (DEF-010)", () => {
+  // Conjunction "or" joins operands with OR union
+  const orClause = buildConceptClause("metformin or insulin");
+  assert.equal(orClause, '("metformin"[tiab] OR "insulin"[tiab])');
+
+  // Conjunction "and" joins operands with AND of [tiab] terms
+  const andClause = buildConceptClause("labor and delivery");
+  assert.equal(andClause, '("labor"[tiab] AND "delivery"[tiab])');
+
+  // MeSH mappings on operands are preserved
+  const meshClause = buildConceptClause("PCOS and infertility");
+  assert.ok(meshClause.includes('"Polycystic Ovary Syndrome"[MeSH Terms]'));
+  assert.ok(meshClause.includes('"Infertility"[MeSH Terms]'));
+  assert.ok(meshClause.includes(" AND "));
+});

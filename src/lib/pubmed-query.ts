@@ -215,11 +215,35 @@ export function resolveMeshDescriptors(phrase: string): string[] {
 /**
  * Builds one concept arm: free text in `[tiab]` unioned with any mapped MeSH descriptors.
  *
+ * When a conjunction token ("and" or "or") is present, splits into its operands:
+ * "and" joins operands with AND of [tiab] terms, "or" joins them with an OR union.
+ * MeSH mappings for each operand are preserved.
+ *
  * Descriptors are only added when the phrase actually maps, so an unmapped term degrades to
  * plain `[tiab]` instead of to an empty or malformed clause.
  */
 export function buildConceptClause(value: string | null | undefined): string {
-  const phrase = sanitizePhrase(value);
+  if (!value) return "";
+  const raw = String(value).trim();
+  if (!raw) return "";
+
+  // Split on conjunction "or" (union) or "and" (intersection) only for clean natural phrases
+  // (inputs containing quotes, brackets or parentheses are syntax injection attempts and neutralized directly)
+  if (!/["()[\]]/.test(raw)) {
+    if (/\s+\bor\b\s+/i.test(raw)) {
+      const operands = raw.split(/\s+\bor\b\s+/i).map(op => buildConceptClause(op)).filter(Boolean);
+      if (operands.length === 1) return operands[0]!;
+      if (operands.length > 1) return `(${operands.join(" OR ")})`;
+    }
+
+    if (/\s+\band\b\s+/i.test(raw)) {
+      const operands = raw.split(/\s+\band\b\s+/i).map(op => buildConceptClause(op)).filter(Boolean);
+      if (operands.length === 1) return operands[0]!;
+      if (operands.length > 1) return `(${operands.join(" AND ")})`;
+    }
+  }
+
+  const phrase = sanitizePhrase(raw);
   if (!phrase) return "";
 
   const tiab = `${quotePhrase(phrase)}[tiab]`;
@@ -239,7 +263,25 @@ export function buildInterventionClause(
 
 /** Untagged phrase, used as a recall backstop when every tagged candidate returns nothing. */
 function buildBroadClause(value: string | null | undefined): string {
-  const phrase = sanitizePhrase(value);
+  if (!value) return "";
+  const raw = String(value).trim();
+  if (!raw) return "";
+
+  if (!/["()[\]]/.test(raw)) {
+    if (/\s+\bor\b\s+/i.test(raw)) {
+      const operands = raw.split(/\s+\bor\b\s+/i).map(op => buildBroadClause(op)).filter(Boolean);
+      if (operands.length === 1) return operands[0]!;
+      if (operands.length > 1) return `(${operands.join(" OR ")})`;
+    }
+
+    if (/\s+\band\b\s+/i.test(raw)) {
+      const operands = raw.split(/\s+\band\b\s+/i).map(op => buildBroadClause(op)).filter(Boolean);
+      if (operands.length === 1) return operands[0]!;
+      if (operands.length > 1) return `(${operands.join(" AND ")})`;
+    }
+  }
+
+  const phrase = sanitizePhrase(raw);
   return phrase ? `(${quotePhrase(phrase)})` : "";
 }
 
