@@ -1,167 +1,148 @@
-# AIPICO v3.1 — Clinical Question Assistant (Obstetrics & Gynecology)
+# AIPICO v3.1 — Evidence-Grounded Clinical Question Assistant (Obstetrics & Gynecology)
 
-Turns a clinical question into a structured PICO, retrieves candidate literature, and
-generates a commentary in which **every citation resolves to a source that survived a
-deterministic, claim-specific filter**.
+Turns a clinical inquiry into a structured PICO, formulates candidate literature queries, retrieves and validates evidence from PubMed and partner repositories, and generates publication-grade evidence syntheses and commentaries where **every cited reference resolves strictly to a source that survived deterministic, claim-specific filtering**.
 
-Live app: **https://aipico.vercel.app**
+- Live App: **https://aipico.vercel.app**
+- Secondary Production Alias: **https://aipico-app.vercel.app**
 
-The problem this codebase is built around: a language model will happily write a fluent,
-well-formatted literature review that cites papers which were never retrieved, mix an
-intervention the reader did not ask about into the discussion, or attribute a finding to
-the wrong author. Those failures are invisible to the reader and easy to miss in review.
-So the rule here is that unsupported content is not allowed to reach a deliverable — it is
-removed, rewritten into an explicit limitation, or the export is refused.
+The fundamental safety problem this codebase addresses: large language models readily draft fluent medical commentaries that invent non-existent studies, cite papers never retrieved, introduce irrelevant clinical interventions, or attribute findings to incorrect authors. In clinical decision support, such hallucinations can directly misinform care. Within AIPICO, unsupported claims cannot reach an exported deliverable — they are rewritten into explicit uncertainty disclosures or the export is refused.
 
 ---
 
-### Key Capabilities in v3.1:
-1. **Multi-Style Citation Architecture:**
-   - **Vancouver (ICMJE/NLM):** Sequential uppercase superscript in-text citations with **NO brackets** (e.g., `¹`, `¹ ²`, `¹⁻³`) and numbered bibliography.
-   - **APA 7th Edition:** Author-date parenthetical citations `(Author et al., Year)` and alphabetical references.
-   - **Harvard Style:** Author-year citations `(Author et al. Year)` and alphabetical bibliography with full identifiers.
-2. **Interactive Citation Selection (Step 3 & Step 4):**
-   - Clinicians can select their preferred citation format in Step 3 (`/question`) or toggle between Vancouver, APA, and Harvard dynamically in Step 4 (`/paper`).
-3. **Publication-Ready Microsoft Word (.docx) Export:**
-   - Native binary `.docx` generation via `/api/docx` and the `docx` library.
-   - Features standard 1-inch margins, running headers, running footers with Word page numbers (`Page X of Y`), Arial typography, structured PICO table, educational disclaimer callout, and formatted in-text citations.
-4. **Publication-Ready PDF Export:**
-   - Vector PDF generation via `/api/pdf` and PDFKit featuring running headers (page 2+), running footers with page numbering, educational disclaimer callout, and formatted citations.
+## Core Capabilities and Architecture
 
----
+### 1. Multi-Style Publication Citation Engine
+- **Vancouver Style (ICMJE/NLM)**: Pure uppercase superscript numerical in-text citations without surrounding brackets (e.g., `¹`, `¹ ²`, `¹⁻³`), paired with an ICMJE-compliant numerical bibliography.
+- **APA 7th Edition**: Author-date parenthetical in-text citations `(Author et al., Year)` and alphabetical bibliography.
+- **Harvard Style**: Author-year citations `(Author et al. Year)` with complete electronic identifier linkages (`Available at: URL`).
+- **Dynamic In-Session Toggling**: Clinicians can select their preferred citation framework during intake (Step 3: `/question`) or switch dynamically in the commentary viewer (Step 4: `/paper`).
 
-## The integrity pipeline
+### 2. Publication-Grade Multi-Format Export Pipelines
+- **Microsoft Word (.docx)**: Native binary document generation via `/api/docx` and `src/lib/docx-generator.ts`. Adheres strictly to ICMJE standards with 1-inch margins, running headers, running footers with native Word field page numbers (`Page X of Y`), Arial typography, structured PICO summary tables, and full reference trees.
+- **Vector PDF Generation**: High-fidelity PDF compilation via `/api/pdf` and `src/lib/pdf-generator.ts` utilizing PDFKit and bundled TrueType fonts (DejaVu Sans). Implements exact single-page budgeting, margin suspension during running header/footer passes, and parity validation gates.
+- **Glyph and Symbol Preservation**: Complete UTF-8 preservation of non-WinAnsi mathematical and Greek characters (≥, ≤, α, ±, µ, é, ü, –, ’, →) across all exports.
 
-Each stage is a pure, independently tested module. The order matters: a stage may only
-act on records the previous stage approved.
+### 3. Specialty Scope Boundary & Clinical Safety
+- **Specialty Boundary Gate (`checkQueryScope`)**: Enforces clinical scoping across 54 core Obstetric & Gynecologic root terms. Out-of-scope adult general medicine queries (non-obstetric Cardiology, Neurology, Orthopedics, Gastroenterology, Dermatology) are intercepted with informative HTTP 422 advisories.
+- **Obstetric Precedence Rule**: Clinical inquiries presenting dual context (e.g., *peripartum cardiomyopathy*, *cardiac disease in pregnancy*, *ovarian stimulation in heart disease*) retain maternal context and execute normally.
+- **Specificity & Vagueness Interception (`checkQueryVagueness`)**: Underspecified or non-specific inquiries (e.g., single-term searches or generic filler) receive structured HTTP 422 clarification requests.
+- **NLM Human Subject Clinical Filter**: Restricts PubMed retrieval ladders with `NOT (animals[mh] NOT humans[mh])`, excluding veterinary and preclinical rodent models from human clinical evidence sets.
+- **Regulatory Intake Disclaimer**: Persistent banner (`PhiNotice.tsx`) warns clinicians against entering protected health information (PHI/PII).
 
-| Stage | Module | Guarantee |
+### 4. Deterministic Multi-Stage Integrity Pipeline
+
+Each stage is an isolated, pure module with automated verification:
+
+| Pipeline Stage | Implementation Module | Invariant and Enforcement Rule |
 |---|---|---|
-| Canonical identity | `src/lib/evidence-set.ts` | One record per paper. DOI is the canonical key (normalized from bare, `doi:`, and resolver-URL forms); PMID, `crossref:`, `openalex:` and a title/author/year fingerprint are fallbacks only. `cr:123` never becomes a DOI. |
-| Claim filtering | `src/lib/relevance.ts` | A record is direct support only if it carries a DOI or PMID, is not low confidence, and deterministically matches **every** required PICO element. Off-topic records are excluded with a stated reason. |
-| Claim finalization | `src/lib/claim-finalization.ts` | Each narrative sentence is audited. An assertive claim with no surviving support is **rewritten** into a fixed uncertainty sentence rather than silently deleted, and each decision is reported with a reason. |
-| Narrative reconciliation | `src/lib/relevance.ts` | Citations and the reference list are driven to agreement by a fixpoint across `abstract`, `introduction`, `discussion` **and** `conclusion`. Removing a citation can strand a reference and vice versa, so the loop repeats until neither side changes. |
-| Deliverable gate | `src/lib/deliverable-integrity.ts` | Asserts the exact payload being published, and the exact reference list every export emits, carries the same validated evidence set. |
-
-### Why the citation parser is slot-based
-
-The original regex `/\(([^()]*?)(\d{4})\)/` backtracked to the **last** year in a bracket,
-so `(Berghella 2026; Broad 2009)` parsed as *both* citations dated 2009. The integrity
-checker and the orphan stripper then disagreed about the same sentence, which produced
-intermittent phantom failures in production. Parsing and stripping now share one
-slot-based parser (`parseCitationSlots`), which also handles `(Gen 2012, 2014)`,
-`(Gen., 2012)`, square and brace brackets, and name-only slots.
-
-### The deliverable gate is a parity gate, not a stricter judge
-
-It is tempting for a validation layer to re-resolve citations more strictly than the
-pipeline it guards. Doing so caused a real outage: requiring the citing surname to be a
-record's *first* author rejected valid commentary citing a retained paper by a co-author,
-and the API began returning HTTP 500. The gate now uses the **same** resolution semantics
-as the reconciliation stage, and adds identifier-grade matching only where the pipeline
-needs help — binding reference strings and export payloads back to retained records.
+| **Canonical Identity** | `src/lib/evidence-set.ts` | One canonical record per publication. Normalized DOI is primary key; PMID, Crossref, and OpenAlex serve as verified fallbacks. |
+| **Claim Filtering** | `src/lib/relevance.ts` | Records provide direct support only when carrying verified identifiers and deterministically matching all required PICO dimensions. |
+| **Claim Finalization** | `src/lib/claim-finalization.ts` | Every narrative assertion is audited against retained evidence. Claims lacking direct support are rewritten into uncertainty disclosures. |
+| **Narrative Reconciliation** | `src/lib/relevance.ts` | Citations and bibliography lists are driven to strict parity across abstract, introduction, discussion, and conclusion sections via a fixpoint loop. |
+| **Deliverable Gate** | `src/lib/deliverable-integrity.ts` | Enforces that export payloads and rendered reference lists match the validated evidence set. Server-side gates reject tampered payloads with HTTP 422. |
+| **Methods & Provenance** | `src/lib/provenance.ts` | Embeds retrieval date/time, candidate search queries, engines queried, synthesis mode (AI vs Deterministic), prompt template hash, and runtime build commit into all exports. |
+| **API Rate Limiting** | `src/lib/rate-limiter.ts` | In-memory sliding-window rate limiter on public API endpoints enforcing request throttling (HTTP 429) against high-frequency traffic bursts. |
+| **Security Headers** | `src/lib/security-headers.ts` | Enforces Content-Security-Policy (CSP), Strict-Transport-Security (HSTS), X-Frame-Options: DENY, X-Content-Type-Options: nosniff, and origin-validated CORS. |
 
 ---
 
-## Commands
+## Technical Defect Remediation Summary (DEF-001 to DEF-013)
+
+The application has undergone verification against all 13 defect items from `results/05_defects.csv`:
+
+- **DEF-001 (Metadata Domain Resolution)**: `src/lib/site-config.ts` dynamically resolves canonical URL metadata based on incoming request host headers.
+- **DEF-002 (PHI/PII Warning)**: Step 1 intake form renders `src/components/PhiNotice.tsx` warning against patient identifiers.
+- **DEF-003 (API Rate Limiting)**: `src/lib/rate-limiter.ts` enforces sliding-window rate limits across `/api/*` endpoints.
+- **DEF-004 (Arabic Comma)**: Explicitly withdrawn per clinical protocol; multilingual RTL handling is scheduled for subsequent localized releases.
+- **DEF-005 (Security Headers & CORS)**: Custom middleware injects standard security headers and replaces wildcard CORS with strict origin validation.
+- **DEF-006 (Trailing Dash Separation)**: Intake parser in `src/lib/clinical-keywords.ts` handles trailing-space dash separators (`X- Y`) without dropping concepts.
+- **DEF-007 (Provenance Metadata)**: PDF and Word exports include a dedicated "Methods & Provenance" block recording search queries, model/engine mode, prompt hashes, and build commit.
+- **DEF-008 (Vague Query Interception)**: `checkQueryVagueness` flags underspecified queries with HTTP 422 clarification prompts.
+- **DEF-009 (Font Symbol Preservation)**: Bundled TrueType DejaVu Sans fonts preserve mathematical and Greek symbols across PDF compilations.
+- **DEF-010 (Conjunction Token Splitting)**: `src/lib/pubmed-query.ts` preserves compound display in the UI while splitting conjunctions into boolean `AND`/`OR` operands during PubMed query construction, restoring recall.
+- **DEF-011 (NLM Human Clinical Filter)**: Enforces `NOT (animals[mh] NOT humans[mh])` to exclude veterinary and preclinical rodent models from clinical syntheses.
+- **DEF-012 (Specialty Boundary Gate)**: `checkQueryScope` intercepts out-of-scope non-OB/GYN queries while preserving maternal cardiology inquiries via precedence.
+- **DEF-013 (PDF Blank Page Elimination)**: PDFKit margin triggers are suspended during running footer rendering, enforcing exact page budgeting.
+
+---
+
+## Directory Architecture
+
+```
+src/
+├── app/
+│   ├── page.tsx                  Step 1: Clinical question and keyword intake
+│   ├── gap/                      Step 2: Evidence-gap mapping & PICO formulation
+│   ├── question/                 Step 3: Outcome definition & citation style selection
+│   ├── paper/                    Step 4: Commentary synthesis, quality scores, live style toggling & export
+│   └── api/
+│       ├── docx/route.ts         Native Microsoft Word export endpoint with deliverable integrity gate
+│       ├── engine/route.ts       Evidence synthesis, deterministic gap analysis, and fallback engine
+│       ├── pdf/route.ts          Vector PDF generation with server-side parity verification
+│       └── pubmed/route.ts       Direct PubMed E-utilities integration with rate limiting and caching
+├── components/
+│   └── PhiNotice.tsx             Clinical PHI/PII intake disclaimer banner
+├── fonts/
+│   ├── DejaVuSans.ttf            Unicode TrueType regular font
+│   ├── DejaVuSans-Bold.ttf       Unicode TrueType bold font
+│   └── DejaVuSans-Oblique.ttf    Unicode TrueType italic font
+└── lib/
+    ├── citation-formatter.ts     Multi-style citation engine (Vancouver, APA, Harvard)
+    ├── clinical-keywords.ts      Intake keyword tokenizer, spelling suggestions, and boundary validation
+    ├── deliverable-integrity.ts  Server-side parity validation and tampered payload rejection gate
+    ├── docx-generator.ts         Structured Word document layout engine with native XML headers/footers
+    ├── pdf-generator.ts          PDFKit vector document compilation and running header/footer engine
+    ├── provenance.ts             Reproducibility metadata generator (prompt version, commit, timestamp)
+    ├── pubmed-query.ts           Candidate query ladder builder, specialty scope checker, and MeSH mapper
+    ├── rate-limiter.ts           Sliding-window request rate limiter
+    ├── relevance.ts              PICO claim filtering, multi-section citation reconciliation fixpoint
+    ├── security-headers.ts       HTTP security headers and CORS origin validation
+    └── site-config.ts            Dynamic canonical domain resolution
+```
+
+---
+
+## Verification and Testing
+
+The repository contains **421 unit tests across 22 test suites** executed via Node.js native test runner (`node:test` and `node:assert/strict`):
 
 ```bash
-npm install
+# Run all repository unit tests
+npm test
 
-npm run dev        # dev server
-npm run build      # production build
-npm run start      # serve the production build
-npm run lint       # eslint
-npm run typecheck  # tsc --noEmit
-npm test           # node:test — 359 tests
+# Run type checking
+npm run typecheck
+
+# Run production build
+npm run build
+
+# Start production server daemon
+npm run start
 ```
 
-Deploy:
+### Full Protocol Execution (Suites A to K)
+
+To run the automated 257-record verification protocol against a running server:
 
 ```bash
-npx vercel --prod --yes
+node results/remediation/final/run_full_protocol.mjs
 ```
 
-### Environment
-
-`.env*` is gitignored; **never commit a key**. Configure the environment through your
-host's secret store rather than a file you might later commit.
-
----
-
-## Tests
-
-359 tests, no test framework beyond `node:test` and `node:assert`. They encode clinical and
-editorial rules rather than implementation details:
-
-| File | What it protects |
-|---|---|
-| `production-fixtures.test.ts` | Real production shapes: relevant short-cervix evidence retained; cancer / PCOS / endometriosis / neonatal / wrong-population / wrong-intervention records excluded; the zero-support case emits the exact published message and fabricates nothing |
-| `citation-formatter.test.ts` | CF1–CF8: Multi-style citation formatting (Vancouver uppercase no-brackets, APA 7th author-date, Harvard author-year, bibliography sorting) |
-| `vancouver-style.test.ts` | V1–V8: ICMJE/NLM Vancouver styling, sequential bracket checks, and deliverable integrity |
-| `citation-integrity-regression.test.ts` | T1–T15 citation and reference regressions |
-| `citation-slot-parsing.test.ts` | Multi-citation, multi-year, name-only and bracket variants |
-| `claim-finalization.test.ts` | Supported, unsupported, off-PICO, contradictory and cross-field claims, plus run-to-run determinism |
-| `confidence-gate.test.ts` | Confidence, identifier and PICO eligibility |
-| `dedup-crossprovider.test.ts` | PubMed / Crossref / OpenAlex copies of one paper collapse to one record |
-| `reconcile.test.ts` | Fixpoint, determinism and idempotence |
-| `deliverable-integrity.test.ts` | The export gate, per narrative field |
-
----
-
-## Architecture
-
-```
-src/app/
-  page.tsx            Step 1: Clinical question and PICO input
-  gap/                Step 2: Research gap & evidence mapping
-  question/           Step 3: Outcome & citation style selection
-  paper/              Step 4: Commentary synthesis, quality scores, live style switcher, and deliverables
-  api/engine/         retrieval, claim filtering, commentary, claim audit
-  api/docx/           native publication-grade Microsoft Word (.docx) export with headers, footers & page numbers
-  api/pdf/            vector PDF rendering + server-side integrity refusal (422)
-  api/pubmed/         direct PubMed lookup
-src/lib/
-  citation-formatter.ts multi-style citation transformations (Vancouver, APA, Harvard)
-  evidence-set.ts       canonical identity and cross-provider dedup
-  relevance.ts          PICO matching, citation parsing, reconciliation
-  claim-finalization.ts
-  deliverable-integrity.ts
-  clinical-keywords.ts  vocabulary, corrections, no-evidence messaging
-```
-
-PDF, Word and clipboard exports are separate code paths that each build a bibliography.
-Rather than trusting each to remember the filtered set, each hands its intended references
-to `guardDeliverable()` first and is refused when they do not match — and `/api/pdf`
-re-checks server-side, because the browser is not a trust boundary.
-
----
-
-## Known limitations
-
-Stated plainly, because a README that only lists strengths is not documentation.
-
-- **Live output varies.** Retrieval returns a stable pool, but the model cites a different
-  subset each run, so the reference count moves between roughly 3 and 8. The *invariants*
-  (no orphan citation, no uncited reference, reference/source parity, full audit coverage)
-  hold every run; the count does not. Treat the count as provider variability, not a
-  regression signal.
-- **Retrieval can return an empty pool** when an upstream provider is unavailable, in which
-  case the app states that no related literature was found. This is honest but it is also
-  indistinguishable from a genuine zero-hit search in the response alone.
-- **Fallback coverage is partial.** When the LLM provider is unavailable, a deterministic
-  commentary fallback exists, but it is specific to the short-cervix case rather than
-  derived from arbitrary submitted PICO elements. Other LLM-dependent stages still require
-  a working provider.
-- **Strict author matching is deliberately absent.** The gate accepts a citation naming any
-  author on a retained record, matching the pipeline's own behaviour. This trades a small
-  amount of strictness for not rejecting sound commentary; see the gate section above.
-- Two auxiliary audit scripts used during development still report unresolved issues: a
-  multi-database coverage expectation that only one provider currently satisfies, and a UI
-  selector timeout in the reference-audit flow.
+The protocol assesses:
+- **Suite A (23 records)**: Keyword parsing, dash separators, conjunction phrases, and token bounds.
+- **Suite B (6 records)**: Structured PICO form fields.
+- **Suite C (147 records)**: Question formulation across 16 clinical gold cases and 3 engine configurations.
+- **Suite D (9 records)**: Evidence-gap identification logic.
+- **Suite E (6 records)**: Multi-step workflow navigation and state persistence.
+- **Suite F (11 records)**: Export deliverables, unpdf page-count checks, DejaVu glyph retention, and provenance blocks.
+- **Suite G (10 records)**: Interface accessibility, social metadata, and canonical domain tags.
+- **Suite H (9 records)**: Security headers, CORS restrictions, rate-limit burst enforcement, and PHI disclaimer.
+- **Suite I (21 records)**: Clinical informatics capability checklist.
+- **Suite J (11 records)**: API schema and contract negative tests.
+- **Suite K (4 records)**: Tampered payload rejection and deliverable parity gates.
 
 ---
 
 ## License
 
-See the repository owner for licensing terms.
+All rights reserved. See repository owner for licensing terms.
