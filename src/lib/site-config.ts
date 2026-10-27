@@ -10,7 +10,7 @@
  * 3. https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}
  * 4. Default: "https://aipico.vercel.app"
  */
-export function resolveCanonicalUrl(env: NodeJS.ProcessEnv = process.env): string {
+export function resolveCanonicalUrl(env: Record<string, string | undefined> = process.env): string {
   const raw =
     env.CANONICAL_URL ||
     env.NEXT_PUBLIC_SITE_URL ||
@@ -25,7 +25,7 @@ export function resolveCanonicalUrl(env: NodeJS.ProcessEnv = process.env): strin
 
 export const CANONICAL_URL = resolveCanonicalUrl();
 
-export function getCanonicalUrl(path = "", env: NodeJS.ProcessEnv = process.env): string {
+export function getCanonicalUrl(path = "", env: Record<string, string | undefined> = process.env): string {
   const base = resolveCanonicalUrl(env);
   const cleanPath = path ? (path.startsWith("/") ? path : `/${path}`) : "";
   return `${base}${cleanPath}`;
@@ -34,7 +34,7 @@ export function getCanonicalUrl(path = "", env: NodeJS.ProcessEnv = process.env)
 /**
  * Builds canonical metadata definitions for Next.js Metadata objects.
  */
-export function buildCanonicalMetadata(env: NodeJS.ProcessEnv = process.env) {
+export function buildCanonicalMetadata(env: Record<string, string | undefined> = process.env) {
   const canonicalUrl = resolveCanonicalUrl(env);
   return {
     metadataBase: new URL(canonicalUrl),

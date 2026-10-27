@@ -12,11 +12,11 @@ export type NarrativeField = (typeof NARRATIVE_FIELDS)[number];
 
 export interface DeliverableIntegrityInput {
   /** Every narrative field that can reach a deliverable. */
-  fields: Record<string, string>;
+  fields?: Record<string, string>;
   /** The reference list as it will be published. */
-  references: string[];
+  references?: string[];
   /** Exactly the records behind `references`: the claim-specific retained evidence set. */
-  retainedRecords: AuditableRef[];
+  retainedRecords?: AuditableRef[];
   /**
    * Reference strings a deliverable is about to emit (PDF/Word/clipboard). When present these
    * must resolve into `retainedRecords`, which is what stops an export reintroducing a source
@@ -26,6 +26,10 @@ export interface DeliverableIntegrityInput {
   /** Canonical keys the evidence set allows, when available, for stricter resolution. */
   allowedKeys?: Set<string>;
   citationMap?: Map<string, AuditableRef>;
+  title?: string;
+  sections?: Array<{ heading?: string; blocks?: string[] } | any>;
+  retainedReferences?: AuditableRef[];
+  citationStyle?: string;
 }
 
 export interface DeliverableIntegrityResult {
@@ -148,7 +152,11 @@ export function validateDeliverableIntegrity(input: DeliverableIntegrityInput): 
   const references = asStrings(inp.references, "references");
   const exportReferences = asStrings(inp.exportReferences, "exportReferences");
   const retained: AuditableRef[] = (
-    Array.isArray(inp.retainedRecords) ? inp.retainedRecords : []
+    Array.isArray(inp.retainedRecords)
+      ? inp.retainedRecords
+      : Array.isArray(inp.retainedReferences)
+      ? inp.retainedReferences
+      : []
   ).filter((r): r is AuditableRef => !!r && typeof r === "object");
 
   const unsupportedCitations: string[] = [];
