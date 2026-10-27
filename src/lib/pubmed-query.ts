@@ -325,7 +325,11 @@ const OBGYN_TERMS: readonly string[] = [
 const OUT_OF_SCOPE_SPECIALTIES: readonly { specialty: string; terms: readonly string[] }[] = [
   {
     specialty: "Cardiology",
-    terms: ["myocardial infarction", "stemi", "nstemi", "cardiac arrest", "heart failure", "atrial fibrillation", "statin", "primary pci", "angioplasty", "coronary artery", "bypass graft", "atherosclerosis"]
+    terms: [
+      "myocardial infarction", "stemi", "nstemi", "cardiac arrest", "heart failure",
+      "atrial fibrillation", "statin", "primary pci", "angioplasty", "coronary artery",
+      "bypass graft", "atherosclerosis", "chest pain", "angina", "troponin"
+    ]
   },
   {
     specialty: "Neurology",
@@ -399,6 +403,13 @@ export function checkQueryVagueness(input: ClinicalSearchInput): VaguenessCheckR
       isVague: true,
       reason: "Query is too vague to retrieve meaningful clinical evidence. Please specify a distinct condition and intervention.",
       prompt: "Please provide a specific clinical condition (e.g. preeclampsia, thin endometrium) and intervention."
+    };
+  }
+  if (specificWords.length <= 1) {
+    return {
+      isVague: true,
+      reason: "Query is underspecified. A clinical inquiry requires both a clinical condition and an intervention or outcome.",
+      prompt: "Please provide both a condition and an intervention (e.g. letrozole vs clomiphene in PCOS)."
     };
   }
   return { isVague: false };

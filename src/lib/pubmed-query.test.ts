@@ -7,7 +7,9 @@ import {
   buildConceptClause,
   buildInterventionClause,
   resolveMeshDescriptors,
-  sanitizePhrase
+  sanitizePhrase,
+  checkQueryScope,
+  checkQueryVagueness
 } from "./pubmed-query.ts";
 
 test("PubMed operators in clinician text cannot rewrite the boolean structure of the query", () => {
@@ -153,4 +155,46 @@ test("the cache key is order-independent of formatting but carries no API key ma
   const c = buildCacheKey({ population: "short cervix", intervention: "cerclage" });
   assert.notEqual(a, c, "genuinely different queries must not collide");
   assert.ok(!/api_key/i.test(a), a);
+});
+
+test("boundary test suite: specialty scope gating and vagueness checks (DEF-012, DEF-008)", () => {
+  // In-scope maternal cardiology / OB-GYN queries must NOT be refused
+  const inScopeCases = [
+    { name: "peripartum cardiomyopathy", input: { population: "peripartum cardiomyopathy", intervention: "bromocriptine" } },
+    { name: "cardiac disease in pregnancy", input: { population: "cardiac disease in pregnancy", intervention: "beta blockers" } },
+    { name: "preeclampsia and cardiovascular risk", input: { population: "preeclampsia", intervention: "cardiovascular risk" } },
+    { name: "ovarian stimulation in women with heart disease", input: { population: "women with heart disease", intervention: "ovarian stimulation" } },
+    { name: "PCOS and metabolic syndrome", input: { population: "PCOS", intervention: "metabolic syndrome" } },
+    { name: "gestational diabetes and neonatal outcomes", input: { population: "gestational diabetes", intervention: "dietary counseling", outcome: "neonatal outcomes" } },
+    { name: "thin endometrium intrauterine PRP", input: { population: "thin endometrium", intervention: "intrauterine PRP" } },
+  ];
+
+  for (const c of inScopeCases) {
+    const scope = checkQueryScope(c.input);
+    assert.equal(scope.inScope, true, `Expected ${c.name} to be inScope: true, got: ${JSON.stringify(scope)}`);
+  }
+
+  // Out-of-scope non-OB/GYN queries MUST be refused
+  const outOfScopeCases = [
+    { name: "chest pain in a 55-year-old man", input: { population: "chest pain in a 55-year-old man", intervention: "aspirin" }, expSpecialty: "Cardiology" },
+    { name: "knee osteoarthritis injections", input: { population: "knee osteoarthritis", intervention: "corticosteroid injections" }, expSpecialty: "Orthopedics & Rheumatology" },
+  ];
+
+  for (const c of outOfScopeCases) {
+    const scope = checkQueryScope(c.input);
+    assert.equal(scope.inScope, false, `Expected ${c.name} to be refused (inScope: false), got: ${JSON.stringify(scope)}`);
+    assert.equal(scope.specialty, c.expSpecialty);
+  }
+
+  // Underspecified queries MUST be flagged as vague / needing clarification
+  const vagueCases = [
+    { name: "PCOS alone", input: { population: "PCOS" } },
+    { name: "infertility alone", input: { population: "infertility" } },
+    { name: "women treatment better outcome", input: { population: "women", intervention: "treatment", comparator: "better", outcome: "outcome" } }
+  ];
+
+  for (const c of vagueCases) {
+    const vagueness = checkQueryVagueness(c.input);
+    assert.equal(vagueness.isVague, true, `Expected ${c.name} to be flagged as isVague: true`);
+  }
 });
