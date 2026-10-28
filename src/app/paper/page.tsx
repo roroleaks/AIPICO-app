@@ -297,6 +297,7 @@ export default function PaperPage() {
   });
   const [commentaryLoading, setCommentaryLoading] = useState(false);
   const [commentaryError, setCommentaryError] = useState(false);
+  const [commentaryErrorMessage, setCommentaryErrorMessage] = useState<string | null>(null);
   const [pubmed, setPubmed] = useState<PubMedResult[] | null>(null);
   const [pubmedLoading, setPubmedLoading] = useState(false);
   const [exporting, setExporting] = useState<"commentary" | "refs" | "sources" | "question" | "pubmed" | null>(null);
@@ -306,13 +307,14 @@ export default function PaperPage() {
   const activeQuestion = formulation?.variants?.[variantIdx]?.question ?? formulation?.finalQuestion ?? "";
 
   const genLockRef = useRef(false);
-  const generateCommentary = useCallback(async (overrideQ?: string) => {
+  const generateCommentary = useCallback(async (overrideQ?: string, preferDeterministic = false) => {
     if (!formulation?.finalQuestion) return;
     if (genLockRef.current) return; // synchronous guard against concurrent regenerations
     genLockRef.current = true;
     const q = overrideQ || activeQuestion || formulation.finalQuestion;
     setCommentaryLoading(true);
     setCommentaryError(false);
+    setCommentaryErrorMessage(null);
     try {
       const res = await fetch("/api/engine", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -323,10 +325,16 @@ export default function PaperPage() {
           selectedQuestion: q,
           outcome,
           outcomes,
-          picoElements: formulation.elements
+          picoElements: formulation.elements,
+          preferDeterministic
         })
       });
-      const data: CommentaryPaper & { error?: string } = await res.json();
+      let data: (CommentaryPaper & { error?: string }) | null = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
       if (data && typeof data === "object" && data.title && !data.error) {
         const str = (v: unknown): string => (typeof v === "string" ? v : "");
         const strings = (v: unknown): string[] =>
@@ -371,11 +379,18 @@ export default function PaperPage() {
           window.sessionStorage.removeItem(KEYS.commentary);
         }
         setCommentary(norm);
+        setCommentaryError(false);
+        setCommentaryErrorMessage(null);
       } else {
         setCommentaryError(true);
+        setCommentaryErrorMessage(
+          data?.error ||
+          (res.status === 504 ? "The AI writing service timed out." : "Commentary generation could not complete.")
+        );
       }
-    } catch {
+    } catch (err: unknown) {
       setCommentaryError(true);
+      setCommentaryErrorMessage(err instanceof Error ? err.message : "Network error contacting commentary engine.");
     }
     finally { genLockRef.current = false; setCommentaryLoading(false); }
   }, [formulation, gapTopic, activeQuestion, outcome, outcomes]);
@@ -732,15 +747,36 @@ export default function PaperPage() {
               />
             )}
             {commentaryError && !commentary && (
-              <>
-                <div className="advisory">⚠️ Commentary generation failed. The AI service may be busy — please retry.</div>
-                <div className="row"><button className="primary" disabled={commentaryLoading} onClick={() => generateCommentary()}>{commentaryLoading ? "⏳ Retrying…" : "🔄 Retry"}</button></div>
-              </>
+              <div style={{ margin: "16px 0", padding: "16px", background: "#fef2f2", border: "1px solid #f87171", borderRadius: 8 }}>
+                <div style={{ color: "#991b1b", fontWeight: 600, marginBottom: 8, fontSize: "0.95rem" }}>
+                  ⚠️ {commentaryErrorMessage || "Commentary generation failed. The AI service may be busy — please retry."}
+                </div>
+                <div style={{ color: "#7f1d1d", fontSize: "0.85rem", marginBottom: 12 }}>
+                  You can retry with the AI model, or immediately generate a publication-grade deterministic clinical commentary synthesized directly from peer-reviewed literature.
+                </div>
+                <div className="row" style={{ display: "flex", gap: 10 }}>
+                  <button className="primary" disabled={commentaryLoading} onClick={() => generateCommentary(undefined, false)}>
+                    {commentaryLoading ? "⏳ Retrying…" : "🔄 Retry AI Generation"}
+                  </button>
+                  <button className="secondary" disabled={commentaryLoading} onClick={() => generateCommentary(undefined, true)} style={{ borderColor: "#0f766e", color: "#0f766e" }}>
+                    ⚡ Generate Deterministic Synthesis
+                  </button>
+                </div>
+              </div>
             )}
             {commentaryError && commentary && (
-              <div className="advisory" style={{ marginTop: 12 }}>
-                ⚠️ Regeneration failed — the AI service may be busy. Your previous commentary is still shown below.
-                <div className="row" style={{ marginTop: 8 }}><button className="secondary" disabled={commentaryLoading} onClick={() => generateCommentary()}>{commentaryLoading ? "⏳ Retrying…" : "🔄 Try again"}</button></div>
+              <div style={{ margin: "14px 0", padding: "12px 14px", background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 8 }}>
+                <div style={{ color: "#92400e", fontWeight: 600, fontSize: "0.92rem", marginBottom: 6 }}>
+                  ⚠️ {commentaryErrorMessage || "Regeneration failed — the AI service may be busy. Your previous commentary is still shown below."}
+                </div>
+                <div className="row" style={{ display: "flex", gap: 10, marginTop: 8 }}>
+                  <button className="secondary" disabled={commentaryLoading} onClick={() => generateCommentary(undefined, false)}>
+                    {commentaryLoading ? "⏳ Retrying…" : "🔄 Try AI again"}
+                  </button>
+                  <button className="secondary" disabled={commentaryLoading} onClick={() => generateCommentary(undefined, true)}>
+                    ⚡ Switch to Deterministic
+                  </button>
+                </div>
               </div>
             )}
             {commentary && (

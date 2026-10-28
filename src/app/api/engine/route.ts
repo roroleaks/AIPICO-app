@@ -47,7 +47,7 @@ function hasAnyLlmKey(): boolean {
 const MODEL = process.env.LLM_MODEL || "gemini-2.0-flash";
 
 // Bounded timeouts so dependencies degrade gracefully within request budget
-const LLM_TIMEOUT_MS = 25_000;
+const LLM_TIMEOUT_MS = 14_000;
 const API_TIMEOUT_MS = 10_000;
 
 class LlmFatal extends Error {}
@@ -752,6 +752,7 @@ const commentaryZodSchema = z.object({
     label: z.string().max(200),
     value: z.string().max(2000),
   })).optional().nullable(),
+  preferDeterministic: z.boolean().optional().nullable(),
 });
 
 /** Handle CORS preflight for /api/engine */
@@ -833,9 +834,10 @@ async function postHandler(req: NextRequest) {
 
   try {
     if (stage === "commentary") {
-      const { topic, gapAnalysis, selectedQuestion, outcome, outcomes, picoElements } = body as {
+      const { topic, gapAnalysis, selectedQuestion, outcome, outcomes, picoElements, preferDeterministic } = body as {
         topic?: string; gapAnalysis?: { known?: unknown[]; uncertain?: unknown[] };
         selectedQuestion?: string; outcome?: string; outcomes?: Array<unknown>; picoElements?: Array<{ label?: unknown; value?: unknown }>;
+        preferDeterministic?: boolean;
       };
       // NOTE: there is deliberately no `if (!KEY) return 503` here. That guard made the
       // deterministic fallback below unreachable whenever no key was configured, which is the
@@ -1060,18 +1062,18 @@ let commentary: Record<string, unknown>;
       // no way to tell them apart (`source` came back undefined for both).
       let commentarySource: "ai" | "deterministic";
       const commentaryStartTime = Date.now();
-      if (!KEY) {
+      if (!KEY || preferDeterministic) {
         commentarySource = "deterministic";
         commentary = generateDeterministicCommentary({
           selectedQuestion: String(selectedQuestion || topic || ""),
           outcomesText,
-          reason: "no AI provider key is configured for this instance",
+          reason: preferDeterministic ? "clinician selected deterministic synthesis" : "no AI provider key is configured for this instance",
           pool: evidenceSet.retainedRecords as AuditableRef[],
           elements
         });
       } else {
         try {
-          commentary = await callLLM(`${basePrompt}\n${responseShape}`, promptPayload, 2);
+          commentary = await callLLM(`${basePrompt}\n${responseShape}`, promptPayload, 1);
           commentarySource = "ai";
         } catch (e) {
           console.error("[engine] LLM commentary generation failed, using deterministic fallback:", e);
@@ -1155,7 +1157,7 @@ let commentary: Record<string, unknown>;
       // Only a model-produced draft can be repaired by asking the model again. A deterministic
       // draft is already built to cite every record it lists, so retrying would just burn two
       // provider calls that cannot succeed.
-      while (commentarySource === "ai" && (citationChecks.orphans.length || citationChecks.uncited.length) && repairs < 2) {
+      while (commentarySource === "ai" && (citationChecks.orphans.length || citationChecks.uncited.length) && repairs < 1) {
         repairs++;
           try {
             commentary = await callLLM(
@@ -1163,7 +1165,7 @@ let commentary: Record<string, unknown>;
 - Your previous draft was rejected for citation integrity. These in-text citations name no reference you listed: ${citationChecks.orphans.join("; ") || "none"}. These references you listed were never cited in the text: ${citationChecks.uncited.map(u => u.split(".")[0]).join("; ") || "none"}. Fix both: cite each listed reference at least once using sequential Vancouver numeric brackets [1], [2], etc., and delete or correct every citation that is not in the referencePool.
 ${responseShape}`,
               promptPayload,
-              2
+              1
             );
           } catch (e) {
             console.error("[engine] LLM commentary repair failed, using current commentary:", e);
@@ -1277,10 +1279,67 @@ const noDirectEvidence = directPool.length === 0;
         citationMap: evidenceSet.citationMap
       });
       if (!integrity.ok) {
-        return NextResponse.json({
-          error: "Commentary failed citation integrity validation and was not published.",
-          integrity
-        }, { status: 500 });
+        if (commentarySource === "ai") {
+          console.warn("[engine] AI commentary failed citation integrity validation. Falling back to deterministic synthesis:", integrity);
+          const detCommentary = generateDeterministicCommentary({
+            selectedQuestion: String(selectedQuestion || topic || ""),
+            outcomesText,
+            reason: "AI synthesis draft did not satisfy citation integrity standards; deterministic synthesis provided.",
+            pool: evidenceSet.retainedRecords as AuditableRef[],
+            elements
+          });
+          commentary = detCommentary;
+          commentarySource = "deterministic";
+          const detRefs = (Array.isArray(detCommentary.references) ? detCommentary.references : [])
+            .filter((x): x is string => typeof x === "string" && x.trim().length > 0);
+          const detReconciled = reconcileNarrative(
+            {
+              abstract: String(detCommentary.abstract || ""),
+              introduction: String(detCommentary.introduction || ""),
+              discussion: String(detCommentary.discussion || ""),
+              conclusion: String(detCommentary.conclusion || "")
+            },
+            detRefs,
+            evidenceSet.allowedCitationKeys,
+            evidenceSet.citationMap
+          );
+          commentary.abstract = detReconciled.fields.abstract;
+          commentary.introduction = detReconciled.fields.introduction;
+          commentary.discussion = detReconciled.fields.discussion;
+          commentary.conclusion = detReconciled.fields.conclusion;
+          finalRefs.length = 0;
+          finalRefs.push(...detReconciled.references);
+          commentary.references = finalRefs;
+          citationChecks = checkCitations(narrativeOf(), finalRefs);
+          curatedRecords.length = 0;
+          for (const raw of finalRefs) {
+            const rec = resolveReference(raw, evidenceSet.retainedRecords as AuditableRef[]);
+            if (rec) curatedRecords.push(rec);
+          }
+          const detIntegrity = validateDeliverableIntegrity({
+            fields: {
+              abstract: String(commentary.abstract || ""),
+              introduction: String(commentary.introduction || ""),
+              discussion: String(commentary.discussion || ""),
+              conclusion: String(commentary.conclusion || "")
+            },
+            references: finalRefs,
+            retainedRecords: curatedRecords,
+            allowedKeys: evidenceSet.allowedCitationKeys,
+            citationMap: evidenceSet.citationMap
+          });
+          if (!detIntegrity.ok) {
+            return NextResponse.json({
+              error: "Commentary failed citation integrity validation and was not published.",
+              integrity: detIntegrity
+            }, { status: 500 });
+          }
+        } else {
+          return NextResponse.json({
+            error: "Commentary failed citation integrity validation and was not published.",
+            integrity
+          }, { status: 500 });
+        }
       }
       return NextResponse.json({
         ...commentary,
@@ -1633,6 +1692,64 @@ Respond ONLY with JSON.`,
         } catch (fallbackError) {
           console.error(`[engine] rule fallback for "${stage}" also failed:`, fallbackError);
         }
+      }
+    }
+    if (stage === "commentary") {
+      try {
+        const parsedTopic = String(body.topic || body.selectedQuestion || "");
+        const elements: PicoElement[] = Array.isArray(body.picoElements)
+          ? (body.picoElements as Array<{ label?: unknown; value?: unknown }>)
+              .map(e => ({ label: String(e?.label || ""), value: String(e?.value || "") }))
+              .filter(e => e.label && e.value)
+          : [];
+        const outcomesArr = Array.isArray(body.outcomes)
+          ? body.outcomes.filter((o): o is string => typeof o === "string").map(o => o.trim()).filter(Boolean)
+          : [];
+        const outcomesText = outcomesArr.length
+          ? outcomesArr.join("; ")
+          : (String(body.outcome || "").trim() || "the primary outcome for this question");
+        const fallbackCommentary = generateDeterministicCommentary({
+          selectedQuestion: String(body.selectedQuestion || parsedTopic || ""),
+          outcomesText,
+          reason: "Deterministic synthesis generated following service recovery",
+          pool: [],
+          elements
+        });
+        return NextResponse.json({
+          ...fallbackCommentary,
+          source: "deterministic",
+          synthesisGenerated: true,
+          notice: "Evidence synthesis generated via deterministic protocol following service recovery.",
+          fetchedReferences: [],
+          additionalEvidence: [],
+          contextualReferences: [],
+          retainedCount: 0,
+          retrievedCount: 0,
+          excludedCount: 0,
+          excludedReferences: [],
+          droppedReferences: [],
+          removedCitations: [],
+          evidenceWarnings: [],
+          claimWarnings: [],
+          canonicalCitationKeys: [],
+          noDirectEvidence: false,
+          refAudit: [],
+          paperRefAudit: [],
+          citationChecks: { totalRefs: 0, citedRefs: 0, uncited: [], orphans: [], consistent: true },
+          integrity: {
+            ok: true,
+            unsupportedCitations: [],
+            orphanCitations: [],
+            uncitedReferences: [],
+            unresolvedReferences: [],
+            extraExportReferences: [],
+            duplicateCitationKeys: [],
+            malformedReferences: [],
+            warnings: []
+          }
+        });
+      } catch (fallbackError) {
+        console.error(`[engine] rule fallback for "commentary" also failed:`, fallbackError);
       }
     }
     return NextResponse.json(
