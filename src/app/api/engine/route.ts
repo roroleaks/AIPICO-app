@@ -841,7 +841,7 @@ async function postHandler(req: NextRequest) {
         ? outcomesArr.join("; ")
         : (String(outcome || "").trim() || "the primary outcome for this question");
       let refPool = await fetchReferencesBroad(cleanTopicQuery(String(topic || "")), 12);
-      if (refPool.length < 6 && selectedQuestion) {
+      if (refPool.length < 3 && selectedQuestion) {
         const alt = await fetchReferencesBroad(sanitizeQuery(String(selectedQuestion)), 8);
         refPool.push(...alt);
       }
@@ -925,7 +925,7 @@ async function postHandler(req: NextRequest) {
           (q, idx, arr) => q && q.length > 3 && arr.indexOf(q) === idx && q !== cleanTopicQuery(String(topic || ""))
         );
 
-        for (const query of queriesToTry) {
+        for (const query of queriesToTry.slice(0, 1)) {
           const additionalRefs = await fetchReferencesBroad(query, 8);
           if (additionalRefs.length) {
             refPool = dedupeRefs([...refPool, ...additionalRefs]);
