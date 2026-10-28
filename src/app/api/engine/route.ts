@@ -47,8 +47,8 @@ function hasAnyLlmKey(): boolean {
 const MODEL = process.env.LLM_MODEL || "gemini-2.0-flash";
 
 // Bounded timeouts so dependencies degrade gracefully within request budget
-const LLM_TIMEOUT_MS = 14_000;
-const API_TIMEOUT_MS = 10_000;
+const LLM_TIMEOUT_MS = 6_000;
+const API_TIMEOUT_MS = 3_500;
 
 class LlmFatal extends Error {}
 class LlmTransient extends Error {
@@ -140,18 +140,7 @@ async function callLLM(system: string, payload: unknown, attempts = 2): Promise<
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
       if (GEMINI_API_KEY) {
-        try {
-          return await callGemini(MODEL, GEMINI_API_KEY, system, payload);
-        } catch (geminiErr) {
-          if (MODEL !== "gemini-1.5-flash") {
-            try {
-              return await callGemini("gemini-1.5-flash", GEMINI_API_KEY, system, payload);
-            } catch {
-              // fall through to throw geminiErr
-            }
-          }
-          throw geminiErr;
-        }
+        return await callGemini(MODEL, GEMINI_API_KEY, system, payload);
       } else if (GROQ_API_KEY) {
         const groqModel = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
         return await callOpenAiCompatible("https://api.groq.com/openai/v1/chat/completions", GROQ_API_KEY, groqModel, system, payload);
@@ -453,8 +442,8 @@ async function fetchCrossref(query: string, maxResults = 4): Promise<PubMedRef[]
 }
 
 async function fetchReferencesBroad(query: string, maxResults = 8, excluded: Set<string> = EMPTY_REF_SET): Promise<PubMedRef[]> {
-  const pubmed = await fetchPubMedReferences(query, maxResults, excluded);
-  const [europe, openalex, crossref] = await Promise.all([
+  const [pubmed, europe, openalex, crossref] = await Promise.all([
+    fetchPubMedReferences(query, maxResults, excluded),
     fetchEuropePMC(query, maxResults),
     fetchOpenAlex(query, maxResults),
     fetchCrossref(query, maxResults)

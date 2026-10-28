@@ -382,6 +382,10 @@ export default function PaperPage() {
         setCommentaryError(false);
         setCommentaryErrorMessage(null);
       } else {
+        if (!preferDeterministic) {
+          genLockRef.current = false;
+          return generateCommentary(overrideQ, true);
+        }
         setCommentaryError(true);
         setCommentaryErrorMessage(
           data?.error ||
@@ -389,6 +393,10 @@ export default function PaperPage() {
         );
       }
     } catch (err: unknown) {
+      if (!preferDeterministic) {
+        genLockRef.current = false;
+        return generateCommentary(overrideQ, true);
+      }
       setCommentaryError(true);
       setCommentaryErrorMessage(err instanceof Error ? err.message : "Network error contacting commentary engine.");
     }
