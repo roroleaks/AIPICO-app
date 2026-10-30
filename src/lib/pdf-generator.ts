@@ -6,6 +6,7 @@ import type { AuditableRef } from "./relevance.ts";
 import {
   transformCitationsInText,
   formatBibliographyList,
+  formatVancouverSuperscript,
   type CitationStyle
 } from "./citation-formatter.ts";
 import type { ProvenanceMetadata } from "./provenance.ts";
@@ -230,7 +231,7 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
           for (const item of items) {
             ensure(20);
             const textWithCites = style === "vancouver"
-              ? item.replace(/\[([\d\s,\-]+)\]/g, "$1") // uppercase style with NO brackets
+              ? formatVancouverSuperscript(item)
               : transformCitationsInText(item, records, style);
             doc.font(FONT).fontSize(10.5).fillColor(ink);
             const lines = wrap(`•  ${textWithCites}`, doc.page.width - doc.page.margins.left - doc.page.margins.right - 14);
@@ -244,10 +245,9 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
         ensure(24);
         doc.font(FONT).fontSize(10.5).fillColor(ink);
 
-        // For Vancouver: "note that vancover must be uppercase and with no barckets"
-        // We remove brackets from citations: [1, 2] -> 1, 2
+        // For Vancouver: uppercase superscript with NO brackets
         const textWithCites = style === "vancouver"
-          ? rawText.replace(/\[([\d\s,\-]+)\]/g, "$1")
+          ? formatVancouverSuperscript(rawText)
           : transformCitationsInText(rawText, records, style);
 
         const lines = wrap(textWithCites, doc.page.width - doc.page.margins.left - doc.page.margins.right);

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatedProcessingIndicator } from "@/components/AnimatedProcessingIndicator";
-import { sget, sset, KEYS } from "@/lib/session";
+import { sget, sset, resetSession, KEYS } from "@/lib/session";
 import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
 import { NO_LITERATURE_MESSAGE, NO_LITERATURE_HINT } from "@/lib/clinical-keywords";
 
@@ -152,18 +152,26 @@ export default function GapPage() {
         <p>What is established, what is contested, and where the real gaps are</p>
       </header>
 
-      <main className="solo">
+      <main id="main" className="solo">
         {!gap && !error && (
           <section className="card">
             <AnimatedProcessingIndicator
               message="Mapping the evidence"
-              secondaryMessage="Retrieving studies from PubMed, filtering for PICO relevance, and constructing the clinical evidence map. This usually takes 20–60 seconds..."
+              secondaryMessage="Retrieving from PubMed / Europe PMC / OpenAlex / Crossref… (~20–60 s)"
             />
+            <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 20 }}>
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} style={{ padding: "12px 14px", border: "1px solid #e2e8f0", borderRadius: 8, background: "#fff" }}>
+                  <div className="skeleton-box" style={{ height: 20, width: i % 2 === 0 ? "88%" : "95%", marginBottom: 8 }} />
+                  <div className="skeleton-box" style={{ height: 14, width: i % 2 === 0 ? "55%" : "65%" }} />
+                </div>
+              ))}
+            </div>
           </section>
         )}
         {error && (
           <section className="card"><div className="advisory">⚠️ {error}</div>
-            <button className="primary" onClick={() => router.push("/")}>← Back to start</button></section>
+            <button className="primary" onClick={() => { resetSession(); router.replace("/"); }}>← Back to start</button></section>
         )}
 
         {gap && isEmptyResult(gap) && (
@@ -175,7 +183,7 @@ export default function GapPage() {
             </div>
             {gap.note && <div className="advisory">⚠️ {gap.note}</div>}
             <div className="row">
-              <button className="primary" onClick={() => router.push("/")}>← Revise your keywords</button>
+              <button className="primary" onClick={() => { resetSession(); router.replace("/"); }}>← Revise your keywords</button>
             </div>
           </section>
         )}
@@ -262,7 +270,7 @@ export default function GapPage() {
               </>
             )}
             <div className="row">
-              <button className="link" onClick={() => router.push("/")}>← Start over</button>
+              <button className="link" onClick={() => { resetSession(); router.replace("/"); }}>← Start over</button>
             </div>
           </section>
         )}

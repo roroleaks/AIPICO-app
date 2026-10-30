@@ -24,3 +24,17 @@ export const KEYS = {
   outcomes: "cq_outcomes",
   citationStyle: "cq_citation_style"
 };
+
+/**
+ * Completely clears all session state and storage when starting over.
+ */
+export function resetSession() {
+  if (typeof window === "undefined") return;
+  try {
+    for (const key of Object.values(KEYS)) {
+      sessionStorage.removeItem(key);
+    }
+    sessionStorage.removeItem("cq_outcome");
+    sessionStorage.clear();
+  } catch {}
+}

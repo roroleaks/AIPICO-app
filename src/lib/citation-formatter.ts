@@ -204,6 +204,40 @@ export function formatBibliographyList(
   }));
 }
 
+export function toSuperscript(str: string): string {
+  const map: Record<string, string> = {
+    "0": "⁰",
+    "1": "¹",
+    "2": "²",
+    "3": "³",
+    "4": "⁴",
+    "5": "⁵",
+    "6": "⁶",
+    "7": "⁷",
+    "8": "⁸",
+    "9": "⁹",
+    "-": "⁻",
+    ",": ","
+  };
+  return str.split("").map(c => map[c] || c).join("");
+}
+
+export function formatVancouverSuperscript(text: string): string {
+  if (!text) return "";
+  // If citation follows ? or !, remove trailing period after citation if any
+  let res = text.replace(/([?!])\s*\[([\d\s,\-]+)\]\.?/g, (_m, punct, inner) => {
+    const clean = inner.replace(/\s+/g, "");
+    return `${punct}${toSuperscript(clean)}`;
+  });
+  // General citation replace: remove space before bracket and trailing dot if attached
+  res = res.replace(/\s*\[([\d\s,\-]+)\]\.?/g, (match, inner) => {
+    const clean = inner.replace(/\s+/g, "");
+    const endsWithDot = match.endsWith(".");
+    return `${toSuperscript(clean)}${endsWithDot ? "." : ""}`;
+  });
+  return res;
+}
+
 /**
  * Expand bracket tokens like [1], [1, 2], [1-3] into the target citation style.
  *

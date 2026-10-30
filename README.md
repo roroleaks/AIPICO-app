@@ -46,9 +46,9 @@ Each stage is an isolated, pure module with automated verification:
 
 ---
 
-## Technical Defect Remediation Summary (DEF-001 to DEF-013)
+## Technical Defect Remediation Summary (DEF-001 to DEF-013 & v3.1 Accessibility/Export Upgrades)
 
-The application has undergone verification against all 13 defect items from `results/05_defects.csv`:
+The application has undergone verification against all 13 defect items from `results/05_defects.csv` and the v3.1 accessibility and export quality brief:
 
 - **DEF-001 (Metadata Domain Resolution)**: `src/lib/site-config.ts` dynamically resolves canonical URL metadata based on incoming request host headers.
 - **DEF-002 (PHI/PII Warning)**: Step 1 intake form renders `src/components/PhiNotice.tsx` warning against patient identifiers.
@@ -62,7 +62,11 @@ The application has undergone verification against all 13 defect items from `res
 - **DEF-010 (Conjunction Token Splitting)**: `src/lib/pubmed-query.ts` preserves compound display in the UI while splitting conjunctions into boolean `AND`/`OR` operands during PubMed query construction, restoring recall.
 - **DEF-011 (NLM Human Clinical Filter)**: Enforces `NOT (animals[mh] NOT humans[mh])` to exclude veterinary and preclinical rodent models from clinical syntheses.
 - **DEF-012 (Specialty Boundary Gate)**: `checkQueryScope` intercepts out-of-scope non-OB/GYN queries while preserving maternal cardiology inquiries via precedence.
-- **DEF-013 (PDF Blank Page Elimination)**: PDFKit margin triggers are suspended during running footer rendering, enforcing exact page budgeting.
+- **DEF-013 (PDF Blank Page Suppression)**: PDFKit margin triggers are suspended during running footer rendering, enforcing exact page budgeting.
+- **v3.1 Intake Gating & Validation (F1, F2)**: Submissions require at least 4 valid clinical tokens; separator-only and whitespace strings remain disabled.
+- **v3.1 Accessibility Compliance (A1–A4)**: Complete WCAG 2.1 AA support including `aria-pressed` on mode toggles and citation pills, visible `<label htmlFor>` descriptors, `<form>` encapsulation, and keyboard skip-links.
+- **v3.1 State Hygiene (S1, G1)**: Session reset handler purges all cached state upon restart, and route guards redirect direct unhydrated visits to Step 1.
+- **v3.1 Citation Formatting & Depth (D1, D2, U1, U3)**: In-text Vancouver citations render as true superscript digits (`¹⁻²`, `¹,²`) without trailing periods, reference bibliographies synthesize 5+ direct evidence sources, and Step 2 provides a 6-item shimmer skeleton loader.
 
 ---
 
@@ -104,7 +108,7 @@ src/
 
 ## Verification and Testing
 
-The repository contains **421 unit tests across 22 test suites** executed via Node.js native test runner (`node:test` and `node:assert/strict`):
+The repository contains **424 unit tests across 22 test suites** executed via Node.js native test runner (`node:test` and `node:assert/strict`):
 
 ```bash
 # Run all repository unit tests

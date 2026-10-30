@@ -113,9 +113,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // have no references, such as the evidence map, carry sections and are unaffected.
     const hasReferences = Array.isArray(body.references) && body.references.length > 0;
     const hasSections = Array.isArray(body.sections) && body.sections.length > 0;
-    if (!hasReferences && !hasSections) {
+    const hasPico = Array.isArray(body.pico) && body.pico.length > 0;
+    if (!hasReferences && !hasSections && !hasPico) {
       return NextResponse.json(
-        { error: "No references or sections available to export." },
+        { error: "No references, sections, or PICO elements available to export." },
         { status: 400, headers: cors }
       );
     }

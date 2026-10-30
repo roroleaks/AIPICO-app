@@ -8,7 +8,7 @@ import {
   buildOutcomeContext,
   selectOutcomes
 } from "@/lib/outcome-selection";
-import { sget, sset, KEYS } from "@/lib/session";
+import { sget, sset, resetSession, KEYS } from "@/lib/session";
 import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
 import { extractPicoFromQuestion, type ExtractedPico } from "@/lib/pico-parser";
 import type { CitationStyle } from "@/lib/citation-formatter";
@@ -280,7 +280,7 @@ export default function QuestionPage() {
         <p>Selected PICO question loaded from Evidence Map — choose 1 outcome to generate your commentary paper</p>
       </header>
 
-      <main className="solo">
+      <main id="main" className="solo">
         {extractedPico && (
           <section className="card">
             <span className="pill">💡 Target PICO Question · {KB[extractedPico.specialty]?.label || "Obstetrics & Gynecology"}</span>
@@ -404,6 +404,7 @@ export default function QuestionPage() {
                 {/* 1. Vancouver */}
                 <button
                   type="button"
+                  aria-pressed={citationStyle === "vancouver"}
                   className={`chip outcome-chip ${citationStyle === "vancouver" ? "chip-on" : ""}`}
                   style={{ textAlign: "left", padding: "14px 16px", cursor: "pointer", height: "auto" }}
                   onClick={() => setCitationStyle("vancouver")}
@@ -423,6 +424,7 @@ export default function QuestionPage() {
                 {/* 2. APA */}
                 <button
                   type="button"
+                  aria-pressed={citationStyle === "apa"}
                   className={`chip outcome-chip ${citationStyle === "apa" ? "chip-on" : ""}`}
                   style={{ textAlign: "left", padding: "14px 16px", cursor: "pointer", height: "auto" }}
                   onClick={() => setCitationStyle("apa")}
@@ -442,6 +444,7 @@ export default function QuestionPage() {
                 {/* 3. Harvard */}
                 <button
                   type="button"
+                  aria-pressed={citationStyle === "harvard"}
                   className={`chip outcome-chip ${citationStyle === "harvard" ? "chip-on" : ""}`}
                   style={{ textAlign: "left", padding: "14px 16px", cursor: "pointer", height: "auto" }}
                   onClick={() => setCitationStyle("harvard")}
@@ -501,7 +504,7 @@ export default function QuestionPage() {
 
         <div className="row" style={{ marginTop: 16 }}>
           <button className="link" onClick={() => router.push("/gap")}>← Back to Evidence Map</button>
-          <button className="link" onClick={() => router.push("/")}>← Start over</button>
+          <button className="link" onClick={() => { resetSession(); router.replace("/"); }}>← Start over</button>
         </div>
       </main>
 

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatedProcessingIndicator } from "@/components/AnimatedProcessingIndicator";
 import type { Formulation } from "@/lib/kb";
-import { sget, sset, KEYS } from "@/lib/session";
+import { sget, sset, resetSession, KEYS } from "@/lib/session";
 import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
 import { NO_LITERATURE_MESSAGE, NO_LITERATURE_HINT } from "@/lib/clinical-keywords";
 import { formatVancouverReference } from "@/lib/relevance";
@@ -75,8 +75,10 @@ function renderWithUpperCitations(
 
   // Vancouver citation style:
   // Strictly UPPERCASE / SUPERSCRIPT with NO BRACKETS (e.g. 1, 2 or 1-3)
+  let cleanText = text.replace(/([?!])\s*\[([\d\s,\-]+)\]\.?/g, "$1[$2]");
+  cleanText = cleanText.replace(/\s*\[([\d\s,\-]+)\]/g, "[$1]");
   const citationRegex = /(\[[\d\s,\-]+\])/g;
-  const parts = text.split(citationRegex);
+  const parts = cleanText.split(citationRegex);
   if (parts.length <= 1) return text;
 
   return parts.map((seg, sIdx) => {
@@ -532,7 +534,16 @@ export default function PaperPage() {
       docType: `Structured Clinical Question · ${formulation.framework}`,
       title: activeQuestion,
       meta: `Generated ${new Date().toLocaleDateString()} · Obstetrics & Gynecology`,
-      pico: picoPayload()
+      pico: picoPayload(),
+      sections: [
+        {
+          heading: `Structured Clinical Question Framework (${formulation.framework})`,
+          blocks: [
+            activeQuestion,
+            "Clinical Domain: Obstetrics & Gynecology"
+          ]
+        }
+      ]
     }, slug(activeQuestion) + "-question.pdf", "question");
   };
 
@@ -709,14 +720,14 @@ export default function PaperPage() {
   const retrieved = commentary?.retrievedCount ?? 0;
   const excluded = commentary?.excludedCount ?? 0;
 
+  useEffect(() => {
+    if (!formulation) {
+      router.replace("/");
+    }
+  }, [formulation, router]);
+
   if (!formulation) {
-    return (
-      <div className="wrap"><header className="hdr"><h1>📝 Step 4</h1></header>
-        <main className="solo"><section className="card">
-          <p className="hint">No formulated question found in this session.</p>
-          <button className="primary" onClick={() => router.push("/")}>← Start from Step 1</button>
-        </section></main></div>
-    );
+    return null;
   }
 
   return (
@@ -726,7 +737,7 @@ export default function PaperPage() {
         <p>The commentary generates automatically — choose your preferred question below</p>
       </header>
 
-      <main className="solo">
+      <main id="main" className="solo">
         {(commentary || commentaryLoading || commentaryError) && (
           <section className="card" ref={commentaryRef}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
@@ -825,6 +836,7 @@ export default function PaperPage() {
                       <button
                         key={st}
                         type="button"
+                        aria-pressed={citationStyle === st}
                         className={`chip ${citationStyle === st ? "chip-on" : ""}`}
                         style={{ padding: "4px 12px", fontSize: "0.82rem", height: "auto", cursor: "pointer" }}
                         onClick={() => {
@@ -1103,7 +1115,7 @@ export default function PaperPage() {
           </section>
         )}
 
-        <div className="row"><button className="link" onClick={() => router.push("/")}>← Start a new question</button></div>
+        <div className="row"><button className="link" onClick={() => { resetSession(); router.replace("/"); }}>← Start a new question</button></div>
       </main>
       <footer>Version 3.1 · Copyright©RaoufRoshdy2026</footer>
     </div>

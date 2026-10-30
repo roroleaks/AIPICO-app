@@ -47,28 +47,18 @@ export const metadata: Metadata = {
   },
   manifest: "/manifest.json",
   openGraph: {
-    title: "AI PICO v3.1 — Clinical Question Assistant · Obs/Gyn",
-    description:
-      "AI-assisted formulation of answerable clinical questions and evidence synthesis in Obstetrics and Gynecology (Obs/Gyn)",
-    url: CANONICAL_URL,
+    title: "AI PICO v3.1 — Clinical Question Assistant",
+    description: "From Clinical Uncertainty to Answerable Questions · Obs/Gyn",
+    url: "https://aipico.vercel.app/",
     siteName: "AI PICO",
-    images: [
-      {
-        url: "/og-image.png",
-        width: 1024,
-        height: 1008,
-        alt: "AI PICO Clinical Assistant Icon",
-      },
-    ],
-    locale: "en_US",
     type: "website",
+    images: [{ url: "/icon-192.png", width: 192, height: 192 }],
+    locale: "en_US",
   },
   twitter: {
-    card: "summary_large_image",
-    title: "AI PICO v3.1 — Clinical Question Assistant",
-    description:
-      "AI-assisted formulation of answerable clinical questions in Obs/Gyn",
-    images: ["/og-image.png"],
+    card: "summary",
+    title: "AI PICO v3.1",
+    description: "Clinical Question Assistant · Obs/Gyn",
   },
 };
 
@@ -79,7 +69,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
-      <body>{children}</body>
+      <body>
+        <a href="#main" className="skip-link">Skip to content</a>
+        {children}
+      </body>
     </html>
   );
 }

@@ -71,8 +71,10 @@ function createFormattedRuns(
 
   // Vancouver style:
   // Uppercase superscript with NO brackets!
+  let cleanText = text.replace(/([?!])\s*\[([\d\s,\-]+)\]\.?/g, "$1[$2]");
+  cleanText = cleanText.replace(/\s*\[([\d\s,\-]+)\]/g, "[$1]");
   const citationTokenRegex = /(\[[\d\s,\-]+\])/g;
-  const segments = text.split(citationTokenRegex);
+  const segments = cleanText.split(citationTokenRegex);
   const runs: TextRun[] = [];
 
   for (const seg of segments) {

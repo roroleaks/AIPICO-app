@@ -955,6 +955,31 @@ async function postHandler(req: NextRequest) {
         }
       }
 
+      // If directPool has fewer than 5 records, augment from refPool / excludedByClaim
+      // so the commentary has sufficient evidence depth (at least 5 references)
+      if (directPool.length < 5 && (excludedByClaim.length > 0 || refPool.length > directPool.length)) {
+        const existingPmids = new Set(directPool.map(r => r.pmid));
+        const candidates = excludedByClaim
+          .filter(e => {
+            const pmid = e.ref.pmid;
+            return pmid && !existingPmids.has(pmid) && (!!e.audit.pmid || !!e.audit.doiOk);
+          })
+          .sort((a, b) => (b.audit.score || 0) - (a.audit.score || 0))
+          .map(e => e.ref);
+
+        for (const r of refPool) {
+          if (r.pmid && !existingPmids.has(r.pmid) && !candidates.some(c => c.pmid === r.pmid)) {
+            candidates.push(r);
+          }
+        }
+
+        const needed = 5 - directPool.length;
+        if (candidates.length > 0) {
+          const toAdd = candidates.slice(0, Math.min(candidates.length, Math.max(needed, 8 - directPool.length)));
+          directPool = [...directPool, ...toAdd];
+        }
+      }
+
       // Build canonical evidence set from retained records to serve as the single source of truth
       // for allowed citations, deduplication and revalidation.
       const evidenceSet = await buildEvidenceSet(directPool as AuditableRef[]);
