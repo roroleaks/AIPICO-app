@@ -741,9 +741,6 @@ export function selectOutcomes(
     !context.questionType || candidate.applicableQuestionTypes.length === 0 ||
     candidate.applicableQuestionTypes.includes(context.questionType);
 
-  const conditionText = [context.condition, context.population, context.originalInput].filter(Boolean).join(" ");
-  const interventionText = [context.intervention, context.comparator, context.originalInput].filter(Boolean).join(" ");
-
   /**
    * Scope gate.
    *

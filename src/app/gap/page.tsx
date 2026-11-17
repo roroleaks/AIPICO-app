@@ -105,7 +105,10 @@ export default function GapPage() {
   }, [router]);
 
   useEffect(() => {
-    fetchGap(false);
+    const timer = setTimeout(() => {
+      void fetchGap(false);
+    }, 0);
+    return () => clearTimeout(timer);
   }, [fetchGap]);
 
   const vancouverPlain = (r: Reference) => {

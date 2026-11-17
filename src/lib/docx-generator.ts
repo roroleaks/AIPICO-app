@@ -40,7 +40,7 @@ export interface DocxPayload {
   keywords?: string[] | null;
   sections?: DocxSection[] | null;
   references?: string[] | null;
-  retainedReferences?: any[] | null;
+  retainedReferences?: Array<Record<string, unknown>> | null;
   provenance?: ProvenanceMetadata | null;
 }
 
@@ -238,7 +238,7 @@ function createPicoTable(pico: PicoRow[]): Table {
 
 export async function buildDocxBuffer(body: DocxPayload): Promise<Buffer> {
   const style: CitationStyle = body.citationStyle || "vancouver";
-  const records = (body.retainedReferences || []) as AuditableRef[];
+  const records = (body.retainedReferences || []) as unknown as AuditableRef[];
 
   const docChildren: (Paragraph | Table)[] = [];
 

@@ -31,7 +31,7 @@ export interface PdfPayload {
   keywords?: string[] | null;
   sections?: PdfSection[] | null;
   references?: string[] | null;
-  retainedReferences?: any[] | null;
+  retainedReferences?: Array<Record<string, unknown>> | null;
   provenance?: ProvenanceMetadata | null;
 }
 
@@ -55,7 +55,7 @@ function resolveFontsDir(): string {
 
 export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
   const style: CitationStyle = body.citationStyle || "vancouver";
-  const records = (body.retainedReferences || []) as AuditableRef[];
+  const records = (body.retainedReferences || []) as unknown as AuditableRef[];
 
   const PAGE_MARGIN = 54;
   const doc = new PDFDocument({ size: "A4", margin: PAGE_MARGIN, compress: false, bufferPages: true });

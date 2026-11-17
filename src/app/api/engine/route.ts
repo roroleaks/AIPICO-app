@@ -44,8 +44,6 @@ function hasAnyLlmKey(): boolean {
   return !!KEY;
 }
 
-const MODEL = process.env.LLM_MODEL || "gemini-2.0-flash";
-
 // Bounded timeouts so dependencies degrade gracefully within request budget
 const LLM_TIMEOUT_MS = 6_000;
 const API_TIMEOUT_MS = 3_500;
