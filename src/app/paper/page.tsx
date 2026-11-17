@@ -31,6 +31,8 @@ interface CommentaryPaper {
   fetchedReferences?: ReferenceItem[];
   /** Retained as direct evidence but not cited in the bibliography. */
   additionalEvidence?: ReferenceItem[];
+  /** Indirect evidence that does not match all PICO elements; never counted as directly relevant. */
+  indirectEvidence?: ReferenceItem[];
   /** Retrieved but not direct evidence for the claim; never exported as references. */
   contextualReferences?: ReferenceItem[];
   retainedCount?: number;
@@ -285,6 +287,7 @@ export default function PaperPage() {
       references: Array.isArray(c.references) ? c.references.filter((r): r is string => typeof r === "string") : [],
       fetchedReferences: Array.isArray(c.fetchedReferences) ? c.fetchedReferences : undefined,
       additionalEvidence: Array.isArray(c.additionalEvidence) ? c.additionalEvidence : undefined,
+      indirectEvidence: Array.isArray(c.indirectEvidence) ? c.indirectEvidence : undefined,
       contextualReferences: Array.isArray(c.contextualReferences) ? c.contextualReferences : undefined,
       retainedCount: typeof c.retainedCount === "number" ? c.retainedCount : undefined,
       retrievedCount: typeof c.retrievedCount === "number" ? c.retrievedCount : undefined,
@@ -357,6 +360,8 @@ export default function PaperPage() {
             ? data.fetchedReferences.filter(validRef) : undefined,
           additionalEvidence: Array.isArray(data.additionalEvidence)
             ? data.additionalEvidence.filter(validRef) : undefined,
+          indirectEvidence: Array.isArray(data.indirectEvidence)
+            ? data.indirectEvidence.filter(validRef) : undefined,
           contextualReferences: Array.isArray(data.contextualReferences)
             ? data.contextualReferences.filter(validRef) : undefined,
           retainedCount: typeof data.retainedCount === "number" ? data.retainedCount : undefined,
@@ -1044,6 +1049,25 @@ export default function PaperPage() {
                 </a>
               );
             })}
+          </section>
+        )}
+
+        {!!commentary?.indirectEvidence?.length && (
+          <section className="card">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <span className="pill" style={{ background: "#fef3c7", color: "#92400e" }}>
+                ⚠️ Indirect evidence (does not match all PICO elements)
+              </span>
+            </div>
+            <p className="hint" style={{ marginTop: 4, marginBottom: 8 }}>
+              These records address related clinical mechanisms or populations but did not fully satisfy claim-specific PICO criteria. They are not counted as directly relevant evidence.
+            </p>
+            {commentary.indirectEvidence.map(r => (
+              <a key={r.pmid} className="result" href={r.url} target="_blank" rel="noopener noreferrer">
+                <div className="r-title">{r.title}</div>
+                <div className="r-meta">{r.authors} · {r.journal} · {r.year} · {/^(pmc|epmc|oax|cr):/.test(r.pmid) ? `ID: ${r.pmid}` : `PMID: ${r.pmid}`}{r.doi ? ` · DOI: ${r.doi}` : ""}</div>
+              </a>
+            ))}
           </section>
         )}
 

@@ -937,48 +937,18 @@ async function postHandler(req: NextRequest) {
         }
       }
 
-      // If directPool is still empty, rescue high-quality records from excludedByClaim
-      // that address treatment or clinical context rather than failing with "no literature"
-      if (directPool.length === 0 && excludedByClaim.length > 0) {
-        const salvagable = excludedByClaim
-          .filter(e => {
-            const aud = e.audit;
-            const resolvable = !!aud.pmid || !!aud.doiOk;
-            return resolvable && (
-              ((aud.intervention || aud.comparator) && (aud.population || aud.outcome)) ||
-              aud.score >= 2
-            );
-          })
-          .map(e => e.ref);
-        if (salvagable.length > 0) {
-          directPool = salvagable.slice(0, 6);
-        }
-      }
-
-      // If directPool has fewer than 5 records, augment from refPool / excludedByClaim
-      // so the commentary has sufficient evidence depth (at least 5 references)
-      if (directPool.length < 5 && (excludedByClaim.length > 0 || refPool.length > directPool.length)) {
-        const existingPmids = new Set(directPool.map(r => r.pmid));
-        const candidates = excludedByClaim
-          .filter(e => {
-            const pmid = e.ref.pmid;
-            return pmid && !existingPmids.has(pmid) && (!!e.audit.pmid || !!e.audit.doiOk);
-          })
-          .sort((a, b) => (b.audit.score || 0) - (a.audit.score || 0))
-          .map(e => e.ref);
-
-        for (const r of refPool) {
-          if (r.pmid && !existingPmids.has(r.pmid) && !candidates.some(c => c.pmid === r.pmid)) {
-            candidates.push(r);
-          }
-        }
-
-        const needed = 5 - directPool.length;
-        if (candidates.length > 0) {
-          const toAdd = candidates.slice(0, Math.min(candidates.length, Math.max(needed, 8 - directPool.length)));
-          directPool = [...directPool, ...toAdd];
-        }
-      }
+      // Separate indirect evidence without promoting into directPool
+      const indirectEvidence = excludedByClaim
+        .filter(e => {
+          const aud = e.audit;
+          const resolvable = !!aud.pmid || !!aud.doiOk;
+          return resolvable && (
+            ((aud.intervention || aud.comparator) && (aud.population || aud.outcome)) ||
+            aud.score >= 2
+          );
+        })
+        .map(e => e.ref)
+        .slice(0, 6);
 
       // Build canonical evidence set from retained records to serve as the single source of truth
       // for allowed citations, deduplication and revalidation.
@@ -993,23 +963,29 @@ async function postHandler(req: NextRequest) {
         authors: r.authors, year: r.year, title: r.title, journal: r.journal,
         doi: r.doi, url: r.url, abstract: (r.context || "").slice(0, 500)
       }));
-      // No record survived the claim filter: there is nothing to comment on. Calling the model
-      // here would only invite it to assert findings it has no source for, so the request is
-      // answered with the explicit no-evidence state instead of a commentary.
-      if (directPool.length === 0) {
+      // When fewer than 3 direct records exist, return the low-evidence state instead of a full commentary
+      if (directPool.length < 3) {
+        const count = directPool.length;
+        const lowTitle = count === 0
+          ? "No literature related to your search found"
+          : `Limited direct evidence: ${count} record${count === 1 ? "" : "s"}`;
+        const lowAbstract = count === 0
+          ? ""
+          : `Limited direct evidence was identified for this specific clinical inquiry (${count} record${count === 1 ? "" : "s"}). Full scientific commentary cannot be synthesized without sufficient direct literature.`;
         return NextResponse.json({
-          title: "No literature related to your search found",
-          abstract: "",
+          title: lowTitle,
+          abstract: lowAbstract,
           keywords: [],
           introduction: "",
           discussion: "",
           conclusion: "",
           references: [],
-          fetchedReferences: [],
+          fetchedReferences: directPool,
           additionalEvidence: [],
+          indirectEvidence,
           contextualReferences: contextualPool,
-          retainedCount: 0,
-          retrievedCount: refPool.length,
+          retainedCount: directPool.length,
+          retrievedCount: directPool.length + excludedByClaim.length,
           excludedCount: excludedByClaim.length,
           excludedReferences: excludedByClaim.slice(0, 20).map(e => ({
             pmid: e.ref.pmid, title: e.ref.title, reason: e.reason,
@@ -1017,7 +993,8 @@ async function postHandler(req: NextRequest) {
           })),
           droppedReferences: [],
           noDirectEvidence: true,
-          refAudit: [],
+          lowDirectEvidence: count > 0,
+          refAudit: directPool.map(r => auditRef(r, elements)),
           paperRefAudit: [],
           citationChecks: { totalRefs: 0, citedRefs: 0, uncited: [], orphans: [], consistent: true }
         });
@@ -1367,9 +1344,10 @@ const noDirectEvidence = directPool.length === 0;
           : {}),
         fetchedReferences: curatedRecords,
         additionalEvidence,
+        indirectEvidence,
         contextualReferences: contextualPool,
         retainedCount: directPool.length,
-        retrievedCount: refPool.length,
+        retrievedCount: directPool.length + excludedByClaim.length,
         excludedCount: excludedByClaim.length,
         excludedReferences: excludedByClaim.map(e => ({
           pmid: e.ref.pmid, title: e.ref.title, reason: e.reason,

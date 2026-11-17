@@ -6,6 +6,7 @@ import { finalizeClaims } from "./claim-finalization.ts";
 import {
   checkCitations,
   filterByClaim,
+  auditRef,
   reconcileNarrative,
   type AuditableRef,
   type PicoElement
@@ -152,4 +153,57 @@ test("C. zero direct-support evidence shows the exact message and no claims", as
     finalized.fields.discussion.includes("unresolved uncertainty"),
     "the reader is told the claim is unsupported rather than shown a finding"
   );
+});
+
+test("P0-1. Excluded records are not promoted into directPool; every retained record has pop and int verified", () => {
+  const ivfPico: PicoElement[] = [
+    { label: "Population", value: "poor ovarian response undergoing IVF" },
+    { label: "Intervention", value: "growth hormone" },
+    { label: "Comparator", value: "placebo or standard care" },
+    { label: "Outcome", value: "live birth rate" }
+  ];
+
+  const pool: AuditableRef[] = [
+    {
+      pmid: "30000201",
+      title: "Growth hormone co-treatment in poor responders undergoing IVF: a randomized controlled trial",
+      authors: "Norman RJ",
+      year: "2020",
+      journal: "Hum Reprod",
+      doi: "10.1093/humrep/deaa201",
+      context: "poor ovarian response women in IVF received growth hormone or placebo, live birth rate evaluated"
+    },
+    {
+      pmid: "30000202",
+      title: "Jinfeng pills in diminished ovarian reserve",
+      authors: "Wang L",
+      year: "2019",
+      journal: "Chin J Integr Med",
+      doi: "10.1007/s11655-019-0202",
+      context: "women with diminished ovarian reserve treated with Jinfeng pills"
+    },
+    {
+      pmid: "30000203",
+      title: "Empty follicle syndrome in IVF cycles: etiology and clinical outcome",
+      authors: "Castillo JC",
+      year: "2018",
+      journal: "Fertil Steril",
+      doi: "10.1016/j.fertstert.2018.0203",
+      context: "clinical appraisal of empty follicle syndrome during stimulation"
+    }
+  ];
+
+  const filtered = filterByClaim(pool, ivfPico);
+  assert.equal(filtered.kept.length, 1, "Only the growth hormone IVF trial survives claim filter");
+  assert.equal(filtered.kept[0].pmid, "30000201");
+  assert.equal(filtered.excluded.length, 2, "Other 2 records must remain in excluded set");
+
+  // Every retained record must have verified population and intervention
+  const audit = auditRef(filtered.kept[0], ivfPico);
+  assert.equal(audit.population, true, "Retained record must match population");
+  assert.equal(audit.intervention, true, "Retained record must match intervention");
+
+  // When directPool has fewer than 3 records, low-evidence threshold is triggered (< 3)
+  const directCount = filtered.kept.length;
+  assert.ok(directCount < 3, "Direct count 1 is below threshold of 3, triggering low-evidence state");
 });
