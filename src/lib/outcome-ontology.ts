@@ -423,8 +423,8 @@ export const OUTCOME_ONTOLOGY: OutcomeCandidate[] = [
   // ---------------------------------------------------------------- fertility and assisted reproduction
   defineOutcome({
     id: "live-birth",
-    label: "Live birth",
-    shortLabel: "Live birth",
+    label: "Live birth rate",
+    shortLabel: "Live birth rate",
     category: "fertility",
     family: "live-birth",
     priority: 1,
@@ -432,10 +432,10 @@ export const OUTCOME_ONTOLOGY: OutcomeCandidate[] = [
     applicableConditions: [
       "pcos", "endometriosis", "adenomyosis", "recurrent implantation failure", "unexplained infertility",
       "male factor infertility", "azoospermia", "diminished ovarian reserve", "thin endometrium",
-      "hydrosalpinx", "uterine septum", "fibroids", "anovulation"
+      "hydrosalpinx", "uterine septum", "fibroids", "anovulation", "poor responders", "poor ovarian response"
     ],
     applicableInterventions: [
-      "ivf", "icsi", "iui", "letrozole", "clomiphene citrate", "progesterone", "laparoscopic surgery",
+      "ivf", "icsi", "iui", "growth hormone", "letrozole", "clomiphene citrate", "progesterone", "laparoscopic surgery",
       "hysteroscopic surgery", "metformin", "myo-inositol", "coenzyme Q10"
     ],
     applicableQuestionTypes: [THERAPY, HARM, PROGNOSIS],

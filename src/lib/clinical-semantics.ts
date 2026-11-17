@@ -456,7 +456,21 @@ const MEDICAL_TAXONOMY: MedicalTermEntry[] = [
     category: "outcome",
     specialty: "infertility",
     direction: "desirable",
-    synonyms: ["cumulative live birth rate", "live birth rate", "live birth", "ongoing pregnancy rate"]
+    synonyms: ["cumulative live birth rate", "clbr", "cumulative live birth"]
+  },
+  {
+    canonical: "live birth rate",
+    category: "outcome",
+    specialty: "infertility",
+    direction: "desirable",
+    synonyms: ["live birth rate", "live birth", "lbr", "live birth rate per cycle"]
+  },
+  {
+    canonical: "ongoing pregnancy rate",
+    category: "outcome",
+    specialty: "infertility",
+    direction: "desirable",
+    synonyms: ["ongoing pregnancy rate", "ongoing pregnancy", "opr"]
   },
   {
     canonical: "ovulation rate",
@@ -681,8 +695,12 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
           matchedInterventions.push(entry.canonical);
           found = true;
           break;
-        } else if (entry.category === "outcome" && !matchedOutcomes.includes(entry.canonical)) {
-          matchedOutcomes.push(entry.canonical);
+        } else if (entry.category === "outcome") {
+          const outcomeLabel = token.toLowerCase().trim();
+          const target = entry.synonyms.includes(outcomeLabel) ? outcomeLabel : entry.canonical;
+          if (!matchedOutcomes.includes(target)) {
+            matchedOutcomes.push(target);
+          }
           found = true;
           break;
         }
@@ -705,8 +723,12 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
           } else if (entry.category === "intervention" && !matchedInterventions.includes(entry.canonical)) {
             matchedInterventions.push(entry.canonical);
             found = true;
-          } else if (entry.category === "outcome" && !matchedOutcomes.includes(entry.canonical)) {
-            matchedOutcomes.push(entry.canonical);
+          } else if (entry.category === "outcome") {
+            const outcomeLabel = token.toLowerCase().trim();
+            const target = entry.synonyms.includes(outcomeLabel) ? outcomeLabel : entry.canonical;
+            if (!matchedOutcomes.includes(target)) {
+              matchedOutcomes.push(target);
+            }
             found = true;
           }
         }

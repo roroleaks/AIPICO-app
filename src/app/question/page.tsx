@@ -253,8 +253,12 @@ export default function QuestionPage() {
         setRecommendedId(selection.recommendedOutcome.id);
         setRecommendedRationale(selection.recommendedOutcome.rationale);
 
-        // Pre-select the recommended primary outcome so the clinician can proceed in 1 click
-        const initialPick = options.find(o => o.id === selection.recommendedOutcome.id)?.label || options[0]?.label || "";
+        // Pre-select the outcome matching the selected PICO question so card equals question outcome
+        const qOutcome = pico?.outcome?.toLowerCase().trim();
+        const matchingCard = qOutcome
+          ? options.find(o => o.label.toLowerCase() === qOutcome || o.id.toLowerCase() === qOutcome.replace(/[^a-z0-9]+/g, "-"))
+          : null;
+        const initialPick = matchingCard?.label || options.find(o => o.id === selection.recommendedOutcome.id)?.label || options[0]?.label || "";
         setSelectedOutcome(initialPick);
 
         const storedStyle = sget<CitationStyle>(KEYS.citationStyle);

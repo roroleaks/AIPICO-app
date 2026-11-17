@@ -190,3 +190,24 @@ test("parseClinicalScenario accurately differentiates poor responders, IVF, grow
   assert.equal(extracted.intervention, "growth hormone");
   assert.equal(extracted.comparator, "coenzyme Q10");
 });
+
+test("P1-4: outcome synonyms maintain separate canonical outcomes for distinct endpoints", () => {
+  const input = "poor responders, IVF, growth hormone, live birth rate";
+  const scenario = parseClinicalScenario(input);
+
+  assert.equal(scenario.outcomes[0], "live birth rate", "Must preserve user's outcome verbatim");
+  assert.ok(
+    scenario.suggestedQuestions[0].question.includes("live birth rate (O)"),
+    `Question must contain live birth rate (O), received: ${scenario.suggestedQuestions[0].question}`
+  );
+  assert.ok(
+    !scenario.suggestedQuestions[0].question.includes("cumulative live birth rate"),
+    "Question must not merge live birth rate into cumulative live birth rate"
+  );
+
+  const oprScenario = parseClinicalScenario("poor responders, IVF, growth hormone, ongoing pregnancy rate");
+  assert.equal(oprScenario.outcomes[0], "ongoing pregnancy rate");
+
+  const clbrScenario = parseClinicalScenario("poor responders, IVF, growth hormone, cumulative live birth rate");
+  assert.equal(clbrScenario.outcomes[0], "cumulative live birth rate");
+});
