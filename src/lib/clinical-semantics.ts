@@ -527,19 +527,53 @@ function cleanTokenString(s: string): string {
   return s.trim().replace(/^[\s,;:-]+|[\s,;:-]+$/g, "").replace(/\s+/g, " ");
 }
 
+const PRESERVED_ACRONYMS = new Set([
+  "IVF", "ICSI", "IUI", "OHSS", "PCOS", "AMH", "GNRH", "GnRH", "COQ10", "CoQ10",
+  "LBR", "CLBR", "CPR", "NICU", "PGT-A", "PGTA", "GDM", "PTB", "PPROM", "PAS",
+  "FGR", "SGA", "LGA", "HMB", "LNG-IUS", "UAE", "DHEA", "G-CSF", "DNA", "RNA"
+]);
+
 /**
- * Determine whether an outcome represents an adverse event (to reduce/prevent)
- * or a desirable outcome (to improve/increase/preserve).
+ * Lowercase the first letter of inserted phrases while preserving medical acronyms.
+ */
+export function toInlineCase(str: string): string {
+  if (!str) return "";
+  const trimmed = str.trim();
+  if (!trimmed) return "";
+
+  const match = trimmed.match(/^([A-Za-z0-9\-]+)([\s\S]*)$/);
+  if (!match) return trimmed;
+  const firstWord = match[1];
+  const rest = match[2];
+
+  if (
+    PRESERVED_ACRONYMS.has(firstWord) ||
+    /^[A-Z0-9]{2,}$/.test(firstWord) ||
+    /^GnRH/i.test(firstWord) ||
+    /^CoQ10/i.test(firstWord)
+  ) {
+    return trimmed;
+  }
+
+  return firstWord.charAt(0).toLowerCase() + firstWord.slice(1) + rest;
+}
+
+/**
+ * Determine whether an outcome represents an adverse event (to reduce),
+ * a time-to-event outcome (to shorten), or a desirable outcome (to improve/increase/preserve).
  */
 export function getOutcomeDirection(outcomeText: string): OutcomeDirection {
   const lower = outcomeText.toLowerCase();
+  if (/^time to\b/i.test(lower) || /\btime to (pregnancy|conception|delivery)\b/i.test(lower)) {
+    return "time" as OutcomeDirection;
+  }
   const found = MEDICAL_TAXONOMY.find(
     m => m.category === "outcome" && (m.canonical.toLowerCase() === lower || m.synonyms.some(s => s.toLowerCase() === lower))
   );
   if (found?.direction) return found.direction;
 
   if (
-    /mortality|morbidity|loss|miscarriage|preterm birth|complication|recurrence|adverse|admission|failure|death|bleeding|pain|cesarean|nicu/i.test(lower) &&
+    /mortality|morbidity|loss|miscarriage|preterm birth|complication|recurrence|adverse|admission|failure|death|bleeding|pain|cesarean|nicu|ohss|hyperstimulation|cancellation/i.test(lower) &&
     !/relief|reduction|cessation|preservation|maintenance|quality/i.test(lower)
   ) {
     return "adverse";
@@ -550,40 +584,47 @@ export function getOutcomeDirection(outcomeText: string): OutcomeDirection {
 /**
  * Formulate a clinically grammatical verb phrase for an outcome.
  */
-function formulateOutcomeVerbPhrase(verbType: "primary" | "secondary" | "subgroup", outcome: string): string {
+export function formulateOutcomeVerbPhrase(verbType: "primary" | "secondary" | "subgroup", outcome: string): string {
   const dir = getOutcomeDirection(outcome);
   const cleanOutcome = outcome.trim();
+  const inlineOutcome = toInlineCase(cleanOutcome);
+
+  // Time-to-event outcomes
+  if (/^time to /i.test(cleanOutcome) || (dir as string) === "time") {
+    return verbType === "primary" ? `shorten the ${inlineOutcome}` : `shorten ${inlineOutcome}`;
+  }
 
   // If the outcome already contains active action nouns
   if (/^reduction in /i.test(cleanOutcome) || / reduction$/i.test(cleanOutcome)) {
-    return verbType === "primary" ? `achieve greater ${cleanOutcome}` : `lead to significant ${cleanOutcome}`;
+    return verbType === "primary" ? `achieve greater ${inlineOutcome}` : `lead to significant ${inlineOutcome}`;
   }
   if (/^preservation of /i.test(cleanOutcome) || / preservation$/i.test(cleanOutcome)) {
-    return verbType === "primary" ? `enhance ${cleanOutcome}` : `ensure optimal ${cleanOutcome}`;
+    return verbType === "primary" ? `enhance ${inlineOutcome}` : `support optimal ${inlineOutcome}`;
   }
   if (/^prevention of /i.test(cleanOutcome) || / prevention$/i.test(cleanOutcome)) {
-    return verbType === "primary" ? `improve ${cleanOutcome}` : `support ${cleanOutcome}`;
+    return verbType === "primary" ? `improve ${inlineOutcome}` : `support ${inlineOutcome}`;
   }
 
   if (/rate$/i.test(cleanOutcome)) {
     const base = cleanOutcome.replace(/\s+rate$/i, "");
+    const inlineBase = toInlineCase(base);
     if (dir === "adverse") {
       switch (verbType) {
         case "primary":
-          return `reduce the rate of ${base}`;
+          return `reduce the rate of ${inlineBase}`;
         case "secondary":
-          return `decrease the incidence of ${base}`;
+          return `decrease the incidence of ${inlineBase}`;
         case "subgroup":
-          return `prevent ${base}`;
+          return `lower the rate of ${inlineBase}`;
       }
     } else {
       switch (verbType) {
         case "primary":
-          return `improve the ${cleanOutcome}`;
+          return `improve the ${inlineOutcome}`;
         case "secondary":
-          return `increase the ${cleanOutcome}`;
+          return `increase the ${inlineOutcome}`;
         case "subgroup":
-          return `optimize the ${cleanOutcome}`;
+          return `optimize the ${inlineOutcome}`;
       }
     }
   }
@@ -591,20 +632,20 @@ function formulateOutcomeVerbPhrase(verbType: "primary" | "secondary" | "subgrou
   if (dir === "adverse") {
     switch (verbType) {
       case "primary":
-        return `reduce the risk of ${cleanOutcome}`;
+        return `reduce the risk of ${inlineOutcome}`;
       case "secondary":
-        return `decrease the incidence of ${cleanOutcome}`;
+        return `decrease the incidence of ${inlineOutcome}`;
       case "subgroup":
-        return `prevent ${cleanOutcome}`;
+        return `lower the occurrence of ${inlineOutcome}`;
     }
   } else {
     switch (verbType) {
       case "primary":
-        return `improve ${cleanOutcome}`;
+        return `improve ${inlineOutcome}`;
       case "secondary":
-        return `increase ${cleanOutcome}`;
+        return `increase ${inlineOutcome}`;
       case "subgroup":
-        return `optimize ${cleanOutcome}`;
+        return `optimize ${inlineOutcome}`;
     }
   }
 }

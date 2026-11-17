@@ -1,5 +1,6 @@
 import { KB, QUESTION_TYPES, SYNONYMS, rationalOutcomes, type Analysis, type Clarification, type Formulation, type SpecialtyKey } from "./kb.ts";
 import { buildOutcomeContext, selectOutcomes } from "./outcome-selection.ts";
+import { formulateOutcomeVerbPhrase, toInlineCase } from "./clinical-semantics.ts";
 
 function normalize(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -196,7 +197,7 @@ export function ruleFormulate(analysis: Analysis, answered: Record<string, strin
   const spec = specKey ? KB[specKey] : null;
   switch (a.framework) {
     case "PICO":
-      finalQuestion = `In women with ${cond}, does ${iv} compared with ${comp} improve ${out}?`;
+      finalQuestion = `In women with ${toInlineCase(cond)}, does ${toInlineCase(iv)} compared with ${toInlineCase(comp)} ${formulateOutcomeVerbPhrase("primary", out)}?`;
       elements = [
         { label: "P — Population", value: `Women with ${cond}` },
         { label: "I — Intervention", value: iv },
@@ -243,14 +244,45 @@ export function ruleFormulate(analysis: Analysis, answered: Record<string, strin
   if (/miscarriage rate|implantation rate|clinical pregnancy rate/.test(out.toLowerCase())) {
     advisories.push("Report pregnancy-related outcomes as live birth or ongoing pregnancy where possible — biochemical endpoints are poor surrogates.");
   }
-  const altOutcomes = [...(logic.alternatives || []), ...(spec ? spec.outcomesRanked : [])]
-    .filter(o => o.toLowerCase() !== out.toLowerCase());
+  // Filter altOutcomes by specialty and condition
+  const rawAlternatives = [
+    ...(logic.alternatives || []),
+    ...(spec ? spec.outcomesRanked : [])
+  ];
+
+  const seenOutcomes = new Set<string>([out.toLowerCase().trim()]);
+  const altOutcomes: string[] = [];
+
+  for (const alt of rawAlternatives) {
+    const trimmed = alt.trim();
+    const lower = trimmed.toLowerCase();
+    if (!trimmed || seenOutcomes.has(lower)) continue;
+
+    // Exclude generic symptom-resolution outcome for infertility
+    if (specKey === "infertility" || /infertility|ivf|poor responder|icsi|dor|azoospermia/i.test(cond)) {
+      if (/symptom|resolution of the presenting symptom|presenting symptom/i.test(lower)) continue;
+      if (/poor responder|poor ovarian response|ivf/i.test(cond) && /ovulation rate/i.test(lower)) continue;
+    }
+
+    seenOutcomes.add(lower);
+    altOutcomes.push(trimmed);
+  }
+
   const variants = [
     { question: finalQuestion, rationale: "Recommended default — uses your chosen outcome." },
-    ...altOutcomes.map(o => ({
-      question: finalQuestion.replace(new RegExp(out.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), o),
-      rationale: `Same question with "${o}" as the primary outcome.`
-    }))
+    ...altOutcomes.map((o, idx) => {
+      const verbType = idx === 0 ? "secondary" : "subgroup";
+      let vQuestion: string;
+      if (a.framework === "PICO") {
+        vQuestion = `In women with ${toInlineCase(cond)}, does ${toInlineCase(iv)} compared with ${toInlineCase(comp)} ${formulateOutcomeVerbPhrase(verbType, o)}?`;
+      } else {
+        vQuestion = finalQuestion.replace(new RegExp(out.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), o);
+      }
+      return {
+        question: vQuestion,
+        rationale: `Same question evaluating ${toInlineCase(o)} as a ${idx === 0 ? "secondary" : "comparative"} outcome.`
+      };
+    })
   ].slice(0, 4);
   return {
     framework: a.framework as Formulation["framework"],

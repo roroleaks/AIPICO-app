@@ -136,3 +136,33 @@ test("ruleAnalyze survives an empty string", () => {
   assert.deepEqual(r.missing, ["condition", "intervention", "comparator", "outcome"]);
   assert.equal(r.source, "rules");
 });
+
+test("ruleFormulate calibrates question variant verb phrases to outcome direction and filters inapplicable outcomes", () => {
+  const r = ruleFormulate(
+    {
+      specialty: "infertility",
+      specialtyLabel: KB.infertility.label,
+      condition: "poor responders",
+      intervention: "growth hormone",
+      comparator: "placebo or standard care",
+      questionType: "Therapy / Prevention",
+      framework: "PICO",
+      missing: [],
+      interpretation: "Infertility treatment question.",
+      source: "rules"
+    },
+    { outcome: "live birth rate" }
+  );
+
+  assert.equal(r.complete, true);
+  assert.ok(r.variants && r.variants.length > 1);
+
+  for (const v of r.variants) {
+    // Must not use "improve" on adverse endpoints or time endpoints
+    assert.ok(!v.question.includes("improve Ovarian hyperstimulation"), `must not say improve OHSS: ${v.question}`);
+    assert.ok(!v.question.includes("improve Time to pregnancy"), `must not say improve Time to pregnancy: ${v.question}`);
+    assert.ok(!v.question.includes("improve Resolution of the presenting symptom"), `must not say improve Resolution of the presenting symptom: ${v.question}`);
+    // Infertility must exclude generic symptom resolution
+    assert.ok(!/presenting symptom/i.test(v.question), `infertility variants must not offer presenting symptom: ${v.question}`);
+  }
+});
