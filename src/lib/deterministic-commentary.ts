@@ -1,6 +1,7 @@
 import { formatVancouverReference, elementByType, auditRef, type PicoElement } from "./relevance.ts";
 import type { AuditableRef } from "./relevance.ts";
 import { extractPicoFromQuestion } from "./pico-parser.ts";
+import { toInlineCase } from "./clinical-semantics.ts";
 
 export interface DeterministicCommentaryInput {
   selectedQuestion: string;
@@ -96,6 +97,13 @@ export function generateDeterministicCommentary(
     if (!compVal) compVal = cleanPhrase(parsed.comparator);
   }
 
+  const cleanQ = question.replace(/\s*\([PICO]\)\s*/gi, " ").trim();
+  const inlinePop = toInlineCase(popVal);
+  const inlineInt = toInlineCase(intVal);
+  const inlineComp = toInlineCase(compVal);
+  const inlineOut = toInlineCase(outVal || outcomesText);
+  const inlineQ = toInlineCase(cleanQ);
+
   // Keywords extraction
   const STOP = new Set([
     "the", "and", "for", "with", "does", "what", "which", "that", "this", "from", "into", "vs",
@@ -128,7 +136,6 @@ export function generateDeterministicCommentary(
   const keywordList = keywords.slice(0, 6);
 
   // Clean title construction
-  const cleanQ = question.replace(/\s*\([PICO]\)\s*/gi, " ").trim();
   let title = "";
   if (!cleanQ || cleanQ === "the selected clinical question" || cleanQ.startsWith("Does X compared")) {
     title = `Evidence Synthesis: ${cleanQ}`;
@@ -145,15 +152,15 @@ export function generateDeterministicCommentary(
       title,
       abstract:
         `Background: The clinical question addressed is: ${cleanQ}. ` +
-        `Objective: To evaluate the comparative clinical evidence for ${intVal || "the intervention"} versus ${compVal || "the comparator"} in ${popVal || "the target population"}. ` +
-        `Methods: Databases including PubMed, Europe PMC, OpenAlex, and Crossref were queried against structured PICO criteria for ${outcomesText}. ` +
+        `Objective: To evaluate the comparative clinical evidence for ${inlineInt || "the intervention"} versus ${inlineComp || "the comparator"} in ${inlinePop || "the target population"}. ` +
+        `Methods: Databases including PubMed, Europe PMC, OpenAlex, and Crossref were queried against structured PICO criteria for ${inlineOut}. ` +
         `Results: No directly supporting clinical records meeting the claim verification filter were retained. ` +
         `Conclusion: Direct comparative evidence for this specific clinical configuration remains sparse in current indexed literature.`,
       keywords: keywordList,
       introduction:
         `This synthesis evaluates the following clinical question: ${cleanQ}. ` +
-        `The primary clinical outcome of interest is ${outcomesText}. No records with verifiable citations were retained for this comparison.`,
-      discussion: `No records with a verifiable citation were retained for ${outcomesText}. Further prospective controlled trials are warranted.`,
+        `The primary clinical outcome of interest is ${inlineOut}. No records with verifiable citations were retained for this comparison.`,
+      discussion: `No records with a verifiable citation were retained for ${inlineOut}. Further prospective controlled trials are warranted.`,
       conclusion: `No supporting records were retained for this question in the current filtered evidence base.`,
       references: []
     };
@@ -167,27 +174,27 @@ export function generateDeterministicCommentary(
 
   // Structured Abstract adhering strictly to Vancouver & medical commentary conventions
   const abstract =
-    `Background: Clinical management of ${popVal || "the target clinical cohort"} presents significant therapeutic complexity, where optimizing ${outVal || outcomesText} represents a paramount clinical milestone. Underlying biological variations and heterogeneous protocolization often lead to clinical equipoise regarding therapeutic strategies. ` +
-    `Objective: To systematically synthesize and critically appraise current peer-reviewed evidence evaluating ${cleanQ}. ` +
-    `Methods & Evidence Scope: Multi-database indexing across PubMed/MEDLINE, Europe PMC, OpenAlex, and Crossref was filtered against strict PICO claim-level relevance boundaries. A total of ${n} clinical record${plural ? "" : "s"} ${yearSpanText} ${plural ? "was" : "were"} retrieved and cataloged for ${outVal || outcomesText}. ` +
+    `Background: Clinical management of ${inlinePop || "the target clinical cohort"} presents significant therapeutic complexity, where optimizing ${inlineOut} represents a paramount clinical milestone. Underlying biological variations and heterogeneous protocolization often lead to clinical equipoise regarding therapeutic strategies. ` +
+    `Objective: To systematically synthesize and critically appraise current peer-reviewed evidence evaluating ${inlineQ}. ` +
+    `Methods & Evidence Scope: Multi-database indexing across PubMed/MEDLINE, Europe PMC, OpenAlex, and Crossref was filtered against strict PICO claim-level relevance boundaries. A total of ${n} clinical record${plural ? "" : "s"} ${yearSpanText} ${plural ? "was" : "were"} retrieved and cataloged for ${inlineOut}. ` +
     `Results & Synthesis: The retained records provide grounded clinical data examining therapeutic protocols and observed clinical endpoints across the evaluated patient cohort. ` +
     `    Clinical Interpretation: Current literature underscores the necessity of precise patient stratification, individualized intervention timing, and meticulous clinical risk evaluation rather than empirical universal application. ` +
-    `Conclusion: The available evidence base provides essential clinical insights into ${outVal || outcomesText} in ${popVal || "this population"}, while highlighting the imperative for standardized multi-center randomized investigations to resolve remaining clinical uncertainties.`;
+    `Conclusion: The available evidence base provides essential clinical insights into ${inlineOut} in ${inlinePop || "this population"}, while highlighting the imperative for standardized multi-center randomized investigations to resolve remaining clinical uncertainties.`;
 
   // Introduction providing deep clinical background, biological plausibility, and explicit knowledge gap
   const introP1 =
     `The clinical dilemma under consideration addresses the following defined question: ${cleanQ}. ` +
-    `In clinical practice, managing ${popVal || "this patient cohort"} demands rigorous attention to baseline prognostic markers and therapeutic responsiveness. ` +
-    `Pathophysiological alterations inherent to this clinical scenario frequently compromise physiological reserves, creating substantial obstacles to achieving favorable benchmarks in ${outVal || outcomesText}.`;
+    `In clinical practice, managing ${inlinePop || "this patient cohort"} demands rigorous attention to baseline prognostic markers and therapeutic responsiveness. ` +
+    `Pathophysiological alterations inherent to this clinical scenario frequently compromise physiological reserves, creating substantial obstacles to achieving favorable benchmarks in ${inlineOut}.`;
 
   const introP2 =
-    `Biological and pharmacological plausibility indicates distinct pathways of action when evaluating ${intVal || "the primary intervention"} in comparison with ${compVal || "alternative management strategies"}. ` +
-    `Targeted therapeutic modulation seeks to alter key cellular, endocrine, or anatomical parameters, directly addressing pathophysiological pathways involved in suboptimal ${outVal || outcomesText}. ` +
+    `Biological and pharmacological plausibility indicates distinct pathways of action when evaluating ${inlineInt || "the primary intervention"} in comparison with ${inlineComp || "alternative management strategies"}. ` +
+    `Targeted therapeutic modulation seeks to alter key cellular, endocrine, or anatomical parameters, directly addressing pathophysiological pathways involved in suboptimal ${inlineOut}. ` +
     `Understanding the extent to which these biological mechanisms translate into measurable clinical changes remains central to contemporary practice.`;
 
   const introP3 =
     `Despite substantial clinical interest, therapeutic choices are often complicated by variable trial methodologies, divergent inclusion criteria, and limited head-to-head comparisons in the published literature. ` +
-    `This commentary synthesizes the direct indexed evidence base to critically appraise the current state of knowledge, assess methodological certainty, and provide a grounded clinical perspective on ${outVal || outcomesText} in ${popVal || "the target population"}.`;
+    `This commentary synthesizes the direct indexed evidence base to critically appraise the current state of knowledge, assess methodological certainty, and provide a grounded clinical perspective on ${inlineOut} in ${inlinePop || "the target population"}.`;
 
   const introduction = `${introP1}\n\n${introP2}\n\n${introP3}`;
 
@@ -196,7 +203,7 @@ export function generateDeterministicCommentary(
     const cleanTitle = e.title.replace(/\.$/, "");
     const aud = auditRef(e.record, opts.elements || []);
     const outcomeSnippet = aud.outcome
-      ? ` The investigation specifically evaluated clinical and laboratory parameters in relation to therapeutic protocols and reported findings relevant to ${outVal || outcomesText}.`
+      ? ` The investigation specifically evaluated clinical and laboratory parameters in relation to therapeutic protocols and reported findings relevant to ${inlineOut}.`
       : ` The investigation evaluated clinical parameters in relation to therapeutic protocols, but does not report the selected outcome in its title/abstract.`;
     return `In an indexed ${e.design}, ${e.firstAuthor} and colleagues (${e.year}) evaluated "${cleanTitle}" in ${e.journal || "peer-reviewed literature"} ${e.numToken}.${outcomeSnippet} Methodologically, this study provides focused empirical documentation regarding patient selection, protocol parameters, and observed clinical endpoints for this clinical scenario.`;
   });
@@ -210,7 +217,7 @@ export function generateDeterministicCommentary(
   const discScope =
     `#### Evidence Base Scope & Methodological Characteristics\n` +
     `The assembled evidence base comprises ${n} peer-reviewed publication${plural ? "" : "s"} ${yearSpanText}, retrieved through systematic querying across PubMed/MEDLINE, Europe PMC, OpenAlex, and Crossref. ` +
-    `Each included record underwent claim-specific filtering to ensure direct relevance to ${popVal || "the clinical population"}, the intervention pathways under review, and the primary endpoint of ${outVal || outcomesText}. ` +
+    `Each included record underwent claim-specific filtering to ensure direct relevance to ${inlinePop || "the clinical population"}, the intervention pathways under review, and the primary endpoint of ${inlineOut}. ` +
     `The evidence base incorporates diverse study designs, offering valuable perspectives across observational cohorts and structured clinical evaluations.`;
 
   const discStudyByStudy =
@@ -219,7 +226,7 @@ export function generateDeterministicCommentary(
 
   const discComparative =
     `#### Comparative Analysis & Clinical Concordance\n` +
-    `Across the retained investigations, clinical observations reflect a consistent focus on optimizing ${outVal || outcomesText} through individualized therapeutic protocols. ` +
+    `Across the retained investigations, clinical observations reflect a consistent focus on optimizing ${inlineOut} through individualized therapeutic protocols. ` +
     `Review of the retrieved publications indicates consideration of baseline risk assessment and standardized monitoring. ` +
     `Where variations in reported outcomes emerge, they appear primarily attributable to heterogeneity in patient age distribution, disease severity staging, baseline functional reserves, and differing co-intervention protocols. ` +
     `These comparative nuances demonstrate that therapeutic response is rarely uniform, reinforcing the clinical requirement for phenotype-specific stratification.`;
@@ -233,7 +240,7 @@ export function generateDeterministicCommentary(
 
   const discClinicalTranslation =
     `#### Clinical Interpretation & Practice Translation\n` +
-    `From a clinical translation perspective, the available literature provides valuable guidance for practicing physicians managing ${popVal || "this clinical condition"}. ` +
+    `From a clinical translation perspective, the available literature provides valuable guidance for practicing physicians managing ${inlinePop || "this clinical condition"}. ` +
     `Rather than supporting unselected, empirical administration, clinical decision-making warrants guidance through rigorous clinical risk evaluation, baseline diagnostic parameters, and individualized patient counseling. ` +
     `Clinicians must recognize the boundaries of current data: findings from specific study cohorts cannot be extrapolated uncritically across all clinical severity grades or alternative patient subgroups. ` +
     `Shared decision-making, accompanied by transparent discussion of evidence certainty and potential therapeutic limitations, represents the most prudent clinical approach.`;
@@ -241,8 +248,8 @@ export function generateDeterministicCommentary(
   const discGaps =
     `#### Research Gaps & Unanswered Questions\n` +
     `The synthesis of current literature highlights several critical research gaps that warrant prioritized investigation:\n` +
-    `- **Definitive Head-to-Head RCTs:** A scarcity of adequately powered, multi-center, double-blind randomized trials directly evaluating ${intVal || "the intervention"} against active modern comparators in well-defined clinical cohorts.\n` +
-    `- **Stratification Biomarkers:** Absence of validated molecular or clinical biomarkers to identify which patient subgroups exhibit optimal responsiveness regarding ${outVal || outcomesText}.\n` +
+    `- **Definitive Head-to-Head RCTs:** A scarcity of adequately powered, multi-center, double-blind randomized trials directly evaluating ${inlineInt || "the intervention"} against active modern comparators in well-defined clinical cohorts.\n` +
+    `- **Stratification Biomarkers:** Absence of validated molecular or clinical biomarkers to identify which patient subgroups exhibit optimal responsiveness regarding ${inlineOut}.\n` +
     `- **Standardized Dosing & Timing:** Unresolved questions regarding optimal dosage, duration of therapy, and ideal timing of administration relative to key procedural milestones.\n` +
     `- **Long-Term & Patient-Reported Endpoints:** Limited prospective tracking of long-term health outcomes, cumulative live birth or safety endpoints, and patient-reported quality-of-life measures.\n` +
     `- **Core Outcome Standardization:** The need for standardized outcome reporting across reproductive and gynecological trials to facilitate reliable future meta-analyses.`;

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseClinicalScenario, getOutcomeDirection } from "./clinical-semantics.ts";
+import { parseClinicalScenario, getOutcomeDirection, toInlineCase } from "./clinical-semantics.ts";
 import { extractPicoFromQuestion } from "./pico-parser.ts";
 import { generateDeterministicGapAnalysis } from "./deterministic-gap.ts";
 
@@ -210,4 +210,24 @@ test("P1-4: outcome synonyms maintain separate canonical outcomes for distinct e
 
   const clbrScenario = parseClinicalScenario("poor responders, IVF, growth hormone, cumulative live birth rate");
   assert.equal(clbrScenario.outcomes[0], "cumulative live birth rate");
+});
+
+test("P1-7: toInlineCase normalizes capitalization while preserving medical acronyms", () => {
+  // Lowercases capitalized words inside phrases
+  assert.equal(toInlineCase("Live birth"), "live birth");
+  assert.equal(toInlineCase("In women with poor ovarian response"), "in women with poor ovarian response");
+  assert.equal(toInlineCase("Women with poor ovarian response"), "women with poor ovarian response");
+  assert.equal(toInlineCase("Time to pregnancy"), "time to pregnancy");
+
+  // Preserves medical acronyms intact
+  assert.equal(toInlineCase("IVF"), "IVF");
+  assert.equal(toInlineCase("ICSI"), "ICSI");
+  assert.equal(toInlineCase("OHSS"), "OHSS");
+  assert.equal(toInlineCase("PCOS"), "PCOS");
+  assert.equal(toInlineCase("AMH"), "AMH");
+  assert.equal(toInlineCase("GnRH"), "GnRH");
+  assert.equal(toInlineCase("CoQ10"), "CoQ10");
+  assert.equal(toInlineCase("LBR"), "LBR");
+  assert.equal(toInlineCase("CLBR"), "CLBR");
+  assert.equal(toInlineCase("CPR"), "CPR");
 });
