@@ -852,7 +852,12 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
     comparator = matchedInterventions[1];
   } else if (matchedInterventions.length === 1) {
     intervention = matchedInterventions[0];
-    comparator = specialty === "obstetrics" ? "standard care or expectant management" : "placebo or standard care";
+    const isAddon = /growth hormone|coenzyme|coq10|dhea|prp|platelet-rich|antioxidant|inositol/i.test(intervention);
+    if (specialty === "infertility" && isAddon) {
+      comparator = `no ${intervention} (standard protocol)`;
+    } else {
+      comparator = specialty === "obstetrics" ? "standard care or expectant management" : "standard care";
+    }
   } else {
     const specDefault = KB[specialty];
     intervention = specDefault.interventions[0] || "first-line therapy";

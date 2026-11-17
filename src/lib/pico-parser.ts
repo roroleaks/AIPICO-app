@@ -8,6 +8,7 @@ export interface ExtractedPico {
   outcome: string;
   specialty: SpecialtyKey;
   cleanQuestion: string;
+  inferredComparator?: boolean;
 }
 
 const FERTILITY_CUES = [
@@ -207,21 +208,27 @@ export function extractPicoFromQuestion(
     }
   }
 
+  let inferredComparator = false;
   // Fallback 3: Comparator
   if (!comparator || comparator.length < 3) {
-    if (topic) {
+    inferredComparator = true;
+    const isAddon = /growth hormone|coenzyme|coq10|dhea|prp|platelet-rich|antioxidant|inositol/i.test(intervention);
+    if (specialty === "infertility" && isAddon && intervention) {
+      comparator = `no ${intervention} (standard protocol)`;
+    } else if (topic) {
       try {
         const scenario = parseClinicalScenario(topic);
         comparator = scenario.comparator;
       } catch {
-        comparator = "placebo or standard care";
+        comparator = specialty === "obstetrics" ? "standard care or expectant management" : "standard protocol";
       }
     } else {
-      comparator = "placebo or standard care";
+      comparator = specialty === "obstetrics" ? "standard care or expectant management" : "standard protocol";
     }
   }
   if (!comparator || comparator.length < 2) {
-    comparator = "standard care / placebo";
+    inferredComparator = true;
+    comparator = "standard protocol";
   }
 
   // Fallback 4: Outcome
@@ -237,7 +244,7 @@ export function extractPicoFromQuestion(
     if (!intervention || intervention === "evaluated clinical intervention") {
       intervention = scenario.intervention;
     }
-    if (!comparator || comparator === "standard care / placebo") {
+    if (!comparator || comparator === "standard protocol") {
       comparator = scenario.comparator;
     }
   }
@@ -251,6 +258,7 @@ export function extractPicoFromQuestion(
     comparator: comparator.trim(),
     outcome: outcome.trim(),
     specialty,
-    cleanQuestion: cleanQ || `In women with ${condition}, does ${intervention} compared with ${comparator} improve ${outcome}?`
+    cleanQuestion: cleanQ || `In women with ${condition}, does ${intervention} compared with ${comparator} improve ${outcome}?`,
+    inferredComparator
   };
 }

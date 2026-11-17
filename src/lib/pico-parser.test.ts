@@ -66,3 +66,19 @@ test("extractPicoFromQuestion falls back gracefully on vague question with topic
   assert.ok(pico.comparator.length > 0);
   assert.equal(pico.specialty, "obstetrics");
 });
+
+test("PP-P110: add-on interventions without explicit comparator default to 'no [intervention] (standard protocol)' and set inferredComparator", () => {
+  const q = "In poor responders, does growth hormone improve live birth rate?";
+  const pico = extractPicoFromQuestion(q, "poor responders, ivf, growth hormone, live birth rate");
+
+  assert.equal(pico.inferredComparator, true);
+  assert.equal(pico.comparator, "no growth hormone (standard protocol)");
+});
+
+test("PP-P111: explicit comparator is preserved and inferredComparator is false", () => {
+  const q = "In poor responders, does growth hormone compared with placebo improve live birth rate?";
+  const pico = extractPicoFromQuestion(q);
+
+  assert.equal(pico.inferredComparator, false);
+  assert.equal(pico.comparator, "placebo");
+});

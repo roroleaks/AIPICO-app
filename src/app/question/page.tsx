@@ -41,6 +41,8 @@ export default function QuestionPage() {
   const [busy, setBusy] = useState<"loading" | "formulate" | null>("loading");
   const [notice, setNotice] = useState<string | null>(null);
   const [source, setSource] = useState<string>("rules");
+  const [editingComp, setEditingComp] = useState<boolean>(false);
+  const [compInput, setCompInput] = useState<string>("");
 
   // Collect literature keywords from Step 2 evidence map
   const getLiteratureKeywords = useCallback((): string[] => {
@@ -298,10 +300,60 @@ export default function QuestionPage() {
             <div className="final-q" style={{ marginTop: 6, marginBottom: 12 }}>
               <b>{extractedPico.cleanQuestion}</b>
             </div>
-            <div className="row" style={{ gap: 8, marginTop: 4 }}>
+            <div className="row" style={{ gap: 8, marginTop: 4, alignItems: "center", flexWrap: "wrap" }}>
               <span className="tag" title="Population">👥 <b>P:</b> {extractedPico.condition}</span>
               <span className="tag" title="Intervention">💊 <b>I:</b> {extractedPico.intervention}</span>
-              <span className="tag" title="Comparator">⚖️ <b>C:</b> {extractedPico.comparator}</span>
+              {!editingComp ? (
+                <span className="tag" title="Comparator" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  ⚖️ <b>C:</b> {extractedPico.comparator}
+                  {extractedPico.inferredComparator && (
+                    <span style={{ fontStyle: "italic", opacity: 0.85, fontSize: "0.85rem" }}>(assumed)</span>
+                  )}
+                  <button
+                    type="button"
+                    style={{ background: "none", border: "none", padding: "0 2px", cursor: "pointer", fontSize: "0.85rem", color: "#2563eb" }}
+                    onClick={() => { setCompInput(extractedPico.comparator); setEditingComp(true); }}
+                    title="Edit comparator"
+                  >
+                    ✏️
+                  </button>
+                </span>
+              ) : (
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <input
+                    type="text"
+                    value={compInput}
+                    onChange={e => setCompInput(e.target.value)}
+                    style={{ padding: "4px 8px", fontSize: "0.85rem", borderRadius: 4, border: "1px solid #94a3b8" }}
+                    placeholder="Enter comparator"
+                  />
+                  <button
+                    type="button"
+                    className="secondary"
+                    style={{ padding: "2px 8px", fontSize: "0.8rem" }}
+                    onClick={() => {
+                      if (compInput.trim()) {
+                        setExtractedPico({
+                          ...extractedPico,
+                          comparator: compInput.trim(),
+                          inferredComparator: false
+                        });
+                      }
+                      setEditingComp(false);
+                    }}
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    style={{ padding: "2px 8px", fontSize: "0.8rem" }}
+                    onClick={() => setEditingComp(false)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
             </div>
           </section>
         )}
