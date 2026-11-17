@@ -263,3 +263,30 @@ test("P1-1: markdown structure is preserved across claim finalization", async ()
   );
 });
 
+test("P1-2: study descriptions are treated as cohesive units without leaving orphaned follow-up sentences", async () => {
+  const es = await buildEvidenceSet([SUPPORTING]);
+  const studyUnit =
+    "In an indexed randomized controlled trial, Unknown and colleagues (2020) evaluated \"Novel therapy\" in peer-reviewed literature (Unknown 2020). " +
+    "The investigation specifically evaluated clinical and laboratory parameters in relation to therapeutic protocols and reported findings. " +
+    "Methodologically, this study provides focused empirical documentation regarding patient selection.";
+
+  const res = finalizeClaims({
+    fields: { discussion: studyUnit },
+    evidenceSet: es,
+    elements: PICO
+  });
+
+  assert.ok(
+    !res.fields.discussion.includes("The investigation specifically evaluated"),
+    "Follow-up sentences of an unsupported study must not be orphaned"
+  );
+  assert.ok(
+    !res.fields.discussion.includes("Methodologically, this study provides"),
+    "Methodology follow-up sentence must not be orphaned"
+  );
+  assert.ok(
+    res.fields.discussion.includes("Direct evidence supporting this statement was not identified"),
+    "Whole study unit is replaced by limitation notice"
+  );
+});
+

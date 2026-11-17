@@ -273,6 +273,14 @@ function finalizeSentenceList(
   return kept.join(" ").replace(/\s{2,}/g, " ").trim();
 }
 
+function isStudyUnit(text: string): boolean {
+  return (
+    /^In an? (?:indexed|randomized|prospective|retrospective|cohort|cross-sectional|peer-reviewed|pilot|clinical|observational)\b/i.test(text) ||
+    /^[A-Z][a-z]+ and colleagues \(\d{4}\)/.test(text) ||
+    /^[A-Z][a-z]+ et al\. \(\d{4}\)/.test(text)
+  );
+}
+
 function finalizeBlock(
   block: string,
   field: string,
@@ -298,6 +306,68 @@ function finalizeBlock(
     const body = headingMatch[2].trim();
     const finalizedBody = finalizeBlock(body, field, input, elements, claims, removedClaims, limitations, warnings);
     return finalizedBody ? `${heading}\n${finalizedBody}` : heading;
+  }
+
+  // Study-by-study appraisal units: treat each as a single cohesive unit to prevent orphaned sentences
+  if (isStudyUnit(trimmed)) {
+    const cites = extractInTextCites(trimmed);
+    const { citedNumbers } = extractNumericCites(trimmed);
+    const records: AuditableRef[] = [];
+    let unresolved = false;
+    const citationKeys: string[] = [];
+
+    for (const c of cites) {
+      const key = findKeyForCitation(c.author, c.year, input.evidenceSet.citationMap);
+      if (!key || !input.evidenceSet.allowedCitationKeys.has(key)) {
+        unresolved = true;
+        continue;
+      }
+      if (!citationKeys.includes(key)) citationKeys.push(key);
+      const rec = input.evidenceSet.citationMap.get(key);
+      if (rec) records.push(rec as AuditableRef);
+    }
+
+    for (const num of citedNumbers) {
+      const idx = num - 1;
+      const rec = input.evidenceSet.retainedRecords[idx];
+      if (rec) {
+        const rawKey = rec.doi ? `doi:${rec.doi.toLowerCase()}` : rec.pmid ? `pmid:${rec.pmid}` : "";
+        const foundKey = (rawKey && input.evidenceSet.allowedCitationKeys.has(rawKey))
+          ? rawKey
+          : Array.from(input.evidenceSet.allowedCitationKeys)[idx];
+        if (foundKey) {
+          if (!citationKeys.includes(foundKey)) citationKeys.push(foundKey);
+          records.push(rec as AuditableRef);
+        } else {
+          citationKeys.push(`ref:${num}`);
+          records.push(rec as AuditableRef);
+        }
+      } else {
+        unresolved = true;
+      }
+    }
+
+    if (unresolved || (!cites.length && !citedNumbers.size) || !records.length) {
+      removedClaims.push(trimmed);
+      warnings.push(`Unsupported study unit removed from ${field}: citation-not-in-evidence-set`);
+      limitations.push(LIMITATION);
+      return LIMITATION;
+    }
+
+    const addressed = records.filter(r => {
+      const audit = auditRef(r, elements);
+      return Boolean(audit.population && (audit.intervention || audit.comparator || audit.outcome));
+    });
+
+    if (!addressed.length) {
+      removedClaims.push(trimmed);
+      warnings.push(`Unsupported study unit removed from ${field}: pico-not-addressed`);
+      limitations.push(LIMITATION);
+      return LIMITATION;
+    }
+
+    claims.push({ field, text: trimmed, citationKeys, supported: true });
+    return trimmed;
   }
 
   // List block: lines starting with "- " or "* "
