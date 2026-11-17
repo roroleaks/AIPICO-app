@@ -36,3 +36,12 @@ test("P3-1. package.json specifies secure versions for next and zod", async () =
   assert.match(zodVer, /4\.[6-9]\.[6-9]|4\.[7-9]|[5-9]/, "Zod must be at least 4.6.6");
 });
 
+test("P3-3. layout.tsx configures font fallbacks for build reproducibility", async () => {
+  const fs = await import("fs");
+  const path = await import("path");
+  const layout = fs.readFileSync(path.resolve(process.cwd(), "src/app/layout.tsx"), "utf8");
+  assert.ok(layout.includes("fallback:"), "layout.tsx must configure font fallback list");
+  assert.ok(layout.includes("display: \"swap\""), "layout.tsx must use display: swap");
+});
+
+
