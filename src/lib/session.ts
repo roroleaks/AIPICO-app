@@ -26,6 +26,18 @@ export const KEYS = {
 };
 
 /**
+ * Validates whether a cached evidence-map snapshot matches current input text and has data.
+ */
+export function isMatchingGapCache(
+  cached: { inputText?: string; known?: unknown[]; uncertain?: unknown[] } | null | undefined,
+  currentInput: string
+): boolean {
+  if (!cached || !currentInput) return false;
+  if (cached.inputText !== currentInput) return false;
+  return Boolean(cached.known?.length || cached.uncertain?.length);
+}
+
+/**
  * Completely clears all session state and storage when starting over.
  */
 export function resetSession() {

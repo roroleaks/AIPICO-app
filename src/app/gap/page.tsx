@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatedProcessingIndicator } from "@/components/AnimatedProcessingIndicator";
-import { sget, sset, resetSession, KEYS } from "@/lib/session";
+import { sget, sset, resetSession, KEYS, isMatchingGapCache } from "@/lib/session";
 import { readSessionInput, sessionSearchText } from "@/lib/clinical-input";
 import { NO_LITERATURE_MESSAGE, NO_LITERATURE_HINT } from "@/lib/clinical-keywords";
 
@@ -16,6 +16,7 @@ interface GapResult {
   gaps: { gap: string; why: string }[];
   suggestedQuestions: { question: string; rationale: string }[];
   note?: string;
+  inputText?: string;
 }
 
 /** True when the map carries neither evidence points nor usable reference records. */
@@ -47,6 +48,7 @@ function formatGapReference(r: Reference): string {
 
 export default function GapPage() {
   const router = useRouter();
+  const [loading, setLoading] = useState(false);
   const [gap, setGap] = useState<GapResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -54,43 +56,57 @@ export default function GapPage() {
   const [exportError, setExportError] = useState<string | null>(null);
   const mapRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    let isMounted = true;
+  const fetchGap = useCallback(async (force = false) => {
     const normalized = sget<string>(KEYS.inputText);
     const stored = readSessionInput(sget<unknown>(KEYS.input));
     const input = normalized || (stored ? sessionSearchText(stored) : "");
     if (!input) { router.replace("/"); return; }
-    (async () => {
-      try {
-        const res = await fetch("/api/engine", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ stage: "gap", input })
-        });
-        if (!isMounted) return;
-        // Surface the server's own diagnostic instead of replacing it with a generic string.
-        if (!res.ok) {
-          const body = await res.json().catch(() => null as { error?: string } | null);
-          if (isMounted) setError(body?.error || `The evidence mapping service returned an error (${res.status}). Please try again.`);
-          return;
+
+    if (!force) {
+      const cached = sget<GapResult>(KEYS.gap);
+      if (isMatchingGapCache(cached, input)) {
+        setGap(cached);
+        if (Array.isArray(cached?.suggestedQuestions) && cached.suggestedQuestions.length > 0) {
+          setSelected(cached.suggestedQuestions[0].question);
         }
-        const data: GapResult & { error?: string } = await res.json();
-        if (!isMounted) return;
-        if (data?.error && !Array.isArray(data.known)) {
-          setError(data.error);
-        } else {
-          setGap(data);
-          if (Array.isArray(data.suggestedQuestions) && data.suggestedQuestions.length > 0) {
-            setSelected(data.suggestedQuestions[0].question);
-          }
-        }
-      } catch {
-        if (isMounted) setError("The evidence mapping service did not respond. Please go back and retry.");
+        return;
       }
-    })();
-    return () => {
-      isMounted = false;
-    };
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/engine", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stage: "gap", input })
+      });
+      // Surface the server's own diagnostic instead of replacing it with a generic string.
+      if (!res.ok) {
+        const body = await res.json().catch(() => null as { error?: string } | null);
+        setError(body?.error || `The evidence mapping service returned an error (${res.status}). Please try again.`);
+        return;
+      }
+      const data: GapResult & { error?: string } = await res.json();
+      if (data?.error && !Array.isArray(data.known)) {
+        setError(data.error);
+      } else {
+        const snapshot: GapResult = { ...data, inputText: input };
+        setGap(snapshot);
+        sset(KEYS.gap, snapshot);
+        if (Array.isArray(data.suggestedQuestions) && data.suggestedQuestions.length > 0) {
+          setSelected(data.suggestedQuestions[0].question);
+        }
+      }
+    } catch {
+      setError("The evidence mapping service did not respond. Please go back and retry.");
+    } finally {
+      setLoading(false);
+    }
   }, [router]);
+
+  useEffect(() => {
+    fetchGap(false);
+  }, [fetchGap]);
 
   const vancouverPlain = (r: Reference) => {
     const url = r.url || `https://pubmed.ncbi.nlm.nih.gov/${r.pmid}/`;
@@ -173,7 +189,7 @@ export default function GapPage() {
       </header>
 
       <main id="main" className="solo">
-        {!gap && !error && (
+        {(!gap || loading) && !error && (
           <section className="card">
             <AnimatedProcessingIndicator
               message="Mapping the evidence"
@@ -203,6 +219,7 @@ export default function GapPage() {
             </div>
             {gap.note && <div className="advisory">⚠️ {gap.note}</div>}
             <div className="row">
+              <button className="secondary" disabled={loading} onClick={() => fetchGap(true)}>{loading ? "⏳ Refreshing…" : "🔄 Refresh map"}</button>
               <button className="primary" onClick={() => { resetSession(); router.replace("/"); }}>← Revise your keywords</button>
             </div>
           </section>
@@ -219,6 +236,7 @@ export default function GapPage() {
               </div>
               <div className="row">
                 {exportError && <div className="advisory">{exportError}</div>}
+                <button className="secondary" disabled={loading} onClick={() => fetchGap(true)}>{loading ? "⏳ Refreshing…" : "🔄 Refresh map"}</button>
                 <button className="secondary" disabled={!!exporting || !gap.known?.length} title={!gap.known?.length ? "No established-evidence records to export" : undefined} onClick={() => exportEvidencePDF("known")}>{exporting === "known" ? "⏳ Generating PDF…" : (gap.source === "ai" ? "📄 Established Knowledge (PDF)" : "📄 Search Themes (PDF)")}</button>
                 <button className="secondary" disabled={!!exporting || !gap.uncertain?.length} title={!gap.uncertain?.length ? "No conflicting-evidence records to export" : undefined} onClick={() => exportEvidencePDF("uncertain")}>{exporting === "uncertain" ? "⏳ Generating PDF…" : "📄 Conflicting Evidence (PDF)"}</button>
               </div>
