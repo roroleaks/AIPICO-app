@@ -207,3 +207,81 @@ test("P0-1. Excluded records are not promoted into directPool; every retained re
   const directCount = filtered.kept.length;
   assert.ok(directCount < 3, "Direct count 1 is below threshold of 3, triggering low-evidence state");
 });
+
+test("P0-4: Evidence-map candidate audit rejects off-topic references and dedupes across DOI and PMID", async () => {
+  const scenarioElements: PicoElement[] = [
+    { label: "P — Population", value: "poor responders in IVF" },
+    { label: "I — Intervention", value: "growth hormone" },
+    { label: "C — Comparator", value: "placebo or standard protocol" }
+  ];
+
+  const offTopicRecords: AuditableRef[] = [
+    {
+      pmid: "10001",
+      title: "Hypertension in Pregnancy: diagnosis and management",
+      authors: "Smith A",
+      year: "2021",
+      journal: "Circulation",
+      context: "hypertension in pregnancy management guidelines"
+    },
+    {
+      pmid: "10002",
+      title: "Fetal growth restriction and neonatal morbidity",
+      authors: "Jones B",
+      year: "2020",
+      journal: "AJOG",
+      context: "fetal growth restriction neonatal outcomes"
+    },
+    {
+      pmid: "10003",
+      title: "Retinopathy of Prematurity screening guidelines",
+      authors: "Taylor C",
+      year: "2019",
+      journal: "Pediatrics",
+      context: "screening for retinopathy of prematurity"
+    },
+    {
+      pmid: "10004",
+      title: "Intraovarian platelet-rich plasma injections in poor ovarian responders",
+      authors: "Lee D",
+      year: "2022",
+      journal: "Hum Reprod",
+      context: "platelet-rich plasma intraovarian injection without growth hormone"
+    }
+  ];
+
+  const onTopicRecord: AuditableRef = {
+    pmid: "32727608",
+    doi: "10.1186/s12958-020-00632-w",
+    title: "Growth hormone co-treatment for poor ovarian responders undergoing in vitro fertilization: a systematic review and meta-analysis",
+    authors: "Yang P",
+    year: "2020",
+    journal: "Reprod Biol Endocrinol",
+    context: "growth hormone co-treatment for poor ovarian response in IVF cycles evaluated for live birth rate and clinical pregnancy"
+  };
+
+  const pointTerms: PicoElement[] = [
+    ...scenarioElements,
+    { label: "O — Outcome", value: "live birth rate" }
+  ];
+
+  for (const rec of offTopicRecords) {
+    const audit = auditRef(rec, pointTerms);
+    const passes = audit.population && (audit.intervention || audit.comparator || audit.outcome);
+    assert.equal(passes, false, `Off-topic record "${rec.title}" must fail the evidence-map filter`);
+  }
+
+  const validAudit = auditRef(onTopicRecord, pointTerms);
+  const validPasses = validAudit.population && (validAudit.intervention || validAudit.comparator || validAudit.outcome);
+  assert.equal(validPasses, true, "On-topic record must pass evidence-map filter");
+
+  const { refKeys } = await import("./evidence-set.ts");
+  const keys1 = refKeys(onTopicRecord);
+  const keys2 = refKeys({
+    pmid: "cr:10.1186/s12958-020-00632-w",
+    doi: "10.1186/s12958-020-00632-w",
+    title: "Growth hormone co-treatment for poor ovarian responders undergoing in vitro fertilization: a systematic review and meta-analysis"
+  });
+  const shared = keys1.filter(k => keys2.includes(k));
+  assert.ok(shared.length > 0, "PubMed and Crossref records for the same paper must share canonical DOI key");
+});

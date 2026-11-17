@@ -65,6 +65,40 @@ export function normalizeDoi(raw: unknown): string {
   return doi.toLowerCase();
 }
 
+/**
+ * Returns all identifier keys associated with a reference record (PMID, DOI, canonical prefixes).
+ */
+export function refKeys(r: { pmid?: string; doi?: string; url?: string; id?: string; title?: string }): string[] {
+  const keys: string[] = [];
+  const pmid = String(r.pmid || "").trim();
+  if (pmid) {
+    keys.push(pmid);
+    if (/^\d+$/.test(pmid)) keys.push(`pmid:${pmid}`);
+  }
+  const doi = normalizeDoi(r.doi);
+  if (doi) {
+    keys.push(`doi:${doi}`);
+    keys.push(doi);
+  }
+  const url = String(r.url || "").trim();
+  if (url) {
+    const urlPmid = (url.match(/pubmed\.ncbi\.nlm\.nih\.gov\/(\d+)/i) || [])[1];
+    if (urlPmid) {
+      keys.push(urlPmid);
+      keys.push(`pmid:${urlPmid}`);
+    }
+    const urlDoi = (url.match(/10\.\d{4,9}\/[^\s"'<>,;)\]]+/i) || [])[0];
+    if (urlDoi) {
+      const nd = normalizeDoi(urlDoi);
+      if (nd) {
+        keys.push(`doi:${nd}`);
+        keys.push(nd);
+      }
+    }
+  }
+  return [...new Set(keys.filter(Boolean))];
+}
+
 export function normalizeCitationKey(rec: AuditableRef): string {
   // DOI first: it is the only identifier two providers are guaranteed to agree on, so a record
   // carrying both a PMID and a DOI has to key on the DOI or PubMed and Crossref copies of one

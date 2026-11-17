@@ -537,30 +537,49 @@ function cleanTopicQuery(topic: string): string {
 async function fetchReferencesForPoints(
   points: Array<{ point: string; searchQuery?: string }>,
   topic: string,
-  excluded: Set<string>
+  excluded: Set<string>,
+  scenarioElements?: PicoElement[]
 ): Promise<Array<{ point: string; references: PubMedRef[] }>> {
+  const isExcluded = (r: PubMedRef): boolean => {
+    return refKeys(r).some(k => excluded.has(k));
+  };
+  const markExcluded = (r: PubMedRef): void => {
+    refKeys(r).forEach(k => excluded.add(k));
+  };
+
   const results: Array<{ point: string; references: PubMedRef[] }> = [];
   for (const p of points) {
+    const pointElements: PicoElement[] = [
+      ...(scenarioElements || []),
+      { label: "O — Outcome", value: p.point }
+    ];
+
+    const eligible = (r: PubMedRef): boolean => {
+      if (isExcluded(r)) return false;
+      if (!scenarioElements || !scenarioElements.length) return true;
+      const audit = auditRef(r, pointElements);
+      return Boolean(audit.population && (audit.intervention || audit.comparator || audit.outcome));
+    };
+
     const query = p.searchQuery && p.searchQuery.length > 3 ? sanitizeQuery(p.searchQuery) : buildRefQuery(p.point, topic);
-    let refs = await fetchPubMedReferences(query, 3, excluded);
-    if (!refs.length) refs = await fetchPubMedReferences(buildRefQuery(p.point, topic), 3, excluded);
-    if (!refs.length) refs = await fetchPubMedReferences(sanitizeQuery(p.point), 3, excluded);
+    let refs = (await fetchPubMedReferences(query, 5, excluded)).filter(eligible);
+    if (!refs.length) refs = (await fetchPubMedReferences(buildRefQuery(p.point, topic), 5, excluded)).filter(eligible);
+    if (!refs.length) refs = (await fetchPubMedReferences(sanitizeQuery(p.point), 5, excluded)).filter(eligible);
     if (refs.length < 2) {
       const need = 4 - refs.length;
       const [europe, openalex, crossref] = await Promise.all([
-        fetchEuropePMC(query, need),
-        fetchOpenAlex(query, need),
-        fetchCrossref(query, need)
+        fetchEuropePMC(query, need + 2),
+        fetchOpenAlex(query, need + 2),
+        fetchCrossref(query, need + 2)
       ]);
-      // Round-robin across the supplemental sources, otherwise the first bucket
-      // (Europe PMC) fills every remaining slot and OpenAlex/Crossref never appear.
+      // Round-robin across the supplemental sources, filtering by relevance and deduplicating
       const buckets = [europe, openalex, crossref].map(b =>
-        b.filter(r => !excluded.has(r.pmid) && !refs.some(x => x.pmid === r.pmid))
+        b.filter(r => eligible(r) && !refs.some(x => isExcluded(x)))
       );
       for (let i = 0; refs.length < 4; i++) {
         let added = false;
         for (const b of buckets) {
-          if (i < b.length) {
+          if (i < b.length && eligible(b[i])) {
             refs.push(b[i]);
             added = true;
             if (refs.length >= 4) break;
@@ -571,9 +590,9 @@ async function fetchReferencesForPoints(
     }
     // Truncate BEFORE marking as used, otherwise references dropped by the slice
     // are permanently excluded from every later point.
-    const finalRefs = dedupeRefs(refs).slice(0, 4);
+    const finalRefs = dedupeRefs(refs).filter(eligible).slice(0, 4);
     for (const r of finalRefs) {
-      if (r.pmid) excluded.add(r.pmid);
+      markExcluded(r);
     }
     results.push({ point: p.point, references: finalRefs });
     await new Promise(r => setTimeout(r, 50));
@@ -1495,12 +1514,18 @@ Respond ONLY with valid JSON, no preamble or commentary.`,
       const knownPts = normPoints(gapAnalysis.known).slice(0, 4);
       const uncertainPts = normPoints(gapAnalysis.uncertain).slice(0, 4);
 
-      const usedPmids = new Set<string>();
+      const scenarioElements: PicoElement[] = [
+        { label: "P — Population", value: scenario.population },
+        { label: "I — Intervention", value: scenario.intervention },
+        { label: "C — Comparator", value: scenario.comparator }
+      ];
+
+      const usedRefKeys = new Set<string>();
       let knownWithRefs: Array<{ point: string; references: PubMedRef[] }> = [];
       let uncertainWithRefs: Array<{ point: string; references: PubMedRef[] }> = [];
       try {
-        knownWithRefs = await fetchReferencesForPoints(knownPts, topic, usedPmids);
-        uncertainWithRefs = await fetchReferencesForPoints(uncertainPts, topic, usedPmids);
+        knownWithRefs = await fetchReferencesForPoints(knownPts, topic, usedRefKeys, scenarioElements);
+        uncertainWithRefs = await fetchReferencesForPoints(uncertainPts, topic, usedRefKeys, scenarioElements);
       } catch (refErr) {
         console.warn("[engine] Reference fetching encountered an issue, returning points without external refs:", refErr);
         knownWithRefs = knownPts.map(p => ({ point: p.point, references: [] }));

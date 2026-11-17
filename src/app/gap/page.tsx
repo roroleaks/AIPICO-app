@@ -213,11 +213,15 @@ export default function GapPage() {
                   {gap.known.map((k, i) => (
                     <li key={`k${i}`}>
                       {k.point}
-                      {!!k.references?.length && (
+                      {k.references && k.references.length > 0 ? (
                         <div className="refs">{k.references.map((r, j) => (
                           <a key={j} href={r.url} target="_blank" rel="noopener noreferrer" className="ref-link">
                             [{r.year}] {r.authors}. {r.title}. {r.journal}.{r.pmid ? ` PMID: ${r.pmid}.` : ""}{r.doi ? ` DOI: ${r.doi}.` : ""}
                           </a>))}</div>
+                      ) : (
+                        <div className="refs" style={{ color: "#64748b", fontStyle: "italic", fontSize: "0.85rem", marginTop: 4 }}>
+                          No supporting record retrieved for this point
+                        </div>
                       )}
                     </li>))}
                 </ul>
@@ -230,11 +234,15 @@ export default function GapPage() {
                   {gap.uncertain.map((u, i) => (
                     <li key={`u${i}`}>
                       {u.point}
-                      {!!u.references?.length && (
+                      {u.references && u.references.length > 0 ? (
                         <div className="refs">{u.references.map((r, j) => (
                           <a key={j} href={r.url} target="_blank" rel="noopener noreferrer" className="ref-link">
                             [{r.year}] {r.authors}. {r.title}. {r.journal}.{r.pmid ? ` PMID: ${r.pmid}.` : ""}{r.doi ? ` DOI: ${r.doi}.` : ""}
                           </a>))}</div>
+                      ) : (
+                        <div className="refs" style={{ color: "#64748b", fontStyle: "italic", fontSize: "0.85rem", marginTop: 4 }}>
+                          No supporting record retrieved for this point
+                        </div>
                       )}
                     </li>))}
                 </ul>
