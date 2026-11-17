@@ -39,3 +39,20 @@ test("deterministic gap analysis handles empty input gracefully without throwing
   assert.equal(result.gaps.length, 4);
   assert.equal(result.suggestedQuestions.length, 4);
 });
+
+test("P0-5: deterministic gap produces specialty-aware templates without inapplicable clinical phrases", () => {
+  const result = generateDeterministicGapAnalysis("poor responders, IVF, growth hormone, live birth rate");
+
+  const allText = [
+    ...result.known.map(k => k.point),
+    ...result.uncertain.map(u => u.point),
+    ...result.gaps.map(g => `${g.gap} ${g.why}`),
+    ...result.suggestedQuestions.map(sq => `${sq.question} ${sq.rationale}`)
+  ].join(" ");
+
+  assert.ok(!allText.includes("gestational or clinical staging"), "gestational staging is inapplicable to IVF");
+  assert.ok(!allText.includes("diagnostic delay"), "diagnostic delay is inapplicable to IVF");
+  assert.ok(!allText.includes("organ preservation"), "organ preservation is inapplicable to IVF");
+  assert.ok(!allText.includes("symptom relief sustainability"), "symptom relief sustainability is inapplicable to IVF");
+  assert.ok(allText.includes("ovarian reserve") || allText.includes("stimulation"), "infertility-aware terminology expected");
+});

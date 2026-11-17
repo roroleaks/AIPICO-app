@@ -30,22 +30,42 @@ export function generateDeterministicGapAnalysis(rawTopic: string): Deterministi
   const intervention = scenario.intervention;
   const comparator = scenario.comparator;
 
-  // Build 4 established knowledge points
+  const isInf = specialty === "infertility" || /ivf|icsi|ovarian|infertility|follicle|oocyte/i.test(`${topic} ${condition} ${intervention}`);
+  const isObs = specialty === "obstetrics" || /pregnan|gestat|labor|birth|cervix|preeclampsia/i.test(`${topic} ${condition} ${intervention}`);
+
+  // Specialty-aware search themes (template — not verified findings)
+  const stagingPhrase = isInf
+    ? "patient age, baseline ovarian reserve, and stimulation protocol"
+    : isObs
+    ? "gestational age, clinical staging, and baseline maternal-fetal risk"
+    : "patient selection, clinical staging, and baseline risk";
+
+  const monitoringPhrase = isInf
+    ? `Implementation of individualized ovarian stimulation monitoring protocols for ${condition} supports treatment cycle optimization and safety.`
+    : isObs
+    ? `Implementation of structured maternal-fetal monitoring protocols for ${condition} supports clinical surveillance and timely intervention.`
+    : `Implementation of structured clinical monitoring protocols for ${condition} supports patient surveillance and evaluation.`;
+
+  const screeningPhrase = isInf
+    ? `Systematic baseline evaluation of ovarian reserve markers and reproductive history in patients with ${condition} informs protocol selection.`
+    : `Standardized clinical screening and risk-factor assessment in patients presenting with ${condition} supports timely identification of at-risk individuals.`;
+
+  // Build 4 search theme points
   const known: DeterministicGapPoint[] = [
     {
-      point: `Standardized clinical screening and risk-factor assessment in patients presenting with ${condition} improves timely identification of at-risk individuals.`,
+      point: screeningPhrase,
       searchQuery: `${condition} screening risk assessment`
     },
     {
-      point: `The therapeutic efficacy of ${intervention} for ${condition} depends critically on patient selection, gestational or clinical staging, and baseline risk.`,
+      point: `The therapeutic efficacy of ${intervention} for ${condition} depends on ${stagingPhrase}.`,
       searchQuery: `${condition} ${intervention} efficacy clinical trial`
     },
     {
-      point: `Clinical practice guidelines emphasize individualized multidisciplinary evaluation before initiating ${intervention} in patients with ${condition}.`,
+      point: `Clinical practice recommendations emphasize individualized clinical evaluation before initiating ${intervention} in patients with ${condition}.`,
       searchQuery: `${condition} ${intervention} guideline practice recommendation`
     },
     {
-      point: `Implementation of structured monitoring protocols for ${condition} is associated with reduced diagnostic delay and improved patient surveillance.`,
+      point: monitoringPhrase,
       searchQuery: `${condition} surveillance outcomes prospective study`
     }
   ];
@@ -65,7 +85,7 @@ export function generateDeterministicGapAnalysis(rawTopic: string): Deterministi
       searchQuery: `${condition} ${intervention} combination therapy trial`
     },
     {
-      point: `Long-term functional, reproductive, and pediatric outcomes associated with ${intervention} for ${condition} remain under-characterized relative to short-term endpoints.`,
+      point: `Long-term functional and clinical outcomes associated with ${intervention} for ${condition} remain under-characterized relative to short-term endpoints.`,
       searchQuery: `${condition} ${intervention} long-term outcomes follow-up`
     }
   ];
@@ -78,7 +98,9 @@ export function generateDeterministicGapAnalysis(rawTopic: string): Deterministi
     },
     {
       gap: `Absence of validated predictive biomarkers or molecular profiles to distinguish disease subtypes and predict therapeutic responsiveness to ${intervention}.`,
-      why: "Biomarker-guided stratification would prevent unnecessary invasive procedures and enable targeted precision medicine."
+      why: isInf
+        ? "Biomarker-guided stratification would minimize non-beneficial cycle attempts and enable individualized stimulation."
+        : "Biomarker-guided stratification would minimize non-beneficial procedures and enable targeted precision care."
     },
     {
       gap: `Scarcity of prospectively tracked long-term functional, patient-reported, and quality-of-life endpoints beyond immediate clinical outcomes.`,

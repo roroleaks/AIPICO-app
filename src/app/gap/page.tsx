@@ -125,7 +125,7 @@ export default function GapPage() {
       setExportError(`There are no ${isKnown ? "established-evidence" : "conflicting-evidence"} records to export.`);
       return;
     }
-    const title = isKnown ? "Established Knowledge" : "Conflicting / Low-Quality Evidence";
+    const title = isKnown ? (gap.source === "ai" ? "Established Knowledge" : "Search Themes (Template)") : "Conflicting / Low-Quality Evidence";
     const sections = items.map((item, i) => ({
       heading: `${i + 1}. ${isKnown ? "Established point" : "Contested area"}`,
       blocks: item.references.length
@@ -200,7 +200,7 @@ export default function GapPage() {
               </div>
               <div className="row">
                 {exportError && <div className="advisory">{exportError}</div>}
-                <button className="secondary" disabled={!!exporting || !gap.known?.length} title={!gap.known?.length ? "No established-evidence records to export" : undefined} onClick={() => exportEvidencePDF("known")}>{exporting === "known" ? "⏳ Generating PDF…" : "📄 Established Knowledge (PDF)"}</button>
+                <button className="secondary" disabled={!!exporting || !gap.known?.length} title={!gap.known?.length ? "No established-evidence records to export" : undefined} onClick={() => exportEvidencePDF("known")}>{exporting === "known" ? "⏳ Generating PDF…" : (gap.source === "ai" ? "📄 Established Knowledge (PDF)" : "📄 Search Themes (PDF)")}</button>
                 <button className="secondary" disabled={!!exporting || !gap.uncertain?.length} title={!gap.uncertain?.length ? "No conflicting-evidence records to export" : undefined} onClick={() => exportEvidencePDF("uncertain")}>{exporting === "uncertain" ? "⏳ Generating PDF…" : "📄 Conflicting Evidence (PDF)"}</button>
               </div>
             </div>
@@ -208,7 +208,7 @@ export default function GapPage() {
 
             {!!gap.known?.length && (
               <>
-                <h3 className="sec-h">✅ Established knowledge</h3>
+                <h3 className="sec-h">{gap.source === "ai" ? "✅ Established knowledge" : "📋 Search themes (template — not verified findings)"}</h3>
                 <ul className="gap-list">
                   {gap.known.map((k, i) => (
                     <li key={`k${i}`}>

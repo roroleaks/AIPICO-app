@@ -823,11 +823,15 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
     },
     {
       question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q3Action} (O)?`,
-      rationale: `Focuses on balancing procedural safety, organ preservation, and key clinical milestones.`
+      rationale: specialty === "infertility"
+        ? "Focuses on balancing procedural safety, reproductive outcomes, and key clinical milestones."
+        : "Focuses on balancing procedural safety, organ preservation, and key clinical milestones."
     },
     {
       question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) improve patient-reported quality of life and treatment satisfaction (O)?`,
-      rationale: `Measures patient-centered outcomes, symptom relief sustainability, and overall care satisfaction.`
+      rationale: specialty === "infertility"
+        ? "Measures patient-centered outcomes, treatment burden, and overall care satisfaction."
+        : "Measures patient-centered outcomes, symptom relief sustainability, and overall care satisfaction."
     }
   ];
 
