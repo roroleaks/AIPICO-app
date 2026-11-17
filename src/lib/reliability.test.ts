@@ -44,4 +44,23 @@ test("P3-3. layout.tsx configures font fallbacks for build reproducibility", asy
   assert.ok(layout.includes("display: \"swap\""), "layout.tsx must use display: swap");
 });
 
+test("P3-4. UI and generator text reflects accurate Vancouver description and outcome guidance", async () => {
+  const fs = await import("fs");
+  const path = await import("path");
+  const gapPage = fs.readFileSync(path.resolve(process.cwd(), "src/app/gap/page.tsx"), "utf8");
+  const questionPage = fs.readFileSync(path.resolve(process.cwd(), "src/app/question/page.tsx"), "utf8");
+  const pdfGen = fs.readFileSync(path.resolve(process.cwd(), "src/lib/pdf-generator.ts"), "utf8");
+
+  assert.ok(!gapPage.includes("🕳️"), "Step 2 gap page must not use black hole emoji");
+  assert.ok(gapPage.includes("🗺️ Step 2"), "Step 2 must use map emoji");
+  assert.ok(gapPage.includes("🔍 Research gaps"), "Research gaps must use search emoji");
+
+  assert.ok(!questionPage.includes("Uppercase / No Brackets"), "Question page must not use old Vancouver phrasing");
+  assert.ok(questionPage.includes("Vancouver (superscript numerals)"), "Question page must label Vancouver accurately");
+  assert.ok(questionPage.includes("suggested outcomes — verify against the relevant published core outcome set"), "Step 3 guidance must be accurate");
+
+  assert.ok(pdfGen.includes("Vancouver (superscript numerals)"), "PDF generator must use accurate Vancouver label");
+});
+
+
 

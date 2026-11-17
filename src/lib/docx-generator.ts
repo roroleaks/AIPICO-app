@@ -266,7 +266,7 @@ export async function buildDocxBuffer(body: DocxPayload): Promise<Buffer> {
       spacing: { after: 240 },
       children: [
         new TextRun({
-          text: `${body.meta || "Obstetrics & Gynecology Clinical Review"} · Citation Style: ${style === "vancouver" ? "Vancouver (Sequential Superscript)" : style.toUpperCase()}`,
+          text: `${body.meta || "Obstetrics & Gynecology Clinical Review"} · Citation Style: ${style === "vancouver" ? "Vancouver (superscript numerals)" : style.toUpperCase()}`,
           font: "Arial",
           size: 20, // 10pt
           italics: true,

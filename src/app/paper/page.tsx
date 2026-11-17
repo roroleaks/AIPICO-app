@@ -844,7 +844,7 @@ export default function PaperPage() {
                       📖 Active Citation Style:
                     </span>
                     <span className="pill" style={{ background: "#0f766e", color: "#fff", fontSize: "0.82rem", fontWeight: 700 }}>
-                      {citationStyle === "vancouver" ? "Vancouver (Uppercase / No Brackets)" : citationStyle.toUpperCase()}
+                      {citationStyle === "vancouver" ? "Vancouver (superscript numerals)" : citationStyle.toUpperCase()}
                     </span>
                   </div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>

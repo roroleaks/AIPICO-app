@@ -187,7 +187,7 @@ export default function GapPage() {
   return (
     <div className="wrap">
       <header className="hdr">
-        <h1>🕳️ Step 2 · Evidence Map</h1>
+        <h1>🗺️ Step 2 · Evidence Map</h1>
         <p>What is established, what is contested, and where the real gaps are</p>
       </header>
 
@@ -290,7 +290,7 @@ export default function GapPage() {
             )}
             {!!gap.gaps?.length && (
               <>
-                <h3 className="sec-h">🕳️ Research gaps</h3>
+                <h3 className="sec-h">🔍 Research gaps</h3>
                 <ul className="gap-list">
                   {gap.gaps.map((g, i) => <li key={`g${i}`}><strong>{g.gap}</strong> — {g.why}</li>)}
                 </ul>

@@ -368,7 +368,7 @@ export default function QuestionPage() {
               📋 Literature-Derived Outcomes — Click 1 to continue (No manual typing needed)
             </h3>
             <p className="hint">
-              These 4–6 outcomes are ranked by clinical importance and grounded in current PubMed evidence. Click an outcome card below to select it.
+              These 4–6 outcomes are ranked by clinical importance (suggested outcomes — verify against the relevant published core outcome set). Click an outcome card below to select it.
             </p>
 
             <div className="chips outcome-chips" role="group" aria-label="Outcome options" style={{ marginTop: 14 }}>
@@ -448,7 +448,7 @@ export default function QuestionPage() {
                   📖 Citation & Reference Style for PDF & Word Export
                 </h4>
                 <span className="pill" style={{ background: "#ccfbf1", color: "#0f766e", fontSize: "0.8rem", fontWeight: 600 }}>
-                  Active: {citationStyle === "vancouver" ? "Vancouver (Uppercase / No Brackets)" : citationStyle.toUpperCase()}
+                  Active: {citationStyle === "vancouver" ? "Vancouver (superscript numerals)" : citationStyle.toUpperCase()}
                 </span>
               </div>
               <p className="hint" style={{ marginBottom: 12 }}>

@@ -139,7 +139,7 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
   doc.font(FONT_B).fontSize(18).fillColor(ink).text(title, { align: "center" });
   doc.moveDown(0.4);
   doc.font(FONT_O).fontSize(9.5).fillColor(muted).text(
-    `${String(body.meta || "")} · Citation Style: ${style === "vancouver" ? "Vancouver (Uppercase / No Brackets)" : style.toUpperCase()}`,
+    `${String(body.meta || "")} · Citation Style: ${style === "vancouver" ? "Vancouver (superscript numerals)" : style.toUpperCase()}`,
     { align: "center" }
   );
   doc.moveDown(0.8);
