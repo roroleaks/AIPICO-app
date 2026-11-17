@@ -79,7 +79,7 @@ function cleanJsonResponse(raw: string): Record<string, unknown> {
   }
 }
 
-async function callGemini(modelName: string, apiKey: string, system: string, payload: unknown): Promise<Record<string, unknown>> {
+async function callGemini(modelName: string, apiKey: string, system: string, payload: unknown, timeoutMs = LLM_TIMEOUT_MS): Promise<Record<string, unknown>> {
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`,
     {
@@ -90,7 +90,7 @@ async function callGemini(modelName: string, apiKey: string, system: string, pay
         contents: [{ role: "user", parts: [{ text: JSON.stringify(payload) }] }],
         generationConfig: { temperature: 0.2, responseMimeType: "application/json" }
       }),
-      signal: AbortSignal.timeout(LLM_TIMEOUT_MS)
+      signal: AbortSignal.timeout(timeoutMs)
     }
   );
   if (!res.ok) {
@@ -106,7 +106,7 @@ async function callGemini(modelName: string, apiKey: string, system: string, pay
   return cleanJsonResponse(text);
 }
 
-async function callOpenAiCompatible(url: string, apiKey: string, model: string, system: string, payload: unknown): Promise<Record<string, unknown>> {
+async function callOpenAiCompatible(url: string, apiKey: string, model: string, system: string, payload: unknown, timeoutMs = LLM_TIMEOUT_MS): Promise<Record<string, unknown>> {
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -122,7 +122,7 @@ async function callOpenAiCompatible(url: string, apiKey: string, model: string, 
       response_format: { type: "json_object" },
       temperature: 0.2
     }),
-    signal: AbortSignal.timeout(LLM_TIMEOUT_MS)
+    signal: AbortSignal.timeout(timeoutMs)
   });
   if (!res.ok) {
     const detail = (await res.text().catch(() => "")).slice(0, 240).replace(/\s+/g, " ");
@@ -135,36 +135,96 @@ async function callOpenAiCompatible(url: string, apiKey: string, model: string, 
   return cleanJsonResponse(text);
 }
 
-async function callLLM(system: string, payload: unknown, attempts = 2): Promise<Record<string, unknown>> {
+interface ProviderConfig {
+  name: string;
+  call: (system: string, payload: unknown, timeoutMs: number) => Promise<Record<string, unknown>>;
+}
+
+function getAvailableProviders(): ProviderConfig[] {
+  const providers: ProviderConfig[] = [];
+  if (GEMINI_API_KEY) {
+    const model = process.env.GEMINI_MODEL || process.env.LLM_MODEL || "gemini-2.0-flash";
+    providers.push({
+      name: "gemini",
+      call: (sys, pl, to) => callGemini(model, GEMINI_API_KEY!, sys, pl, to)
+    });
+  }
+  if (GROQ_API_KEY) {
+    const groqModel = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+    providers.push({
+      name: "groq",
+      call: (sys, pl, to) => callOpenAiCompatible("https://api.groq.com/openai/v1/chat/completions", GROQ_API_KEY!, groqModel, sys, pl, to)
+    });
+  }
+  if (OPENROUTER_API_KEY) {
+    const orModel = process.env.OPENROUTER_MODEL || "google/gemini-2.0-flash-001";
+    providers.push({
+      name: "openrouter",
+      call: (sys, pl, to) => callOpenAiCompatible("https://openrouter.ai/api/v1/chat/completions", OPENROUTER_API_KEY!, orModel, sys, pl, to)
+    });
+  }
+  if (OPENAI_API_KEY) {
+    const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+    const oaModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
+    providers.push({
+      name: "openai",
+      call: (sys, pl, to) => callOpenAiCompatible(`${baseUrl}/chat/completions`, OPENAI_API_KEY!, oaModel, sys, pl, to)
+    });
+  }
+  return providers;
+}
+
+interface LlmCallOptions {
+  attempts?: number;
+  timeoutMs?: number;
+  stage?: string;
+}
+
+async function callLLM(
+  system: string,
+  payload: unknown,
+  options: number | LlmCallOptions = {}
+): Promise<Record<string, unknown>> {
+  const opts: LlmCallOptions = typeof options === "number" ? { attempts: options } : options;
+  const providers = getAvailableProviders();
+  if (providers.length === 0) {
+    throw new Error("No AI provider key configured");
+  }
+
+  const stage = opts.stage || "general";
+  const defaultTimeout = stage === "commentary" ? 35_000 : stage === "gap" ? 22_000 : 14_000;
+  const timeoutMs = opts.timeoutMs ?? defaultTimeout;
+  const attemptsPerProvider = opts.attempts ?? 1;
+
   let lastErr: unknown;
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    try {
-      if (GEMINI_API_KEY) {
-        return await callGemini(MODEL, GEMINI_API_KEY, system, payload);
-      } else if (GROQ_API_KEY) {
-        const groqModel = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
-        return await callOpenAiCompatible("https://api.groq.com/openai/v1/chat/completions", GROQ_API_KEY, groqModel, system, payload);
-      } else if (OPENROUTER_API_KEY) {
-        const orModel = process.env.OPENROUTER_MODEL || "google/gemini-2.0-flash-exp:free";
-        return await callOpenAiCompatible("https://openrouter.ai/api/v1/chat/completions", OPENROUTER_API_KEY, orModel, system, payload);
-      } else if (OPENAI_API_KEY) {
-        const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
-        const oaModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
-        return await callOpenAiCompatible(`${baseUrl}/chat/completions`, OPENAI_API_KEY, oaModel, system, payload);
-      } else {
-        throw new Error("No AI provider key configured");
-      }
-    } catch (e) {
-      lastErr = e;
-      if (e instanceof LlmFatal) break;
-      if (attempt < attempts - 1) {
-        const backoff = 1000 * Math.pow(2, attempt);
-        const wait = e instanceof LlmTransient && e.retryAfterMs ? Math.max(backoff, e.retryAfterMs) : backoff;
-        await new Promise(r => setTimeout(r, Math.min(wait, 5000)));
+
+  for (const provider of providers) {
+    for (let attempt = 0; attempt < attemptsPerProvider; attempt++) {
+      const startTime = Date.now();
+      try {
+        const data = await provider.call(system, payload, timeoutMs);
+        const latencyMs = Date.now() - startTime;
+        console.info(`[AIPICO] stage=${stage} provider=${provider.name} latencyMs=${latencyMs} source=ai`);
+        return data;
+      } catch (e) {
+        const latencyMs = Date.now() - startTime;
+        lastErr = e;
+        console.info(`[AIPICO] stage=${stage} provider=${provider.name} latencyMs=${latencyMs} error=${e instanceof Error ? e.message : String(e)} (attempt ${attempt + 1}/${attemptsPerProvider})`);
+
+        if (e instanceof LlmFatal || (e instanceof Error && e.name === "TimeoutError")) {
+          break;
+        }
+
+        if (attempt < attemptsPerProvider - 1) {
+          const backoff = 800 * Math.pow(2, attempt);
+          const wait = e instanceof LlmTransient && e.retryAfterMs ? Math.max(backoff, e.retryAfterMs) : backoff;
+          await new Promise(r => setTimeout(r, Math.min(wait, 3000)));
+        }
       }
     }
   }
-  throw lastErr instanceof Error ? lastErr : new Error("LLM failed");
+
+  throw lastErr instanceof Error ? lastErr : new Error("All AI providers failed");
 }
 
 interface PubMedRef { pmid: string; title: string; authors: string; year: string; journal: string; doi?: string; url: string; context?: string; source?: string }
@@ -782,8 +842,8 @@ export async function POST(req: NextRequest) {
   const origin = req.headers.get("origin");
   const cors = isAllowedOrigin(origin) ? corsHeaders(origin!) : {};
 
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "127.0.0.1";
-  const limit = await checkRateLimit(ip, "engine", 10, 60);
+  const ip = req.headers.get("x-real-ip") || req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "127.0.0.1";
+  const limit = await checkRateLimit(ip, "engine", 20, 60);
   if (!limit.success) {
     return NextResponse.json(
       { error: "Too many requests. Please wait and try again." },
@@ -798,8 +858,10 @@ export async function POST(req: NextRequest) {
   }
 
   const res = await postHandler(req);
-  for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
-  return res;
+  if (!res.headers.get("x-aipico-source")) {
+    res.headers.set("x-aipico-source", "rules");
+  }
+  return withCors(res, cors);
 }
 
 async function postHandler(req: NextRequest) {
@@ -842,6 +904,7 @@ async function postHandler(req: NextRequest) {
 
   try {
     if (stage === "commentary") {
+      const stageStartTime = Date.now();
       const { topic, gapAnalysis, selectedQuestion, outcome, outcomes, picoElements, preferDeterministic } = body as {
         topic?: string; gapAnalysis?: { known?: unknown[]; uncertain?: unknown[] };
         selectedQuestion?: string; outcome?: string; outcomes?: Array<unknown>; picoElements?: Array<{ label?: unknown; value?: unknown }>;
@@ -1083,7 +1146,9 @@ let commentary: Record<string, unknown>;
         });
       } else {
         try {
-          commentary = await callLLM(`${basePrompt}\n${responseShape}`, promptPayload, 1);
+          const elapsedRetrieval = Date.now() - stageStartTime;
+          const timeoutMs = Math.max(10_000, 40_000 - elapsedRetrieval);
+          commentary = await callLLM(`${basePrompt}\n${responseShape}`, promptPayload, { stage: "commentary", timeoutMs });
           commentarySource = "ai";
         } catch (e) {
           console.error("[engine] LLM commentary generation failed, using deterministic fallback:", e);
@@ -1175,7 +1240,7 @@ let commentary: Record<string, unknown>;
 - Your previous draft was rejected for citation integrity. These in-text citations name no reference you listed: ${citationChecks.orphans.join("; ") || "none"}. These references you listed were never cited in the text: ${citationChecks.uncited.map(u => u.split(".")[0]).join("; ") || "none"}. Fix both: cite each listed reference at least once using sequential Vancouver numeric brackets [1], [2], etc., and delete or correct every citation that is not in the referencePool.
 ${responseShape}`,
               promptPayload,
-              1
+              { stage: "commentary-repair", timeoutMs: 15_000 }
             );
           } catch (e) {
             console.error("[engine] LLM commentary repair failed, using current commentary:", e);
@@ -1389,7 +1454,7 @@ refAudit: directPool.map(r => auditRef(r, elements)),
         paperRefAudit,
         citationChecks,
         integrity
-      });
+      }, { headers: { "x-aipico-source": commentarySource } });
     }
 
     if (stage === "gap") {
@@ -1435,7 +1500,8 @@ HARD RULES:
 4. Reference integrity: the 8 evidence points must each carry a DISTINCT searchQuery targeting its own claim. Do not present study protocols, trial registrations, or conference abstracts as evidence of clinical effect.
 
 Respond ONLY with valid JSON, no preamble or commentary.`,
-            { topic }
+            { topic },
+            { stage: "gap", timeoutMs: 22_000 }
           );
           gapSource = "ai";
         } catch (llmErr) {
@@ -1538,7 +1604,7 @@ Respond ONLY with valid JSON, no preamble or commentary.`,
         source: gapSource,
         known: knownWithRefs,
         uncertain: uncertainWithRefs
-      });
+      }, { headers: { "x-aipico-source": gapSource } });
     }
 
     if (stage === "intent") {
@@ -1556,7 +1622,7 @@ Given a clinician's raw, vague clinical uncertainty, identify:
 - questionType and framework chosen from: ${JSON.stringify(QUESTION_TYPES)}
 - missing: list of missing PICO elements from ["condition","intervention","comparator","outcome"]
 - interpretation: one sentence explaining your reading of the uncertainty.
-Respond ONLY with JSON.`, { input, knowledgeBase: kbContext() });
+Respond ONLY with JSON.`, { input, knowledgeBase: kbContext() }, { stage: "intent", timeoutMs: 14_000 });
         const r = out as unknown as Analysis;
         const valid = isSpecialty(r.specialty);
         return NextResponse.json({
@@ -1588,7 +1654,8 @@ Provide 4 to 6 diverse, clinically relevant options so the clinician has real ch
 Respond ONLY with JSON:
 {"done": false, "field": "<condition|intervention|comparator|outcome>", "questionText": "...", "options": ["...", "..."], "allowFreeText": true}
 Set done=true with empty strings when everything essential is known.`,
-            { analysis, answered }
+            { analysis, answered },
+            { stage: "clarify", timeoutMs: 14_000 }
           );
           return NextResponse.json({ ...out, source: "ai" });
         }
@@ -1608,7 +1675,8 @@ Reorder them only if this specific question is clearly better served by a differ
 You MUST use the ids exactly as given. You MUST NOT invent, rename, or add outcomes.
 Respond ONLY with JSON:
 {"recommendedOutcomeId": "<id from the list>", "options": ["<id>", "..."]}`,
-        { analysis, answered, question: deterministic.questionText }
+        { analysis, answered, question: deterministic.questionText },
+        { stage: "advisory", timeoutMs: 14_000 }
       );
       const advised = applyOutcomeAdvisory(outcomeSelection, advisory);
       return NextResponse.json({
@@ -1663,7 +1731,8 @@ Using the analysis and clarified answers, produce:
 - advisories: array of short warnings; if the selected outcome is not the most patient-centered for the condition, flag it and recommend "${outcomeLogic.primary}" (rationale: ${outcomeLogic.rationale}).
 - searchTerms: {population, intervention, outcome} optimized for PubMed searching.
 Respond ONLY with JSON.`,
-          { analysis, answered, specialtyKnowledge: analysis.specialty ? KB[analysis.specialty] : null, outcomeLogic }
+          { analysis, answered, specialtyKnowledge: analysis.specialty ? KB[analysis.specialty] : null, outcomeLogic },
+          { stage: "formulate", timeoutMs: 14_000 }
         );
         return NextResponse.json({ ...out, source: "ai", complete: true, missingElements: [] });
       }

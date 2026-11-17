@@ -50,7 +50,7 @@ export async function checkRateLimit(
         },
         body: JSON.stringify([
           ["ZREMRANGEBYSCORE", key, 0, minScore],
-          ["ZADD", key, now, String(now)],
+          ["ZADD", key, now, `${now}-${Math.random().toString(36).slice(2, 8)}`],
           ["ZCARD", key],
           ["EXPIRE", key, windowSeconds],
         ]),
