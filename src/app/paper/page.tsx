@@ -54,7 +54,7 @@ interface CommentaryPaper {
 }
 interface RefAudit {
   pmid: string; title: string; url: string;
-  resolved: boolean; doiOk: boolean; design: string;
+  resolved: boolean; pmidResolved?: boolean; doiResolved?: boolean; doiOk: boolean; design: string;
   population: boolean; intervention: boolean; comparator: boolean; outcome: boolean; score: number;
 }
 interface CitationChecks {
@@ -1053,7 +1053,18 @@ export default function PaperPage() {
                         <span className="tag" style={{ opacity: audit.intervention ? 1 : .45 }}>int {audit.intervention ? "✓" : "✗"}</span>
                         <span className="tag" style={{ opacity: audit.comparator ? 1 : .45 }}>cmp {audit.comparator ? "✓" : "✗"}</span>
                         <span className="tag" style={{ opacity: audit.outcome ? 1 : .45 }}>out {audit.outcome ? "✓" : "✗"}</span>
-                        <span className="tag" style={{ opacity: audit.resolved ? 1 : .45 }}>PMID {audit.resolved ? "✓" : "✗"}</span>
+                        {audit.pmidResolved ? (
+                          <span className="tag">PMID ✓</span>
+                        ) : /^(pmc|epmc|oax|cr):/.test(r.pmid) ? (
+                          <span className="tag">ID ✓</span>
+                        ) : (
+                          <span className="tag" style={{ opacity: .45 }}>PMID ✗</span>
+                        )}
+                        {(audit.doiResolved || audit.doiOk) ? (
+                          <span className="tag">DOI ✓</span>
+                        ) : (
+                          <span className="tag" style={{ opacity: .45 }}>DOI ✗</span>
+                        )}
                       </div>
                     )}
                   </div>

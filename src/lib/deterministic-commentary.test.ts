@@ -396,3 +396,36 @@ test("P0-7: study summary states lack of outcome reporting when audit shows out 
     "Record with outcome ✓ must state relevant findings"
   );
 });
+
+test("DC-P18: narrative cites collective authors as the group name and generates MeSH keywords", () => {
+  const groupRef: AuditableRef = {
+    pmid: "31828343",
+    doi: "10.1093/humrep/dez234",
+    title: "ESHRE guideline: ovarian stimulation for IVF/ICSI.",
+    authors: "ESHRE Guideline Group on Ovarian Stimulation , Ata B",
+    year: "2020",
+    journal: "Hum Reprod",
+    url: "https://pubmed.ncbi.nlm.nih.gov/31828343/",
+    context: "Keywords: ovarian reserve; poor responders. Ovarian stimulation guidelines."
+  };
+  const out = generateDeterministicCommentary({
+    selectedQuestion: "In poor responders, does growth hormone compared with placebo improve live birth rate?",
+    outcomesText: "live birth rate",
+    reason: "no AI provider key",
+    pool: [groupRef],
+    elements: [
+      { label: "P — Population", value: "poor responders" },
+      { label: "I — Intervention", value: "growth hormone" },
+      { label: "C — Comparator", value: "placebo" },
+      { label: "O — Outcome", value: "live birth rate" }
+    ]
+  });
+  const disc = String(out.discussion);
+  assert.ok(
+    disc.includes("the ESHRE Guideline Group on Ovarian Stimulation"),
+    `group author should be cited by group name, got: ${disc}`
+  );
+  assert.ok(!disc.includes("ESHRE and colleagues"), "group author must not be cited as 'ESHRE and colleagues'");
+  const kw = out.keywords as string[];
+  assert.ok(kw.some(k => /ovarian reserve|growth hormone|live birth/i.test(k)), `MeSH keywords expected, got: ${JSON.stringify(kw)}`);
+});

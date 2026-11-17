@@ -2,6 +2,7 @@ import { formatVancouverReference, elementByType, auditRef, type PicoElement } f
 import type { AuditableRef } from "./relevance.ts";
 import { extractPicoFromQuestion } from "./pico-parser.ts";
 import { toInlineCase } from "./clinical-semantics.ts";
+import { resolveMeshDescriptors } from "./pubmed-query.ts";
 
 export interface DeterministicCommentaryInput {
   selectedQuestion: string;
@@ -52,8 +53,20 @@ export function generateDeterministicCommentary(
     .filter(r => r && r.title && r.authors && r.year && /^(19|20)\d{2}/.test(String(r.year)))
     .map((r, i) => {
       const vancouver = formatVancouverReference(r, i + 1);
-      const authors = String(r.authors || "").trim();
-      const firstAuthor = authors.split(/[,;\s]+/)[0] || "Investigator";
+      const authors = String(r.authors || "").replace(/\s+,/g, ",").replace(/\s{2,}/g, " ").trim();
+      const firstSegment = authors.split(/[,;]/)[0]?.trim() || "Investigator";
+      const isGroup = /\b(Guideline\s+Group|Study\s+Group|Consortium|Task\s+Force|Working\s+Group|Committee|Society|Collaboration|Panel|Network|Association|Faculty|Organization|Organisation)\b/i.test(firstSegment);
+      let authorCitation: string;
+      let firstAuthor: string;
+      if (isGroup) {
+        firstAuthor = firstSegment;
+        authorCitation = /^the\s+/i.test(firstSegment) ? firstSegment : `the ${firstSegment}`;
+      } else {
+        const surname = firstSegment.split(/\s+/)[0] || "Investigator";
+        firstAuthor = surname;
+        const hasMultiple = authors.includes(",") || authors.includes(";") || /\b(and|et al)\b/i.test(authors);
+        authorCitation = hasMultiple ? `${surname} and colleagues` : surname;
+      }
       const year = String(r.year || "").trim();
       const title = String(r.title || "").trim();
       const journal = String(r.journal || "").trim();
@@ -70,6 +83,7 @@ export function generateDeterministicCommentary(
         index: i + 1,
         numToken: `[${i + 1}]`,
         firstAuthor,
+        authorCitation,
         year,
         title,
         journal,
@@ -104,35 +118,57 @@ export function generateDeterministicCommentary(
   const inlineOut = toInlineCase(outVal || outcomesText);
   const inlineQ = toInlineCase(cleanQ);
 
-  // Keywords extraction
+  // MeSH-style keywords derivation
   const STOP = new Set([
     "the", "and", "for", "with", "does", "what", "which", "that", "this", "from", "into", "vs",
     "patients", "women", "study", "studies", "versus", "among", "their", "there", "been", "are",
     "was", "were", "who", "how", "than", "then", "when", "while", "have", "has", "had", "but", "not",
     "you", "your", "our", "its", "his", "her", "can", "will", "would", "should", "could", "may"
   ]);
-  const QUESTION_VERB = /^(compare[ds]?|comparing|improv(e|es|ed|ing|ement)|reduc(e|es|ed|ing|tion)|increas(e|es|ed|ing)|decreas(e|es|ed|ing)|prevent(s|ed|ing|ion)?|affect(s|ed|ing)?|influence[ds]?|chang(e|es|ed|ing)|effect(s|ed)?|benefit(s|ed)?|outcome[s]?|result(s|ed)?|risk[s]?|safe|safety)$/i;
+  const QUESTION_VERB = /^(compare[ds]?|comparing|improv(e|es|ed|ing|ement)|reduc(e|es|ed|ing|tion)|increas(e|es|ed|ing)|decreas(e|es|ed|ing)|affect(s|ed|ing)?|influence[ds]?|chang(e|es|ed|ing)|effect(s|ed)?|benefit(s|ed)?|outcome[s]?|result(s|ed)?|risk[s]?|safe|safety)$/i;
   const keywords: string[] = [];
   const addKeyword = (raw: string) => {
     const w = raw.replace(/\s+/g, " ").trim().replace(/[.,;:]+$/, "");
-    if (w.length < 4 || w.length > 60) return;
+    if (w.length < 3 || w.length > 60) return;
     if (STOP.has(w.toLowerCase())) return;
     if (QUESTION_VERB.test(w)) return;
     if (keywords.some(k => k.toLowerCase() === w.toLowerCase())) return;
     keywords.push(w);
   };
-  const PHRASE_SPLIT = /[,;()]| compared with | versus | vs\.? | and | in patients with | in women with /i;
-  for (const phrase of [...(opts.elements || []).map(e => e.value), outcomesText]) {
+
+  // 1. Add core clinical PICO phrases in Academic Title Case
+  for (const phrase of [intVal, popVal, outVal]) {
     if (keywords.length >= 6) break;
-    for (const part of String(phrase || "").split(PHRASE_SPLIT)) addKeyword(part);
+    if (!phrase) continue;
+    const cleaned = toAcademicTitleCase(phrase.trim());
+    addKeyword(cleaned);
   }
-  if (keywords.length < 3) {
-    for (const w of question.split(/[^A-Za-z0-9-]+/)) {
+
+  // 2. Resolve MeSH descriptors from clinical terms
+  const meshSources = [intVal, popVal, outVal, compVal, cleanQ];
+  for (const src of meshSources) {
+    if (keywords.length >= 6) break;
+    if (!src) continue;
+    const descriptors = resolveMeshDescriptors(src);
+    for (const d of descriptors) {
       if (keywords.length >= 6) break;
-      if (w.length < 4 || w.length > 40 || STOP.has(w.toLowerCase())) continue;
-      addKeyword(w);
+      addKeyword(d);
     }
   }
+
+  // 3. Supplement with comparator if needed
+  if (keywords.length < 4 && compVal && !/placebo|standard\s+care/i.test(compVal)) {
+    addKeyword(toAcademicTitleCase(compVal.trim()));
+  }
+
+  // 4. Fallback to standard indexing keywords if still < 4
+  if (keywords.length < 4) {
+    for (const fallback of ["Reproductive Medicine", "Treatment Outcome", "Clinical Evidence", "Evidence-Based Medicine"]) {
+      if (keywords.length >= 4) break;
+      addKeyword(fallback);
+    }
+  }
+
   const keywordList = keywords.slice(0, 6);
 
   // Clean title construction
@@ -205,7 +241,7 @@ export function generateDeterministicCommentary(
     const outcomeSnippet = aud.outcome
       ? ` The investigation specifically evaluated clinical and laboratory parameters in relation to therapeutic protocols and reported findings relevant to ${inlineOut}.`
       : ` The investigation evaluated clinical parameters in relation to therapeutic protocols, but does not report the selected outcome in its title/abstract.`;
-    return `In an indexed ${e.design}, ${e.firstAuthor} and colleagues (${e.year}) evaluated "${cleanTitle}" in ${e.journal || "peer-reviewed literature"} ${e.numToken}.${outcomeSnippet} Methodologically, this study provides focused empirical documentation regarding patient selection, protocol parameters, and observed clinical endpoints for this clinical scenario.`;
+    return `In an indexed ${e.design}, ${e.authorCitation} (${e.year}) evaluated "${cleanTitle}" in ${e.journal || "peer-reviewed literature"} ${e.numToken}.${outcomeSnippet} Methodologically, this study provides focused empirical documentation regarding patient selection, protocol parameters, and observed clinical endpoints for this clinical scenario.`;
   });
 
   // Comprehensive Discussion sections

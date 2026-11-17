@@ -42,6 +42,8 @@ export interface RefAudit {
   title: string;
   url: string;
   resolved: boolean;
+  pmidResolved?: boolean;
+  doiResolved?: boolean;
   doiOk: boolean;
   design: string;
   population: boolean;
@@ -241,12 +243,18 @@ export function auditRef(ref: AuditableRef, elements: PicoElement[]): RefAudit {
     confidence = "low";
   }
 
+  const pmidResolved = !!ref.pmid && /^\d+$/.test(String(ref.pmid).trim());
+  const doiResolved = /10\.\d{4,}\//.test(String(ref.doi || ""));
+  const resolved = pmidResolved || (!!ref.pmid && /^(pmc|epmc|oax|cr):/.test(String(ref.pmid).trim()));
+
   return {
-pmid: ref.pmid || "",
+    pmid: ref.pmid || "",
     title: ref.title,
     url: ref.url || "",
-    resolved: !!ref.pmid && (/^\d+$/.test(ref.pmid) || /^(pmc|epmc|oax|cr):/.test(ref.pmid)),
-    doiOk: /10\.\d{4,}\//.test(String(ref.doi || "")),
+    resolved,
+    pmidResolved,
+    doiResolved,
+    doiOk: doiResolved,
     design: design,
     population,
     intervention,
@@ -675,9 +683,9 @@ export function formatReference(ref: AuditableRef, style: "vancouver" | "chicago
   }
 
   // Vancouver style (NLM / ICMJE convention)
-  const authors = ref.authors ? `${ref.authors.trim().replace(/\.$/, "")}.` : "";
-  const title = ref.title ? `${ref.title.trim().replace(/\.$/, "")}.` : "";
-  const journal = ref.journal ? `${ref.journal.trim().replace(/\.$/, "")}.` : "";
+  const authors = ref.authors ? `${ref.authors.replace(/\s+,/g, ",").replace(/\s{2,}/g, " ").trim().replace(/\.+$/, "")}.` : "";
+  const title = ref.title ? `${ref.title.trim().replace(/\.+$/, "")}.` : "";
+  const journal = ref.journal ? `${ref.journal.trim().replace(/\.+$/, "")}.` : "";
   const year = ref.year ? `${String(ref.year).trim()}.` : "";
   const doi = ref.doi ? `doi:${ref.doi.replace(/^doi:\s*/i, "")}` : "";
 

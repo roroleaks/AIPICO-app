@@ -113,3 +113,19 @@ test("V8. validateDeliverableIntegrity passes for full Vancouver deliverable", (
   });
   assert.equal(result.ok, true, JSON.stringify(result));
 });
+
+test("V9. formatVancouverReference handles collective authors and sanitizes stray spaces before commas", () => {
+  const groupRef: AuditableRef = {
+    pmid: "31828343",
+    doi: "10.1093/humrep/dez234",
+    title: "ESHRE guideline: ovarian stimulation for IVF/ICSI.",
+    authors: "ESHRE Guideline Group on Ovarian Stimulation , Ata B",
+    year: "2020",
+    journal: "Hum Reprod",
+    url: "https://pubmed.ncbi.nlm.nih.gov/31828343/"
+  };
+  const formatted = formatVancouverReference(groupRef, 1);
+  assert.ok(!formatted.includes(" , "), "must not leave stray spaces before commas");
+  assert.ok(!formatted.includes(".."), "must not produce duplicate dots");
+  assert.ok(formatted.startsWith("1. ESHRE Guideline Group on Ovarian Stimulation, Ata B. ESHRE guideline: ovarian stimulation for IVF/ICSI. Hum Reprod. 2020."));
+});

@@ -26,6 +26,25 @@ function isEmptyResult(g: GapResult): boolean {
   return !hasPoints && !hasRefs;
 }
 
+function formatGapReference(r: Reference): string {
+  const parts: string[] = [];
+  if (r.year) parts.push(`[${r.year}]`);
+  const authors = (r.authors || "").replace(/\s+,/g, ",").trim().replace(/\.+$/, "");
+  if (authors) parts.push(`${authors}.`);
+  const title = (r.title || "").trim().replace(/\.+$/, "");
+  if (title) parts.push(`${title}.`);
+  const journal = (r.journal || "").trim().replace(/\.+$/, "");
+  if (journal) parts.push(`${journal}.`);
+  if (r.pmid) {
+    const isPrefixed = /^(pmc|epmc|oax|cr):/.test(r.pmid);
+    parts.push(`${isPrefixed ? "ID:" : "PMID:"} ${r.pmid}.`);
+  }
+  if (r.doi) {
+    parts.push(`DOI: ${r.doi}.`);
+  }
+  return parts.join(" ");
+}
+
 export default function GapPage() {
   const router = useRouter();
   const [gap, setGap] = useState<GapResult | null>(null);
@@ -216,7 +235,7 @@ export default function GapPage() {
                       {k.references && k.references.length > 0 ? (
                         <div className="refs">{k.references.map((r, j) => (
                           <a key={j} href={r.url} target="_blank" rel="noopener noreferrer" className="ref-link">
-                            [{r.year}] {r.authors}. {r.title}. {r.journal}.{r.pmid ? ` PMID: ${r.pmid}.` : ""}{r.doi ? ` DOI: ${r.doi}.` : ""}
+                            {formatGapReference(r)}
                           </a>))}</div>
                       ) : (
                         <div className="refs" style={{ color: "#64748b", fontStyle: "italic", fontSize: "0.85rem", marginTop: 4 }}>
@@ -237,7 +256,7 @@ export default function GapPage() {
                       {u.references && u.references.length > 0 ? (
                         <div className="refs">{u.references.map((r, j) => (
                           <a key={j} href={r.url} target="_blank" rel="noopener noreferrer" className="ref-link">
-                            [{r.year}] {r.authors}. {r.title}. {r.journal}.{r.pmid ? ` PMID: ${r.pmid}.` : ""}{r.doi ? ` DOI: ${r.doi}.` : ""}
+                            {formatGapReference(r)}
                           </a>))}</div>
                       ) : (
                         <div className="refs" style={{ color: "#64748b", fontStyle: "italic", fontSize: "0.85rem", marginTop: 4 }}>
