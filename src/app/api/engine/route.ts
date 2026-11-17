@@ -1267,7 +1267,10 @@ const noDirectEvidence = directPool.length === 0;
         references: finalRefs,
         retainedRecords: curatedRecords,
         allowedKeys: evidenceSet.allowedCitationKeys,
-        citationMap: evidenceSet.citationMap
+        citationMap: evidenceSet.citationMap,
+        retainedCount: directPool.length,
+        retrievedCount: directPool.length + excludedByClaim.length,
+        excludedCount: excludedByClaim.length
       });
       if (!integrity.ok) {
         if (commentarySource === "ai") {
@@ -1317,7 +1320,10 @@ const noDirectEvidence = directPool.length === 0;
             references: finalRefs,
             retainedRecords: curatedRecords,
             allowedKeys: evidenceSet.allowedCitationKeys,
-            citationMap: evidenceSet.citationMap
+            citationMap: evidenceSet.citationMap,
+            retainedCount: directPool.length,
+            retrievedCount: directPool.length + excludedByClaim.length,
+            excludedCount: excludedByClaim.length
           });
           if (!detIntegrity.ok) {
             return NextResponse.json({

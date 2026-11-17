@@ -284,3 +284,36 @@ test("reports non-string narrative field values", () => {
   assert.equal(r.ok, false);
   assert.match(r.malformedReferences[0], /^fields\.discussion must be a string, received number$/);
 });
+
+test("P0-2. Fails when retrieval accounting does not hold (retrieved != retained + excluded)", () => {
+  const result = validateDeliverableIntegrity({
+    fields: {
+      abstract: "Short cervix confers risk of preterm birth.",
+      discussion: "Cerclage remains standard (Paladino 2026)."
+    },
+    references: [REF_B],
+    retainedRecords: RECORDS,
+    retrievedCount: 35,
+    retainedCount: 8,
+    excludedCount: 34 // 8 + 34 = 42 != 35
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.accountingMismatch);
+  assert.match(result.accountingMismatch, /retrieved \(35\) != retained \(8\) \+ excluded \(34\)/);
+});
+
+test("P0-2. Passes when retrieval accounting holds (retrieved == retained + excluded)", () => {
+  const result = validateDeliverableIntegrity({
+    fields: {
+      abstract: "Short cervix confers risk of preterm birth.",
+      discussion: "Cerclage remains standard (Paladino 2026)."
+    },
+    references: [REF_B],
+    retainedRecords: RECORDS,
+    retrievedCount: 42,
+    retainedCount: 8,
+    excludedCount: 34 // 8 + 34 == 42
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.accountingMismatch, undefined);
+});

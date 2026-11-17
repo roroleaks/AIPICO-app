@@ -27,13 +27,17 @@ export interface DeliverableIntegrityInput {
   allowedKeys?: Set<string>;
   citationMap?: Map<string, AuditableRef>;
   title?: string;
-  sections?: Array<{ heading?: string; blocks?: string[] } | any>;
+  sections?: Array<{ heading?: string; blocks?: string[] } | Record<string, unknown>>;
   retainedReferences?: AuditableRef[];
   citationStyle?: string;
+  retrievedCount?: number;
+  retainedCount?: number;
+  excludedCount?: number;
 }
 
 export interface DeliverableIntegrityResult {
   ok: boolean;
+  accountingMismatch?: string;
   /** Citations naming an author/year with no record behind it. */
   unsupportedCitations: string[];
   /** Citations with no matching entry in the published reference list. */
@@ -216,7 +220,19 @@ export function validateDeliverableIntegrity(input: DeliverableIntegrityInput): 
     seenKeys.add(key);
   }
 
+  let accountingMismatch: string | undefined = undefined;
+  if (
+    typeof inp.retrievedCount === "number" &&
+    typeof inp.retainedCount === "number" &&
+    typeof inp.excludedCount === "number"
+  ) {
+    if (inp.retrievedCount !== inp.retainedCount + inp.excludedCount) {
+      accountingMismatch = `Retrieval accounting mismatch: retrieved (${inp.retrievedCount}) != retained (${inp.retainedCount}) + excluded (${inp.excludedCount})`;
+    }
+  }
+
   const ok =
+    !accountingMismatch &&
     unsupportedCitations.length === 0 &&
     orphanCitations.length === 0 &&
     uncitedReferences.length === 0 &&
@@ -227,6 +243,7 @@ export function validateDeliverableIntegrity(input: DeliverableIntegrityInput): 
 
   return {
     ok,
+    accountingMismatch,
     unsupportedCitations,
     orphanCitations,
     uncitedReferences,
