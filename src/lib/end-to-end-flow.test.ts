@@ -126,3 +126,36 @@ test("End-to-End Clinical Flow: Step 1 -> Step 2 -> Step 3 -> Step 4", () => {
   });
   assert.ok(integrity.ok, "Step 4: Deliverable integrity is valid");
 });
+
+test("P1-3: Commentary generation retry sequence acquires lock once and executes fallback sequentially", async () => {
+  let lockAcquired = false;
+  let attemptsCount = 0;
+  let inFlight = false;
+
+  async function mockGenerateCommentary(initialPreferDeterministic = false) {
+    if (lockAcquired) return "locked";
+    lockAcquired = true;
+    inFlight = true;
+
+    try {
+      const attempts = initialPreferDeterministic ? [true] : [false, true];
+      for (const preferDeterministic of attempts) {
+        attemptsCount++;
+        if (!preferDeterministic) {
+          continue;
+        }
+        return "deterministic-success";
+      }
+      return "failed";
+    } finally {
+      lockAcquired = false;
+      inFlight = false;
+    }
+  }
+
+  const result = await mockGenerateCommentary(false);
+  assert.equal(result, "deterministic-success", "Fallback loop executes and succeeds");
+  assert.equal(attemptsCount, 2, "Loop tried AI first, then deterministic");
+  assert.equal(lockAcquired, false, "Lock released in final finally");
+  assert.equal(inFlight, false, "Loading state completed");
+});

@@ -312,7 +312,7 @@ export default function PaperPage() {
   const activeQuestion = formulation?.variants?.[variantIdx]?.question ?? formulation?.finalQuestion ?? "";
 
   const genLockRef = useRef(false);
-  const generateCommentary = useCallback(async (overrideQ?: string, preferDeterministic = false) => {
+  const generateCommentary = useCallback(async (overrideQ?: string, initialPreferDeterministic = false) => {
     if (!formulation?.finalQuestion) return;
     if (genLockRef.current) return; // synchronous guard against concurrent regenerations
     genLockRef.current = true;
@@ -321,93 +321,99 @@ export default function PaperPage() {
     setCommentaryError(false);
     setCommentaryErrorMessage(null);
     try {
-      const res = await fetch("/api/engine", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          stage: "commentary",
-          topic: gapTopic || formulation.finalQuestion,
-          gapAnalysis: sget<GapSnapshot>(KEYS.gap),
-          selectedQuestion: q,
-          outcome,
-          outcomes,
-          picoElements: formulation.elements,
-          preferDeterministic
-        })
-      });
-      let data: (CommentaryPaper & { error?: string }) | null = null;
-      try {
-        data = await res.json();
-      } catch {
-        data = null;
+      const attempts = initialPreferDeterministic ? [true] : [false, true];
+      let succeeded = false;
+      let lastErrorMessage: string | null = null;
+
+      for (const preferDeterministic of attempts) {
+        try {
+          const res = await fetch("/api/engine", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              stage: "commentary",
+              topic: gapTopic || formulation.finalQuestion,
+              gapAnalysis: sget<GapSnapshot>(KEYS.gap),
+              selectedQuestion: q,
+              outcome,
+              outcomes,
+              picoElements: formulation.elements,
+              preferDeterministic
+            })
+          });
+          let data: (CommentaryPaper & { error?: string }) | null = null;
+          try {
+            data = await res.json();
+          } catch {
+            data = null;
+          }
+          if (data && typeof data === "object" && data.title && !data.error) {
+            const str = (v: unknown): string => (typeof v === "string" ? v : "");
+            const strings = (v: unknown): string[] =>
+              Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+            const validRef = (r: unknown): r is ReferenceItem => {
+              const o = r as ReferenceItem;
+              return !!o && typeof o === "object" && typeof o.pmid === "string" && typeof o.title === "string";
+            };
+            const norm: CommentaryPaper = {
+              title: str(data.title),
+              abstract: str(data.abstract) || data.title,
+              keywords: strings(data.keywords),
+              introduction: str(data.introduction),
+              discussion: str(data.discussion),
+              conclusion: str(data.conclusion),
+              references: strings(data.references),
+              fetchedReferences: Array.isArray(data.fetchedReferences)
+                ? data.fetchedReferences.filter(validRef) : undefined,
+              additionalEvidence: Array.isArray(data.additionalEvidence)
+                ? data.additionalEvidence.filter(validRef) : undefined,
+              indirectEvidence: Array.isArray(data.indirectEvidence)
+                ? data.indirectEvidence.filter(validRef) : undefined,
+              contextualReferences: Array.isArray(data.contextualReferences)
+                ? data.contextualReferences.filter(validRef) : undefined,
+              retainedCount: typeof data.retainedCount === "number" ? data.retainedCount : undefined,
+              retrievedCount: typeof data.retrievedCount === "number" ? data.retrievedCount : undefined,
+              excludedCount: typeof data.excludedCount === "number" ? data.excludedCount : undefined,
+              excludedReferences: Array.isArray(data.excludedReferences)
+                ? (data.excludedReferences as ExcludedRef[]).filter(
+                    x => !!x && typeof x.pmid === "string" && typeof x.title === "string"
+                  ) : undefined,
+              noDirectEvidence: typeof data.noDirectEvidence === "boolean" ? data.noDirectEvidence : undefined,
+              source: data.source === "ai" || data.source === "deterministic" ? data.source : undefined,
+              synthesisGenerated: typeof data.synthesisGenerated === "boolean" ? data.synthesisGenerated : undefined,
+              notice: typeof data.notice === "string" ? data.notice : undefined,
+              refAudit: curRefAudit(data),
+              paperRefAudit: curPaperRefAudit(data),
+              citationChecks: curCitationChecks(data),
+              removedCitations: Array.isArray(data.removedCitations) ? data.removedCitations : []
+            };
+            if (!norm.noDirectEvidence && norm.title !== "No literature related to your search found") {
+              sset(KEYS.commentary, norm);
+            } else if (typeof window !== "undefined") {
+              window.sessionStorage.removeItem(KEYS.commentary);
+            }
+            setCommentary(norm);
+            setCommentaryError(false);
+            setCommentaryErrorMessage(null);
+            succeeded = true;
+            break;
+          } else {
+            lastErrorMessage =
+              data?.error ||
+              (res.status === 504 ? "The AI writing service timed out." : "Commentary generation could not complete.");
+          }
+        } catch (err: unknown) {
+          lastErrorMessage = err instanceof Error ? err.message : "Network error contacting commentary engine.";
+        }
       }
-      if (data && typeof data === "object" && data.title && !data.error) {
-        const str = (v: unknown): string => (typeof v === "string" ? v : "");
-        const strings = (v: unknown): string[] =>
-          Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-        const validRef = (r: unknown): r is ReferenceItem => {
-          const o = r as ReferenceItem;
-          return !!o && typeof o === "object" && typeof o.pmid === "string" && typeof o.title === "string";
-        };
-        const norm: CommentaryPaper = {
-          title: str(data.title),
-          abstract: str(data.abstract) || data.title,
-          keywords: strings(data.keywords),
-          introduction: str(data.introduction),
-          discussion: str(data.discussion),
-          conclusion: str(data.conclusion),
-          references: strings(data.references),
-          fetchedReferences: Array.isArray(data.fetchedReferences)
-            ? data.fetchedReferences.filter(validRef) : undefined,
-          additionalEvidence: Array.isArray(data.additionalEvidence)
-            ? data.additionalEvidence.filter(validRef) : undefined,
-          indirectEvidence: Array.isArray(data.indirectEvidence)
-            ? data.indirectEvidence.filter(validRef) : undefined,
-          contextualReferences: Array.isArray(data.contextualReferences)
-            ? data.contextualReferences.filter(validRef) : undefined,
-          retainedCount: typeof data.retainedCount === "number" ? data.retainedCount : undefined,
-          retrievedCount: typeof data.retrievedCount === "number" ? data.retrievedCount : undefined,
-          excludedCount: typeof data.excludedCount === "number" ? data.excludedCount : undefined,
-          excludedReferences: Array.isArray(data.excludedReferences)
-            ? (data.excludedReferences as ExcludedRef[]).filter(
-                x => !!x && typeof x.pmid === "string" && typeof x.title === "string"
-              ) : undefined,
-          noDirectEvidence: typeof data.noDirectEvidence === "boolean" ? data.noDirectEvidence : undefined,
-          source: data.source === "ai" || data.source === "deterministic" ? data.source : undefined,
-          synthesisGenerated: typeof data.synthesisGenerated === "boolean" ? data.synthesisGenerated : undefined,
-          notice: typeof data.notice === "string" ? data.notice : undefined,
-          refAudit: curRefAudit(data),
-          paperRefAudit: curPaperRefAudit(data),
-          citationChecks: curCitationChecks(data),
-          removedCitations: Array.isArray(data.removedCitations) ? data.removedCitations : []
-        };
-        if (!norm.noDirectEvidence && norm.title !== "No literature related to your search found") {
-          sset(KEYS.commentary, norm);
-        } else if (typeof window !== "undefined") {
-          window.sessionStorage.removeItem(KEYS.commentary);
-        }
-        setCommentary(norm);
-        setCommentaryError(false);
-        setCommentaryErrorMessage(null);
-      } else {
-        if (!preferDeterministic) {
-          genLockRef.current = false;
-          return generateCommentary(overrideQ, true);
-        }
+
+      if (!succeeded) {
         setCommentaryError(true);
-        setCommentaryErrorMessage(
-          data?.error ||
-          (res.status === 504 ? "The AI writing service timed out." : "Commentary generation could not complete.")
-        );
+        setCommentaryErrorMessage(lastErrorMessage || "Commentary generation failed.");
       }
-    } catch (err: unknown) {
-      if (!preferDeterministic) {
-        genLockRef.current = false;
-        return generateCommentary(overrideQ, true);
-      }
-      setCommentaryError(true);
-      setCommentaryErrorMessage(err instanceof Error ? err.message : "Network error contacting commentary engine.");
+    } finally {
+      genLockRef.current = false;
+      setCommentaryLoading(false);
     }
-    finally { genLockRef.current = false; setCommentaryLoading(false); }
   }, [formulation, gapTopic, activeQuestion, outcome, outcomes]);
 
   const selectVariant = useCallback((i: number) => {
