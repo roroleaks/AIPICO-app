@@ -22,6 +22,7 @@ without leaking internals.
 
 **Resolved during this audit:**
 
+- **P3-1 (v3.2 Security Upgrades)** — upgraded `next` to 16.4.6, `eslint-config-next` to 16.4.6, and `zod` to ^4.6.6; resolved transitive `source-map-js` vulnerability via npm audit. Production audit (`npm audit --omit=dev`) verifies 0 vulnerabilities.
 - **F-22 (was CRITICAL)** — `next` upgraded 16.3.2 → 16.3.8 and `sharp` to 0.35.5.
   `npm audit --omit=dev` now reports **0 vulnerabilities** (was 1 critical + 1 high).
   Full suite re-verified green and every other finding re-confirmed on the new runtime.

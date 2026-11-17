@@ -25,3 +25,14 @@ test("P2-2. checkRateLimit isolates buckets by IP address", async () => {
   const res2 = await checkRateLimit(ip2, "engine-test-iso", 20, 60);
   assert.equal(res2.success, true, "ip2 should still have quota");
 });
+
+test("P3-1. package.json specifies secure versions for next and zod", async () => {
+  const fs = await import("fs");
+  const path = await import("path");
+  const pkg = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "package.json"), "utf8"));
+  const nextVer = pkg.dependencies.next || "";
+  const zodVer = pkg.dependencies.zod || "";
+  assert.match(nextVer, /16\.4\.[6-9]|16\.[5-9]|1[7-9]/, "Next.js must be at least 16.4.6");
+  assert.match(zodVer, /4\.[6-9]\.[6-9]|4\.[7-9]|[5-9]/, "Zod must be at least 4.6.6");
+});
+
