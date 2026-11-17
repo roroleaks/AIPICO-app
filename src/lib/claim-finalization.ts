@@ -175,6 +175,150 @@ export function splitSentences(text: string): string[] {
     .map(s => s.replace(/\u0000(\d+)\u0000/g, (_, i: string) => abbreviations[Number(i)] ?? ""));
 }
 
+function finalizeSentenceList(
+  sentences: string[],
+  field: string,
+  input: ClaimFinalizationInput,
+  elements: PicoElement[],
+  claims: FinalClaim[],
+  removedClaims: string[],
+  limitations: string[],
+  warnings: string[]
+): string {
+  const kept: string[] = [];
+  for (const sentence of sentences) {
+    const cites = extractInTextCites(sentence);
+    const { citedNumbers } = extractNumericCites(sentence);
+    const citationKeys: string[] = [];
+    let unresolved = false;
+    const records: AuditableRef[] = [];
+
+    for (const c of cites) {
+      const key = findKeyForCitation(c.author, c.year, input.evidenceSet.citationMap);
+      if (!key || !input.evidenceSet.allowedCitationKeys.has(key)) {
+        unresolved = true;
+        continue;
+      }
+      if (!citationKeys.includes(key)) citationKeys.push(key);
+      const rec = input.evidenceSet.citationMap.get(key);
+      if (rec) records.push(rec as AuditableRef);
+    }
+
+    for (const num of citedNumbers) {
+      const idx = num - 1;
+      const rec = input.evidenceSet.retainedRecords[idx];
+      if (rec) {
+        const rawKey = rec.doi ? `doi:${rec.doi.toLowerCase()}` : rec.pmid ? `pmid:${rec.pmid}` : "";
+        const foundKey = (rawKey && input.evidenceSet.allowedCitationKeys.has(rawKey))
+          ? rawKey
+          : Array.from(input.evidenceSet.allowedCitationKeys)[idx];
+        if (foundKey) {
+          if (!citationKeys.includes(foundKey)) citationKeys.push(foundKey);
+          records.push(rec as AuditableRef);
+        } else {
+          citationKeys.push(`ref:${num}`);
+          records.push(rec as AuditableRef);
+        }
+      } else {
+        unresolved = true;
+      }
+    }
+
+    // Questions, study objectives, and framing sentences are not assertions of clinical findings.
+    const isFramingOrQuestion =
+      /\?\s*$/.test(sentence) ||
+      /\b(?:objective|aims?|evaluating|addresses the following defined question|clinical dilemma)\b/i.test(sentence);
+
+    if (!ASSERTION.test(sentence) || isFramingOrQuestion) {
+      // Background, question and method prose is not a finding, so it is retained as written.
+      claims.push({ field, text: sentence, citationKeys, supported: false, reason: "not-an-assertion" });
+      kept.push(sentence);
+      continue;
+    }
+
+    const addressed = records.filter(r => {
+      const audit = auditRef(r, elements);
+      return !!(audit.population && (audit.intervention || audit.comparator) && audit.outcome);
+    });
+    const tokens = claimOutcomeTokens(sentence, elements);
+    // A source has to report what the sentence asserts. A sentence that only restates the PICO
+    // vocabulary asserts nothing about an outcome, so nothing is required of the source.
+    const reportsOutcome = (r: AuditableRef) =>
+      !tokens.length || reportsAny(`${r.title || ""} ${r.context || ""}`, tokens);
+    const onTopic = addressed.filter(r => reportsOutcome(r));
+    const consistent = onTopic.filter(r => directionSupportsClaim(sentence, r));
+
+    let reason: FinalClaim["reason"];
+    if (!cites.length && !citedNumbers.size) reason = "no-citation";
+    else if (unresolved || !records.length) reason = "citation-not-in-evidence-set";
+    else if (!addressed.length) reason = "pico-not-addressed";
+    else if (!onTopic.length) reason = "outcome-not-reported";
+    else if (!consistent.length) reason = "direction-contradicted";
+    else reason = undefined;
+
+    if (!reason) {
+      claims.push({ field, text: sentence, citationKeys, supported: true });
+      kept.push(sentence);
+      continue;
+    }
+
+    removedClaims.push(sentence);
+    warnings.push(`Unsupported claim removed from ${field}: ${reason}`);
+    claims.push({ field, text: sentence, citationKeys, supported: false, reason });
+    if (kept[kept.length - 1] !== LIMITATION) {
+      kept.push(LIMITATION);
+      limitations.push(LIMITATION);
+    }
+  }
+  return kept.join(" ").replace(/\s{2,}/g, " ").trim();
+}
+
+function finalizeBlock(
+  block: string,
+  field: string,
+  input: ClaimFinalizationInput,
+  elements: PicoElement[],
+  claims: FinalClaim[],
+  removedClaims: string[],
+  limitations: string[],
+  warnings: string[]
+): string {
+  const trimmed = block.trim();
+  if (!trimmed) return "";
+
+  // Pure heading line e.g. "#### Evidence Base Scope & Methodological Characteristics"
+  if (/^#{1,6}\s+/.test(trimmed) && !trimmed.includes("\n")) {
+    return trimmed;
+  }
+
+  // Heading with attached body e.g. "#### Heading\nParagraph text..."
+  const headingMatch = trimmed.match(/^(#{1,6}\s+[^\n]+)\n+([\s\S]*)$/);
+  if (headingMatch) {
+    const heading = headingMatch[1].trim();
+    const body = headingMatch[2].trim();
+    const finalizedBody = finalizeBlock(body, field, input, elements, claims, removedClaims, limitations, warnings);
+    return finalizedBody ? `${heading}\n${finalizedBody}` : heading;
+  }
+
+  // List block: lines starting with "- " or "* "
+  if (/^[-*]\s+/m.test(trimmed)) {
+    const lines = trimmed.split("\n");
+    const finalizedLines = lines.map(line => {
+      const bulletMatch = line.match(/^(\s*[-*]\s+)([\s\S]+)$/);
+      if (bulletMatch) {
+        const prefix = bulletMatch[1];
+        const content = bulletMatch[2];
+        const finalizedContent = finalizeSentenceList(splitSentences(content), field, input, elements, claims, removedClaims, limitations, warnings);
+        return `${prefix}${finalizedContent}`;
+      }
+      return finalizeSentenceList(splitSentences(line), field, input, elements, claims, removedClaims, limitations, warnings);
+    });
+    return finalizedLines.join("\n");
+  }
+
+  return finalizeSentenceList(splitSentences(trimmed), field, input, elements, claims, removedClaims, limitations, warnings);
+}
+
 /**
  * Deterministic claim-level finalization.
  *
@@ -195,97 +339,12 @@ export function finalizeClaims(input: ClaimFinalizationInput): ClaimFinalization
   const fields: Record<string, string> = {};
 
   for (const [field, raw] of Object.entries(input.fields)) {
-    const kept: string[] = [];
-    for (const sentence of splitSentences(String(raw ?? ""))) {
-      const cites = extractInTextCites(sentence);
-      const { citedNumbers } = extractNumericCites(sentence);
-      const citationKeys: string[] = [];
-      let unresolved = false;
-      const records: AuditableRef[] = [];
-
-      for (const c of cites) {
-        const key = findKeyForCitation(c.author, c.year, input.evidenceSet.citationMap);
-        if (!key || !input.evidenceSet.allowedCitationKeys.has(key)) {
-          unresolved = true;
-          continue;
-        }
-        if (!citationKeys.includes(key)) citationKeys.push(key);
-        const rec = input.evidenceSet.citationMap.get(key);
-        if (rec) records.push(rec as AuditableRef);
-      }
-
-      for (const num of citedNumbers) {
-        const idx = num - 1;
-        const rec = input.evidenceSet.retainedRecords[idx];
-        if (rec) {
-          const rawKey = rec.doi ? `doi:${rec.doi.toLowerCase()}` : rec.pmid ? `pmid:${rec.pmid}` : "";
-          const foundKey = (rawKey && input.evidenceSet.allowedCitationKeys.has(rawKey))
-            ? rawKey
-            : Array.from(input.evidenceSet.allowedCitationKeys)[idx];
-          if (foundKey) {
-            if (!citationKeys.includes(foundKey)) citationKeys.push(foundKey);
-            records.push(rec as AuditableRef);
-          } else {
-            citationKeys.push(`ref:${num}`);
-            records.push(rec as AuditableRef);
-          }
-        } else {
-          unresolved = true;
-        }
-      }
-
-      // Questions, study objectives, and framing sentences are not assertions of clinical findings.
-      const isFramingOrQuestion =
-        /\?\s*$/.test(sentence) ||
-        /\b(?:objective|aims?|evaluating|addresses the following defined question|clinical dilemma)\b/i.test(sentence);
-
-      if (!ASSERTION.test(sentence) || isFramingOrQuestion) {
-        // Background, question and method prose is not a finding, so it is retained as written.
-        claims.push({ field, text: sentence, citationKeys, supported: false, reason: "not-an-assertion" });
-        kept.push(sentence);
-        continue;
-      }
-
-      const addressed = records.filter(r => {
-        const audit = auditRef(r, elements);
-        return !!(audit.population && (audit.intervention || audit.comparator) && audit.outcome);
-      });
-      const tokens = claimOutcomeTokens(sentence, elements);
-      // A source has to report what the sentence asserts. A sentence that only restates the PICO
-      // vocabulary asserts nothing about an outcome, so nothing is required of the source.
-      const reportsOutcome = (r: AuditableRef) =>
-        !tokens.length || reportsAny(`${r.title || ""} ${r.context || ""}`, tokens);
-      const onTopic = addressed.filter(r => reportsOutcome(r));
-      const consistent = onTopic.filter(r => directionSupportsClaim(sentence, r));
-
-      let reason: FinalClaim["reason"];
-      if (!cites.length && !citedNumbers.size) reason = "no-citation";
-      else if (unresolved || !records.length) reason = "citation-not-in-evidence-set";
-      else if (!addressed.length) reason = "pico-not-addressed";
-      else if (!onTopic.length) reason = "outcome-not-reported";
-      else if (!consistent.length) reason = "direction-contradicted";
-      else reason = undefined;
-
-      if (!reason) {
-        claims.push({ field, text: sentence, citationKeys, supported: true });
-        kept.push(sentence);
-        continue;
-      }
-
-      removedClaims.push(sentence);
-      warnings.push(`Unsupported claim removed from ${field}: ${reason}`);
-      claims.push({ field, text: sentence, citationKeys, supported: false, reason });
-      // Several consecutive unsupported sentences in one field all map to the same boilerplate.
-      // Pushing it for each of them produced a paragraph that repeated the identical 33-word
-      // sentence up to seven times, which reads as a rendering fault and buries the surviving
-      // content. The claims and warnings still record every removal; only the duplicated prose is
-      // collapsed, and only when it is directly adjacent.
-      if (kept[kept.length - 1] !== LIMITATION) {
-        kept.push(LIMITATION);
-        limitations.push(LIMITATION);
-      }
-    }
-    fields[field] = kept.join(" ").replace(/\s{2,}/g, " ").trim();
+    const rawStr = String(raw ?? "");
+    const blocks = rawStr.split(/\n{2,}/);
+    const finalizedBlocks = blocks
+      .map(b => finalizeBlock(b, field, input, elements, claims, removedClaims, limitations, warnings))
+      .filter(b => b.length > 0);
+    fields[field] = finalizedBlocks.join("\n\n").trim();
   }
 
   return { fields, claims, removedClaims, limitations, warnings };

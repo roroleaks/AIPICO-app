@@ -233,3 +233,33 @@ assert.equal(res.limitations.length, 1);
   assert.match(res.fields.discussion, /reduced preterm birth before 37 weeks \(Likes 2019\)/);
 });
 
+test("P1-1: markdown structure is preserved across claim finalization", async () => {
+  const es = await buildEvidenceSet([SUPPORTING]);
+  const inputDiscussion =
+    "Introductory paragraph about clinical management.\n\n" +
+    "#### Evidence Base Scope & Methodological Characteristics\n" +
+    "The assembled evidence base comprises peer-reviewed publications.\n\n" +
+    "#### Research Gaps & Unanswered Questions\n" +
+    "- **Definitive Head-to-Head RCTs:** Scarcity of trials.\n" +
+    "- **Stratification Biomarkers:** Absence of predictive biomarkers.";
+
+  const res = finalizeClaims({
+    fields: { discussion: inputDiscussion },
+    evidenceSet: es,
+    elements: PICO
+  });
+
+  assert.ok(
+    res.fields.discussion.includes("\n\n#### Evidence Base Scope & Methodological Characteristics"),
+    "#### heading must be preserved preceded by \\n\\n"
+  );
+  assert.ok(
+    res.fields.discussion.includes("\n\n#### Research Gaps & Unanswered Questions"),
+    "Second #### heading must be preserved preceded by \\n\\n"
+  );
+  assert.ok(
+    res.fields.discussion.includes("- **Definitive Head-to-Head RCTs:**"),
+    "Bullet list items must remain intact"
+  );
+});
+
