@@ -234,8 +234,13 @@ export function finalizeClaims(input: ClaimFinalizationInput): ClaimFinalization
         }
       }
 
-      if (!ASSERTION.test(sentence)) {
-        // Background and method prose is not a finding, so it is retained as written.
+      // Questions, study objectives, and framing sentences are not assertions of clinical findings.
+      const isFramingOrQuestion =
+        /\?\s*$/.test(sentence) ||
+        /\b(?:objective|aims?|evaluating|addresses the following defined question|clinical dilemma)\b/i.test(sentence);
+
+      if (!ASSERTION.test(sentence) || isFramingOrQuestion) {
+        // Background, question and method prose is not a finding, so it is retained as written.
         claims.push({ field, text: sentence, citationKeys, supported: false, reason: "not-an-assertion" });
         kept.push(sentence);
         continue;

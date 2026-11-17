@@ -82,9 +82,6 @@ export function generateDeterministicCommentary(
   const n = entries.length;
   const plural = n === 1;
 
-  // Build sequential range token e.g. "[1-3]" or "[1]" or "[1, 2]"
-  const allCiteToken = n === 0 ? "" : n === 1 ? "[1]" : n === 2 ? "[1, 2]" : `[1-${n}]`;
-
   // Extract structured PICO elements
   const byType = elementByType(opts.elements || []);
   let popVal = cleanPhrase(byType.population?.value || "");
@@ -171,15 +168,15 @@ export function generateDeterministicCommentary(
   // Structured Abstract adhering strictly to Vancouver & medical commentary conventions
   const abstract =
     `Background: Clinical management of ${popVal || "the target clinical cohort"} presents significant therapeutic complexity, where optimizing ${outVal || outcomesText} represents a paramount clinical milestone. Underlying biological variations and heterogeneous protocolization often lead to clinical equipoise regarding therapeutic strategies. ` +
-    `Objective: To systematically synthesize and critically appraise current peer-reviewed evidence evaluating ${cleanQ} ${allCiteToken}. ` +
-    `Methods & Evidence Scope: Multi-database indexing across PubMed/MEDLINE, Europe PMC, OpenAlex, and Crossref was filtered against strict PICO claim-level relevance boundaries. A total of ${n} clinical record${plural ? "" : "s"} ${yearSpanText} ${plural ? "was" : "were"} retrieved and cataloged for ${outVal || outcomesText} ${allCiteToken}. ` +
-    `Results & Synthesis: The retained evidence base ${allCiteToken} provides grounded clinical data examining therapeutic protocols and observed clinical endpoints across the evaluated patient cohort. ` +
+    `Objective: To systematically synthesize and critically appraise current peer-reviewed evidence evaluating ${cleanQ}. ` +
+    `Methods & Evidence Scope: Multi-database indexing across PubMed/MEDLINE, Europe PMC, OpenAlex, and Crossref was filtered against strict PICO claim-level relevance boundaries. A total of ${n} clinical record${plural ? "" : "s"} ${yearSpanText} ${plural ? "was" : "were"} retrieved and cataloged for ${outVal || outcomesText}. ` +
+    `Results & Synthesis: The retained records provide grounded clinical data examining therapeutic protocols and observed clinical endpoints across the evaluated patient cohort. ` +
     `    Clinical Interpretation: Current literature underscores the necessity of precise patient stratification, individualized intervention timing, and meticulous clinical risk evaluation rather than empirical universal application. ` +
-    `Conclusion: The available evidence base provides essential clinical insights into ${outVal || outcomesText} in ${popVal || "this population"} ${allCiteToken}, while highlighting the imperative for standardized multi-center randomized investigations to resolve remaining clinical uncertainties.`;
+    `Conclusion: The available evidence base provides essential clinical insights into ${outVal || outcomesText} in ${popVal || "this population"}, while highlighting the imperative for standardized multi-center randomized investigations to resolve remaining clinical uncertainties.`;
 
   // Introduction providing deep clinical background, biological plausibility, and explicit knowledge gap
   const introP1 =
-    `The clinical dilemma under consideration addresses the following defined question: ${cleanQ} ${allCiteToken}. ` +
+    `The clinical dilemma under consideration addresses the following defined question: ${cleanQ}. ` +
     `In clinical practice, managing ${popVal || "this patient cohort"} demands rigorous attention to baseline prognostic markers and therapeutic responsiveness. ` +
     `Pathophysiological alterations inherent to this clinical scenario frequently compromise physiological reserves, creating substantial obstacles to achieving favorable benchmarks in ${outVal || outcomesText}.`;
 
@@ -189,8 +186,8 @@ export function generateDeterministicCommentary(
     `Understanding the extent to which these biological mechanisms translate into measurable clinical changes remains central to contemporary practice.`;
 
   const introP3 =
-    `Despite substantial clinical interest, therapeutic choices are often complicated by variable trial methodologies, divergent inclusion criteria, and limited head-to-head comparisons in the published literature ${allCiteToken}. ` +
-    `This commentary synthesizes the direct indexed evidence base ${allCiteToken} to critically appraise the current state of knowledge, assess methodological certainty, and provide a grounded clinical perspective on ${outVal || outcomesText} in ${popVal || "the target population"}.`;
+    `Despite substantial clinical interest, therapeutic choices are often complicated by variable trial methodologies, divergent inclusion criteria, and limited head-to-head comparisons in the published literature. ` +
+    `This commentary synthesizes the direct indexed evidence base to critically appraise the current state of knowledge, assess methodological certainty, and provide a grounded clinical perspective on ${outVal || outcomesText} in ${popVal || "the target population"}.`;
 
   const introduction = `${introP1}\n\n${introP2}\n\n${introP3}`;
 
@@ -207,13 +204,13 @@ export function generateDeterministicCommentary(
   const discIntro =
     `${n} record${plural ? "" : "s"} address${plural ? "es" : ""} ` +
     `the selected population, intervention and outcome, and ${plural ? "is" : "are"} ` +
-    `evaluated in this synthesis in Vancouver style: ${allCiteToken}.`;
+    `evaluated in this synthesis in Vancouver style.`;
 
   const discScope =
     `#### Evidence Base Scope & Methodological Characteristics\n` +
-    `The assembled evidence base comprises ${n} peer-reviewed publication${plural ? "" : "s"} ${yearSpanText} ${allCiteToken}, retrieved through systematic querying across PubMed/MEDLINE, Europe PMC, OpenAlex, and Crossref. ` +
+    `The assembled evidence base comprises ${n} peer-reviewed publication${plural ? "" : "s"} ${yearSpanText}, retrieved through systematic querying across PubMed/MEDLINE, Europe PMC, OpenAlex, and Crossref. ` +
     `Each included record underwent claim-specific filtering to ensure direct relevance to ${popVal || "the clinical population"}, the intervention pathways under review, and the primary endpoint of ${outVal || outcomesText}. ` +
-    `The evidence base incorporates diverse study designs, offering valuable perspectives across observational cohorts and structured clinical evaluations ${allCiteToken}.`;
+    `The evidence base incorporates diverse study designs, offering valuable perspectives across observational cohorts and structured clinical evaluations.`;
 
   const discStudyByStudy =
     `#### Study-by-Study Critical Appraisal & Reported Findings\n` +
@@ -221,21 +218,21 @@ export function generateDeterministicCommentary(
 
   const discComparative =
     `#### Comparative Analysis & Clinical Concordance\n` +
-    `Across the retained investigations ${allCiteToken}, clinical observations reflect a consistent focus on optimizing ${outVal || outcomesText} through individualized therapeutic protocols. ` +
+    `Across the retained investigations, clinical observations reflect a consistent focus on optimizing ${outVal || outcomesText} through individualized therapeutic protocols. ` +
     `Review of the retrieved publications indicates consideration of baseline risk assessment and standardized monitoring. ` +
     `Where variations in reported outcomes emerge, they appear primarily attributable to heterogeneity in patient age distribution, disease severity staging, baseline functional reserves, and differing co-intervention protocols. ` +
     `These comparative nuances demonstrate that therapeutic response is rarely uniform, reinforcing the clinical requirement for phenotype-specific stratification.`;
 
   const discMethodology =
     `#### Methodological Quality, Risk of Bias & Evidence Certainty\n` +
-    `Examination of the retrieved publications reveals varied study designs and reporting characteristics across the literature ${allCiteToken}. ` +
+    `Examination of the retrieved publications reveals varied study designs and reporting characteristics across the literature. ` +
     `Identified records provide documentation of clinical parameters alongside peer-reviewed publication details, DOIs, and PMIDs. ` +
     `Reported study characteristics reflect individual sample definitions, observational or trial designs, and clinical monitoring criteria. ` +
     `Formal determination of evidence certainty requires dedicated systematic review protocols and standardized risk-of-bias tools.`;
 
   const discClinicalTranslation =
     `#### Clinical Interpretation & Practice Translation\n` +
-    `From a clinical translation perspective, the available literature provides valuable guidance for practicing physicians managing ${popVal || "this clinical condition"} ${allCiteToken}. ` +
+    `From a clinical translation perspective, the available literature provides valuable guidance for practicing physicians managing ${popVal || "this clinical condition"}. ` +
     `Rather than supporting unselected, empirical administration, clinical decision-making warrants guidance through rigorous clinical risk evaluation, baseline diagnostic parameters, and individualized patient counseling. ` +
     `Clinicians must recognize the boundaries of current data: findings from specific study cohorts cannot be extrapolated uncritically across all clinical severity grades or alternative patient subgroups. ` +
     `Shared decision-making, accompanied by transparent discussion of evidence certainty and potential therapeutic limitations, represents the most prudent clinical approach.`;
@@ -261,8 +258,8 @@ export function generateDeterministicCommentary(
 
   // Balanced, evidence-grounded Conclusion
   const conclusionP1 =
-    `The evidence base for this clinical question comprises the ${n} cited record${plural ? "" : "s"} above ${allCiteToken}. ` +
-    `In answering the formulated clinical question, current literature provides structured clinical documentation regarding ${outVal || outcomesText} in ${popVal || "the evaluated cohort"} ${allCiteToken}, demonstrating that targeted therapeutic strategies warrant thoughtful consideration within structured clinical frameworks.`;
+    `The evidence base for this clinical question comprises the ${n} cited record${plural ? "" : "s"} above. ` +
+    `In answering the formulated clinical question, current literature provides structured clinical documentation regarding ${outVal || outcomesText} in ${popVal || "the evaluated cohort"}, demonstrating that targeted therapeutic strategies warrant thoughtful consideration within structured clinical frameworks.`;
 
   const conclusionP2 =
     `For practicing clinicians, these findings emphasize that therapeutic decisions should be individualized, balancing anticipated clinical outcomes against evidence certainty and procedural considerations. ` +

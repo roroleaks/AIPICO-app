@@ -317,3 +317,43 @@ test("P0-2. Passes when retrieval accounting holds (retrieved == retained + excl
   assert.equal(result.ok, true);
   assert.equal(result.accountingMismatch, undefined);
 });
+
+test("P0-6. Flags citation range covering >= 75% of references on a sentence that names no study", () => {
+  const fourRecords = [
+    { pmid: "10000001", authors: "Smith A", year: "2020", title: "Study 1", journal: "J1" },
+    { pmid: "10000002", authors: "Jones B", year: "2021", title: "Study 2", journal: "J2" },
+    { pmid: "10000003", authors: "Taylor C", year: "2022", title: "Study 3", journal: "J3" },
+    { pmid: "10000004", authors: "Brown D", year: "2023", title: "Study 4", journal: "J4" }
+  ];
+  const fourRefs = [
+    "1. Smith A. Study 1. J1. 2020. PMID: 10000001.",
+    "2. Jones B. Study 2. J2. 2021. PMID: 10000002.",
+    "3. Taylor C. Study 3. J3. 2022. PMID: 10000003.",
+    "4. Brown D. Study 4. J4. 2023. PMID: 10000004."
+  ];
+
+  const badResult = validateDeliverableIntegrity({
+    fields: {
+      abstract: "The available evidence provides critical clinical insights into treatment [1-4].",
+      discussion: "In an indexed study, Smith A and colleagues (2020) evaluated Study 1 [1]. Jones B and colleagues (2021) evaluated Study 2 [2]. Taylor C and colleagues (2022) evaluated Study 3 [3]. Brown D and colleagues (2023) evaluated Study 4 [4]."
+    },
+    references: fourRefs,
+    retainedRecords: fourRecords
+  });
+
+  assert.equal(badResult.ok, false, "Must fail deliverable integrity due to blanket range citation");
+  assert.ok(badResult.blanketCitations && badResult.blanketCitations.length > 0, "blanketCitations must report defect");
+  assert.match(badResult.blanketCitations[0], /blanket citation.*covers 4\/4 references/);
+
+  const goodResult = validateDeliverableIntegrity({
+    fields: {
+      abstract: "The available evidence provides critical clinical insights into treatment.",
+      discussion: "In an indexed study, Smith A and colleagues (2020) evaluated Study 1 [1]. Jones B and colleagues (2021) evaluated Study 2 [2]. Taylor C and colleagues (2022) evaluated Study 3 [3]. Brown D and colleagues (2023) evaluated Study 4 [4]."
+    },
+    references: fourRefs,
+    retainedRecords: fourRecords
+  });
+
+  assert.equal(goodResult.ok, true, "Must pass deliverable integrity when blanket range is absent");
+  assert.equal(goodResult.blanketCitations?.length || 0, 0);
+});

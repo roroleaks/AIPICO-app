@@ -38,6 +38,7 @@ export interface DeliverableIntegrityInput {
 export interface DeliverableIntegrityResult {
   ok: boolean;
   accountingMismatch?: string;
+  blanketCitations?: string[];
   /** Citations naming an author/year with no record behind it. */
   unsupportedCitations: string[];
   /** Citations with no matching entry in the published reference list. */
@@ -231,8 +232,43 @@ export function validateDeliverableIntegrity(input: DeliverableIntegrityInput): 
     }
   }
 
+  const blanketCitations: string[] = [];
+  if (references.length >= 4) {
+    const allSurnames = new Set<string>();
+    for (const rec of retained) {
+      for (const s of citingSurnames(rec)) {
+        if (s.length >= 3) allSurnames.add(s);
+      }
+    }
+
+    for (const [fieldName, fieldText] of Object.entries(fields)) {
+      if (typeof fieldText !== "string") continue;
+      const sentences = fieldText
+        .split(/(?<=[.!?])\s+|\n{1,}/)
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+
+      for (const sentence of sentences) {
+        const { citedNumbers, rawBrackets } = extractNumericCites(sentence);
+        if (citedNumbers.size >= Math.ceil(references.length * 0.75)) {
+          const lowerSentence = foldName(sentence);
+          const namesStudy = Array.from(allSurnames).some(nm => {
+            const rx = new RegExp(`\\b${nm}\\b`, "i");
+            return rx.test(lowerSentence);
+          });
+          if (!namesStudy) {
+            blanketCitations.push(
+              `In ${fieldName}: blanket citation [${rawBrackets.join(", ")}] covers ${citedNumbers.size}/${references.length} references on sentence naming no study: "${sentence.slice(0, 80)}..."`
+            );
+          }
+        }
+      }
+    }
+  }
+
   const ok =
     !accountingMismatch &&
+    blanketCitations.length === 0 &&
     unsupportedCitations.length === 0 &&
     orphanCitations.length === 0 &&
     uncitedReferences.length === 0 &&
@@ -244,6 +280,7 @@ export function validateDeliverableIntegrity(input: DeliverableIntegrityInput): 
   return {
     ok,
     accountingMismatch,
+    blanketCitations,
     unsupportedCitations,
     orphanCitations,
     uncitedReferences,
