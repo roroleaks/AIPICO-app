@@ -353,6 +353,7 @@ export interface ScoredOutcome {
   score: number;
   tier: MatchTier;
   matchedKeywords: string[];
+  hasIntentMatch?: boolean;
 }
 
 const WEIGHTS = {
@@ -572,7 +573,16 @@ export function scoreOutcome(candidate: OutcomeCandidate, context: OutcomeContex
     tier = "family";
   }
 
-  return { candidate, score, tier, matchedKeywords };
+  const hasIntentMatch = Boolean(
+    conditionHit ||
+    interventionHit ||
+    matchedKeywords.length > 0 ||
+    comparatorMatchedKeywords.length > 0 ||
+    typedMatchedKeywords.length > 0 ||
+    intentHits > 0
+  );
+
+  return { candidate, score, tier, matchedKeywords, hasIntentMatch };
 }
 
 /** Stable ordering: score desc, then match tier, then ontology priority asc, then id asc. */
@@ -731,6 +741,9 @@ export function selectOutcomes(
     !context.questionType || candidate.applicableQuestionTypes.length === 0 ||
     candidate.applicableQuestionTypes.includes(context.questionType);
 
+  const conditionText = [context.condition, context.population, context.originalInput].filter(Boolean).join(" ");
+  const interventionText = [context.intervention, context.comparator, context.originalInput].filter(Boolean).join(" ");
+
   /**
    * Scope gate.
    *
@@ -739,10 +752,26 @@ export function selectOutcomes(
    * declares specific specialties is therefore only in scope when the specialty was recognised or
    * when the condition or intervention actually matched it. Entries with an empty specialty list
    * are universal by definition and always in scope.
+   *
+   * Enforces condition and intervention applicability: when an outcome declares specific
+   * applicable conditions or interventions, and the context provides a concrete condition or
+   * intervention, the outcome must match at least one of them. It cannot be admitted on specialty
+   * match alone when its declared conditions and interventions are violated.
    */
   const inScope = (entry: ScoredOutcome): boolean => {
     if (entry.candidate.applicableSpecialties.length === 0) return true;
-    if (context.specialty && entry.candidate.applicableSpecialties.includes(context.specialty)) return true;
+    if (context.specialty && entry.candidate.applicableSpecialties.includes(context.specialty)) {
+      const hasSpecificConditions = entry.candidate.applicableConditions.length > 0 && !isGenericEntry(entry.candidate);
+      const hasSpecificInterventions = entry.candidate.applicableInterventions.length > 0;
+      if (hasSpecificConditions || hasSpecificInterventions) {
+        const hasContextCondition = Boolean(context.condition && context.condition.trim() && !/^(unknown|unspecified)$/i.test(context.condition.trim()));
+        const hasContextIntervention = Boolean(context.intervention && context.intervention.trim() && !/^(unknown|unspecified|none)$/i.test(context.intervention.trim()));
+        if ((hasContextCondition || hasContextIntervention) && !entry.hasIntentMatch) {
+          return false;
+        }
+      }
+      return true;
+    }
     return entry.tier === "specific";
   };
 

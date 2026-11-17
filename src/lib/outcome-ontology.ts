@@ -468,10 +468,14 @@ export const OUTCOME_ONTOLOGY: OutcomeCandidate[] = [
     family: "pregnancy-establishment",
     priority: 1,
     applicableSpecialties: ["infertility"],
-    applicableConditions: ["pcos", "unexplained infertility", "recurrent implantation failure", "male factor infertility", "endometriosis", "diminished ovarian reserve", "anovulation"],
-    applicableInterventions: ["ivf", "icsi", "iui", "letrozole", "clomiphene citrate", "metformin"],
+    applicableConditions: [
+      "poor responders", "poor ovarian response", "pcos", "unexplained infertility",
+      "recurrent implantation failure", "male factor infertility", "endometriosis",
+      "diminished ovarian reserve", "anovulation", "thin endometrium"
+    ],
+    applicableInterventions: ["growth hormone", "ivf", "icsi", "iui", "letrozole", "clomiphene citrate", "metformin", "estrogen"],
     applicableQuestionTypes: [THERAPY, PROGNOSIS],
-    keywords: ["clinical pregnancy", "cpr", "pregnancy rate", "sac", "gestational sac"],
+    keywords: ["clinical pregnancy", "clinical pregnancy rate", "cpr", "pregnancy rate", "sac", "gestational sac"],
     rationale: "It is the established intermediate endpoint for this question, though it is a surrogate for a birth.",
     measurable: true,
     preferredForPrimaryOutcome: true
@@ -596,11 +600,99 @@ export const OUTCOME_ONTOLOGY: OutcomeCandidate[] = [
     family: "laboratory-yield",
     priority: 1,
     applicableSpecialties: ["infertility"],
-    applicableConditions: ["diminished ovarian reserve", "pcos", "unexplained infertility", "male factor infertility"],
-    applicableInterventions: ["gonadotropins", "ivf", "icsi", "letrozole", "coenzyme Q10", "dhea"],
+    applicableConditions: ["diminished ovarian reserve", "poor responders", "poor ovarian response", "pcos", "unexplained infertility", "male factor infertility"],
+    applicableInterventions: ["gonadotropins", "growth hormone", "ivf", "icsi", "letrozole", "coenzyme Q10", "dhea"],
     applicableQuestionTypes: [THERAPY, PROGNOSIS],
     keywords: ["oocyte", "egg", "yield", "retrieved", "mature", "follicle count", "amh"],
     rationale: "It is the measurable response that indicates whether stimulation worked, which matters most when reserve is limited.",
+    measurable: true,
+    preferredForPrimaryOutcome: true
+  }),
+  defineOutcome({
+    id: "number-of-oocytes-retrieved",
+    label: "Number of oocytes retrieved",
+    shortLabel: "Oocytes retrieved",
+    category: "process",
+    family: "laboratory-yield",
+    priority: 1,
+    applicableSpecialties: ["infertility"],
+    applicableConditions: [
+      "poor responders", "poor ovarian response", "diminished ovarian reserve",
+      "pcos", "unexplained infertility", "male factor infertility"
+    ],
+    applicableInterventions: [
+      "growth hormone", "gonadotropins", "ivf", "icsi", "letrozole", "clomiphene citrate",
+      "coenzyme Q10", "dhea", "gnrh agonist", "gnrh antagonist"
+    ],
+    applicableQuestionTypes: [THERAPY, PROGNOSIS],
+    keywords: ["number of oocytes retrieved", "oocytes retrieved", "oocyte count", "oocyte yield", "egg retrieval", "eggs retrieved", "retrieval"],
+    rationale: "It is the direct measure of ovarian response to stimulation in an assisted reproduction cycle.",
+    measurable: true,
+    preferredForPrimaryOutcome: true
+  }),
+  defineOutcome({
+    id: "mii-oocytes",
+    label: "Metaphase II (MII) oocytes",
+    shortLabel: "MII oocytes",
+    category: "fertility",
+    family: "oocyte-maturity",
+    priority: 1,
+    applicableSpecialties: ["infertility"],
+    applicableConditions: [
+      "poor responders", "poor ovarian response", "diminished ovarian reserve",
+      "pcos", "unexplained infertility"
+    ],
+    applicableInterventions: [
+      "growth hormone", "gonadotropins", "ivf", "icsi", "coenzyme Q10",
+      "dhea", "gnrh agonist", "gnrh antagonist", "dual trigger"
+    ],
+    applicableQuestionTypes: [THERAPY, PROGNOSIS],
+    keywords: ["mii oocytes", "metaphase ii", "mature oocytes", "oocyte maturity", "mii", "nuclear maturity"],
+    rationale: "It reflects the number of mature oocytes competent for insemination and fertilization in an IVF cycle.",
+    measurable: true,
+    preferredForPrimaryOutcome: true
+  }),
+  defineOutcome({
+    id: "cycle-cancellation-rate",
+    label: "Cycle cancellation rate",
+    shortLabel: "Cycle cancellation",
+    category: "safety",
+    family: "cycle-cancellation",
+    priority: 1,
+    applicableSpecialties: ["infertility"],
+    applicableConditions: [
+      "poor responders", "poor ovarian response", "diminished ovarian reserve",
+      "high responder", "pcos"
+    ],
+    applicableInterventions: [
+      "growth hormone", "gonadotropins", "gnrh antagonist", "gnrh agonist",
+      "ivf", "icsi", "letrozole", "clomiphene citrate"
+    ],
+    applicableQuestionTypes: [THERAPY, HARM, PROGNOSIS],
+    keywords: ["cycle cancellation", "cancelled cycle", "cancellation rate", "cycle cancellation rate", "cancelled"],
+    rationale: "It measures the risk of premature cycle cancellation due to inadequate follicular response or absent oocyte recovery.",
+    measurable: true,
+    preferredForPrimaryOutcome: true
+  }),
+  defineOutcome({
+    id: "live-birth-rate-per-started-cycle",
+    label: "Live birth rate per started cycle",
+    shortLabel: "LBR per cycle",
+    category: "fertility",
+    family: "live-birth-cycle",
+    priority: 2,
+    applicableSpecialties: ["infertility"],
+    applicableConditions: [
+      "poor responders", "poor ovarian response", "diminished ovarian reserve",
+      "pcos", "unexplained infertility", "recurrent implantation failure"
+    ],
+    applicableInterventions: [
+      "growth hormone", "gonadotropins", "ivf", "icsi", "coenzyme Q10",
+      "dhea", "letrozole", "clomiphene citrate"
+    ],
+    applicableQuestionTypes: [THERAPY, PROGNOSIS],
+    keywords: ["live birth rate per started cycle", "live birth per started cycle", "lbr per cycle", "started cycle", "per started cycle"],
+    rationale: "It is the most rigorous delivery outcome per treatment intention, accounting for cancelled cycles.",
     measurable: true,
     preferredForPrimaryOutcome: true
   }),

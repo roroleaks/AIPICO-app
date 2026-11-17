@@ -996,3 +996,28 @@ test("OS-M07. distinct clinical questions do not all collapse onto one endpoint"
   assert.ok(new Set(recs).size >= 6,
     `only ${new Set(recs).size} distinct recommendations across 8 questions: ${recs.join(" | ")}`);
 });
+
+test("OS-P15. IVF poor responders with growth hormone offers appropriate IVF outcomes and excludes ovulation induction", () => {
+  const ctx = buildOutcomeContext(
+    {
+      specialty: "infertility",
+      condition: "poor responders",
+      intervention: "growth hormone",
+      comparator: "placebo or standard care",
+      questionType: THERAPY,
+      framework: "PICO"
+    },
+    {},
+    { originalInput: "poor responders, IVF, growth hormone, live birth rate", population: "poor responders" }
+  );
+
+  const sel = selectOutcomes(ctx);
+  const ids = sel.options.map(o => o.id);
+
+  // Ovulation rate is for anovulation/PCOS induction, not IVF egg retrieval
+  assert.ok(!ids.includes("ovulation-rate"), `ovulation-rate should not be offered for IVF: ${ids.join(", ")}`);
+
+  // IVF and poor responder relevant endpoints must be present
+  assert.equal(sel.recommendedOutcome.id, "live-birth");
+  assert.ok(ids.includes("clinical-pregnancy") || ids.includes("number-of-oocytes-retrieved") || ids.includes("cycle-cancellation-rate"));
+});
