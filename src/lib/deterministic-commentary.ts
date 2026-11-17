@@ -1,4 +1,4 @@
-import { formatVancouverReference, elementByType, type PicoElement } from "./relevance.ts";
+import { formatVancouverReference, elementByType, auditRef, type PicoElement } from "./relevance.ts";
 import type { AuditableRef } from "./relevance.ts";
 import { extractPicoFromQuestion } from "./pico-parser.ts";
 
@@ -194,10 +194,11 @@ export function generateDeterministicCommentary(
   // Study-by-study summaries
   const studySummaries = entries.map(e => {
     const cleanTitle = e.title.replace(/\.$/, "");
-    const contextSnippet = e.context && e.context.length > 40
+    const aud = auditRef(e.record, opts.elements || []);
+    const outcomeSnippet = aud.outcome
       ? ` The investigation specifically evaluated clinical and laboratory parameters in relation to therapeutic protocols and reported findings relevant to ${outVal || outcomesText}.`
-      : "";
-    return `In an indexed ${e.design}, ${e.firstAuthor} and colleagues (${e.year}) evaluated "${cleanTitle}" in ${e.journal || "peer-reviewed literature"} ${e.numToken}.${contextSnippet} Methodologically, this study provides focused empirical documentation regarding patient selection, protocol parameters, and observed clinical endpoints for this clinical scenario.`;
+      : ` The investigation evaluated clinical parameters in relation to therapeutic protocols, but does not report the selected outcome in its title/abstract.`;
+    return `In an indexed ${e.design}, ${e.firstAuthor} and colleagues (${e.year}) evaluated "${cleanTitle}" in ${e.journal || "peer-reviewed literature"} ${e.numToken}.${outcomeSnippet} Methodologically, this study provides focused empirical documentation regarding patient selection, protocol parameters, and observed clinical endpoints for this clinical scenario.`;
   });
 
   // Comprehensive Discussion sections

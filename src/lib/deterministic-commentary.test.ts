@@ -351,3 +351,48 @@ test("P0-3: deterministic commentary contains no fabricated appraisal claims", (
   assert.ok(!fullText.includes("Clinical concordance across studies is observed"), "must not fabricate clinical concordance");
   assert.ok(!fullText.includes("verified clinical records"), "must not claim verified records analyzed");
 });
+
+test("P0-7: study summary states lack of outcome reporting when audit shows out ✗", () => {
+  const recordsWithMixedOutcomes: AuditableRef[] = [
+    {
+      pmid: "1001",
+      authors: "Smith A",
+      year: "2021",
+      title: "Growth hormone protocols in poor ovarian responders",
+      journal: "Hum Reprod",
+      context: "poor ovarian response women treated with growth hormone, but outcome reported was oocyte yield, not live birth rate"
+    },
+    {
+      pmid: "1002",
+      authors: "Jones B",
+      year: "2022",
+      title: "Growth hormone and live birth rate in IVF",
+      journal: "Fertil Steril",
+      context: "poor ovarian response in IVF evaluated for live birth rate following growth hormone"
+    }
+  ];
+
+  const elements: PicoElement[] = [
+    { label: "P — Population", value: "poor ovarian response in IVF" },
+    { label: "I — Intervention", value: "growth hormone" },
+    { label: "O — Outcome", value: "live birth rate" }
+  ];
+
+  const out = generateDeterministicCommentary({
+    selectedQuestion: "In women with poor ovarian response, does growth hormone improve live birth rate?",
+    outcomesText: "live birth rate",
+    reason: "deterministic",
+    pool: recordsWithMixedOutcomes,
+    elements
+  });
+
+  const disc = String(out.discussion);
+  assert.ok(
+    disc.includes("does not report the selected outcome in its title/abstract"),
+    "Record with outcome ✗ must state that it does not report the selected outcome"
+  );
+  assert.ok(
+    disc.includes("reported findings relevant to live birth rate"),
+    "Record with outcome ✓ must state relevant findings"
+  );
+});
