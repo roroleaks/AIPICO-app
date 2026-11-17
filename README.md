@@ -1,4 +1,4 @@
-# AIPICO v3.1 — Evidence-Grounded Clinical Question Assistant (Obstetrics & Gynecology)
+# AIPICO v3.2 — Evidence-Grounded Clinical Question Assistant (Obstetrics & Gynecology)
 
 Turns a clinical inquiry into a structured PICO, formulates candidate literature queries, retrieves and validates evidence from PubMed and partner repositories, and generates publication-grade evidence syntheses and commentaries where **every cited reference resolves strictly to a source that survived deterministic, claim-specific filtering**.
 
@@ -67,6 +67,11 @@ The application has undergone verification against all 13 defect items from `res
 - **v3.1 Accessibility Compliance (A1–A4)**: Complete WCAG 2.1 AA support including `aria-pressed` on mode toggles and citation pills, visible `<label htmlFor>` descriptors, `<form>` encapsulation, and keyboard skip-links.
 - **v3.1 State Hygiene (S1, G1)**: Session reset handler purges all cached state upon restart, and route guards redirect direct unhydrated visits to Step 1.
 - **v3.1 Citation Formatting & Depth (D1, D2, U1, U3)**: In-text Vancouver citations render as true superscript digits (`¹⁻²`, `¹,²`) without trailing periods, reference bibliographies synthesize 5+ direct evidence sources, and Step 2 provides a 6-item shimmer skeleton loader.
+- **v3.2 Enhancements (Integrity, Multi-Provider Reliability & Security)**:
+  - **Scientific Integrity & Accounting Invariants (P0)**: Excluded records remain partitioned from direct evidence; retrieval accounting strictly maintains `retrieved = retained + excluded`; visible synthesis provenance badges distinguish AI-assisted vs template runs; off-topic candidates are filtered out of evidence maps; blanket citation ranges covering ≥75% of references on generic sentences are flagged.
+  - **Structural Integrity & Clinical Endpoints (P1)**: Markdown structure preserved across claim finalization; study summaries treated as cohesive units; commentary retry recursion replaced with sequential loop and single lock; user's specified outcome preserved verbatim across all stages; IVF outcome ontology added.
+  - **Multi-Provider Failover & Telemetry (P2)**: Per-stage timeouts with request deadline tracking; automatic failover across Gemini, Groq, OpenRouter, and OpenAI providers; rate limits adjusted to 20 req/min with `x-real-ip` support.
+  - **Dependency Upgrades & CI (P3)**: Next.js upgraded to 16.4.6, Zod to ^4.6.6; production dependencies verified clean (0 vulnerabilities); zero ESLint errors; GitHub Actions CI workflow added; UI icons and terminology refined.
 
 ---
 
@@ -108,7 +113,7 @@ src/
 
 ## Verification and Testing
 
-The repository contains **424 unit tests across 22 test suites** executed via Node.js native test runner (`node:test` and `node:assert/strict`):
+The repository contains **450 unit tests across 24 test suites** executed via Node.js native test runner (`node:test` and `node:assert/strict`):
 
 ```bash
 # Run all repository unit tests
