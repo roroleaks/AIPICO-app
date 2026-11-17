@@ -11,6 +11,7 @@ interface Reference { pmid: string; title: string; authors: string; year: string
 interface PointWithRefs { point: string; references: Reference[] }
 interface GapResult {
   topic: string; specialty?: string;
+  source?: string;
   known: PointWithRefs[]; uncertain: PointWithRefs[];
   gaps: { gap: string; why: string }[];
   suggestedQuestions: { question: string; rationale: string }[];
@@ -191,7 +192,12 @@ export default function GapPage() {
         {gap && !isEmptyResult(gap) && (
           <section className="card" ref={mapRef}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
-              <span className="pill">🗺️ Evidence Map · {gap.topic}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span className="pill">🗺️ Evidence Map · {gap.topic}</span>
+                <span className="pill" style={{ background: gap.source === "ai" ? "#ecfdf5" : "#f1f5f9", color: gap.source === "ai" ? "#065f46" : "#475569", fontWeight: 600 }}>
+                  {gap.source === "ai" ? "🤖 AI-assisted" : "📋 Template (no AI)"}
+                </span>
+              </div>
               <div className="row">
                 {exportError && <div className="advisory">{exportError}</div>}
                 <button className="secondary" disabled={!!exporting || !gap.known?.length} title={!gap.known?.length ? "No established-evidence records to export" : undefined} onClick={() => exportEvidencePDF("known")}>{exporting === "known" ? "⏳ Generating PDF…" : "📄 Established Knowledge (PDF)"}</button>

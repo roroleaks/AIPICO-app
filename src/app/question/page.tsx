@@ -40,6 +40,7 @@ export default function QuestionPage() {
   const [citationStyle, setCitationStyle] = useState<CitationStyle>("vancouver");
   const [busy, setBusy] = useState<"loading" | "formulate" | null>("loading");
   const [notice, setNotice] = useState<string | null>(null);
+  const [source, setSource] = useState<string>("rules");
 
   // Collect literature keywords from Step 2 evidence map
   const getLiteratureKeywords = useCallback((): string[] => {
@@ -183,7 +184,8 @@ export default function QuestionPage() {
       if (isCancelled) return;
       try {
         const question = sget<string>(KEYS.question);
-        const gapSnapshot = sget<GapSnapshot>(KEYS.gap);
+        const gapSnapshot = sget<GapSnapshot & { source?: string }>(KEYS.gap);
+        if (gapSnapshot?.source) setSource(gapSnapshot.source);
         const normalized = sget<string>(KEYS.inputText);
         const stored = readSessionInput(sget<unknown>(KEYS.input));
         const fallbackText = question
@@ -283,8 +285,13 @@ export default function QuestionPage() {
       <main id="main" className="solo">
         {extractedPico && (
           <section className="card">
-            <span className="pill">💡 Target PICO Question · {KB[extractedPico.specialty]?.label || "Obstetrics & Gynecology"}</span>
-            <div className="final-q" style={{ marginTop: 10, marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+              <span className="pill">💡 Target PICO Question · {KB[extractedPico.specialty]?.label || "Obstetrics & Gynecology"}</span>
+              <span className="pill" style={{ background: source === "ai" ? "#ecfdf5" : "#f1f5f9", color: source === "ai" ? "#065f46" : "#475569", fontWeight: 600 }}>
+                {source === "ai" ? "🤖 AI-assisted" : "📋 Template (no AI)"}
+              </span>
+            </div>
+            <div className="final-q" style={{ marginTop: 6, marginBottom: 12 }}>
               <b>{extractedPico.cleanQuestion}</b>
             </div>
             <div className="row" style={{ gap: 8, marginTop: 4 }}>

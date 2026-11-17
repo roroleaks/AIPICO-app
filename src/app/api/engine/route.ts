@@ -1345,7 +1345,7 @@ const noDirectEvidence = directPool.length === 0;
         ...(commentarySource === "deterministic"
           ? {
               notice:
-                "Evidence synthesis structured directly from peer-reviewed literature and verified against Vancouver citation standards."
+                "AI synthesis unavailable. This text is a structured template listing the retrieved records; it does not summarise their findings. Read the sources before use."
             }
           : {}),
         fetchedReferences: curatedRecords,
@@ -1717,7 +1717,7 @@ Respond ONLY with JSON.`,
           ...fallbackCommentary,
           source: "deterministic",
           synthesisGenerated: true,
-          notice: "Evidence synthesis generated via deterministic protocol following service recovery.",
+          notice: "AI synthesis unavailable. This text is a structured template listing the retrieved records; it does not summarise their findings. Read the sources before use.",
           fetchedReferences: [],
           additionalEvidence: [],
           contextualReferences: [],

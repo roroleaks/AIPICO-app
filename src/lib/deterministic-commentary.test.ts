@@ -335,3 +335,19 @@ test("the reference pool is capped so a large pool cannot flood the paper", () =
   assert.deepEqual(checks.uncited, []);
   assert.deepEqual(checks.orphans, []);
 });
+
+test("P0-3: deterministic commentary contains no fabricated appraisal claims", () => {
+  const out = generateDeterministicCommentary({
+    selectedQuestion: "In women with poor ovarian response, does growth hormone compared with placebo improve live birth rate?",
+    outcomesText: "live birth rate",
+    reason: "no AI provider key is configured for this instance",
+    pool: CERVIX_RECORDS,
+    elements: CERVIX
+  });
+
+  const fullText = [out.abstract, out.introduction, out.discussion, out.conclusion].join(" ");
+  assert.ok(!fullText.includes("overall certainty of evidence"), "must not claim certainty rating");
+  assert.ok(!fullText.includes("variable degrees of allocation concealment"), "must not claim allocation concealment");
+  assert.ok(!fullText.includes("Clinical concordance across studies is observed"), "must not fabricate clinical concordance");
+  assert.ok(!fullText.includes("verified clinical records"), "must not claim verified records analyzed");
+});

@@ -172,7 +172,7 @@ export function generateDeterministicCommentary(
   const abstract =
     `Background: Clinical management of ${popVal || "the target clinical cohort"} presents significant therapeutic complexity, where optimizing ${outVal || outcomesText} represents a paramount clinical milestone. Underlying biological variations and heterogeneous protocolization often lead to clinical equipoise regarding therapeutic strategies. ` +
     `Objective: To systematically synthesize and critically appraise current peer-reviewed evidence evaluating ${cleanQ} ${allCiteToken}. ` +
-    `Methods & Evidence Scope: Multi-database indexing across PubMed/MEDLINE, Europe PMC, OpenAlex, and Crossref was filtered against strict PICO claim-level relevance boundaries. A total of ${n} verified clinical record${plural ? "" : "s"} ${yearSpanText} ${plural ? "was" : "were"} retained and analyzed for ${outVal || outcomesText} ${allCiteToken}. ` +
+    `Methods & Evidence Scope: Multi-database indexing across PubMed/MEDLINE, Europe PMC, OpenAlex, and Crossref was filtered against strict PICO claim-level relevance boundaries. A total of ${n} clinical record${plural ? "" : "s"} ${yearSpanText} ${plural ? "was" : "were"} retrieved and cataloged for ${outVal || outcomesText} ${allCiteToken}. ` +
     `Results & Synthesis: The retained evidence base ${allCiteToken} provides grounded clinical data examining therapeutic protocols and observed clinical endpoints across the evaluated patient cohort. ` +
     `    Clinical Interpretation: Current literature underscores the necessity of precise patient stratification, individualized intervention timing, and meticulous clinical risk evaluation rather than empirical universal application. ` +
     `Conclusion: The available evidence base provides essential clinical insights into ${outVal || outcomesText} in ${popVal || "this population"} ${allCiteToken}, while highlighting the imperative for standardized multi-center randomized investigations to resolve remaining clinical uncertainties.`;
@@ -222,16 +222,16 @@ export function generateDeterministicCommentary(
   const discComparative =
     `#### Comparative Analysis & Clinical Concordance\n` +
     `Across the retained investigations ${allCiteToken}, clinical observations reflect a consistent focus on optimizing ${outVal || outcomesText} through individualized therapeutic protocols. ` +
-    `Clinical concordance across studies is observed regarding the necessity of baseline risk assessment and standardized monitoring. ` +
+    `Review of the retrieved publications indicates consideration of baseline risk assessment and standardized monitoring. ` +
     `Where variations in reported outcomes emerge, they appear primarily attributable to heterogeneity in patient age distribution, disease severity staging, baseline functional reserves, and differing co-intervention protocols. ` +
     `These comparative nuances demonstrate that therapeutic response is rarely uniform, reinforcing the clinical requirement for phenotype-specific stratification.`;
 
   const discMethodology =
     `#### Methodological Quality, Risk of Bias & Evidence Certainty\n` +
-    `Critical appraisal of the evidence base under GRADE principles reveals important methodological strengths alongside recognizable constraints ${allCiteToken}. ` +
-    `Strengths include detailed reporting of clinical endpoints and verifiable peer-reviewed publication with documented DOIs and PMIDs. ` +
-    `However, potential sources of bias across the literature include single-center participant recruitment, variable degrees of allocation concealment, and modest sample sizes that limit statistical power for detecting small effect sizes. ` +
-    `Consequently, the overall certainty of evidence regarding ${outVal || outcomesText} across unselected populations is appropriately characterized as moderate to low, requiring cautious clinical interpretation.`;
+    `Examination of the retrieved publications reveals varied study designs and reporting characteristics across the literature ${allCiteToken}. ` +
+    `Identified records provide documentation of clinical parameters alongside peer-reviewed publication details, DOIs, and PMIDs. ` +
+    `Reported study characteristics reflect individual sample definitions, observational or trial designs, and clinical monitoring criteria. ` +
+    `Formal determination of evidence certainty requires dedicated systematic review protocols and standardized risk-of-bias tools.`;
 
   const discClinicalTranslation =
     `#### Clinical Interpretation & Practice Translation\n` +

@@ -641,7 +641,7 @@ export default function PaperPage() {
     dlPdf({
       docType: "Scientific Commentary",
       title: commentary.title,
-      meta: `Obstetrics & Gynecology · Generated ${new Date().toLocaleDateString()}`,
+      meta: `Obstetrics & Gynecology · Generated ${new Date().toLocaleDateString()} · ${commentary.source === "ai" ? "AI-assisted" : "Template (no AI)"}`,
       citationStyle,
       pico: picoPayload(),
       outcomes: outcomes.length ? outcomes : undefined,
@@ -671,7 +671,7 @@ export default function PaperPage() {
 
       const payload = {
         title: commentary.title,
-        meta: `Obstetrics & Gynecology · Generated ${new Date().toLocaleDateString()}`,
+        meta: `Obstetrics & Gynecology · Generated ${new Date().toLocaleDateString()} · ${commentary.source === "ai" ? "AI-assisted" : "Template (no AI)"}`,
         citationStyle,
         pico: picoPayload(),
         outcomes: outcomes.length ? outcomes : undefined,
@@ -746,7 +746,12 @@ export default function PaperPage() {
         {(commentary || commentaryLoading || commentaryError) && (
           <section className="card" ref={commentaryRef}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
-              <span className="pill">📄 Scientific Commentary Paper</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span className="pill">📄 Scientific Commentary Paper</span>
+                <span className="pill" style={{ background: commentary?.source === "ai" ? "#ecfdf5" : "#f1f5f9", color: commentary?.source === "ai" ? "#065f46" : "#475569", fontWeight: 600 }}>
+                  {commentary?.source === "ai" ? "🤖 AI-assisted" : "📋 Template (no AI)"}
+                </span>
+              </div>
               <div className="row">
                 {exportError && <div className="advisory">{exportError}</div>}
                 {commentary && !!commentary.references?.length && <button className="secondary" disabled={!!exporting} onClick={exportCommentaryRefs}>{exporting === "refs" ? "⏳ Generating PDF…" : "📄 References PDF"}</button>}
@@ -1113,7 +1118,7 @@ export default function PaperPage() {
         </section>
 
         <section className="card">
-          <span className="pill">📊 Quality Assessment ({total}/{maxTotal})</span>
+          <span className="pill">📋 Rule-based completeness checklist ({total}/{maxTotal})</span>
           {formulation.scores.map(s => (
             <div key={s.name} className="score-row">
               <span className="score-name">{s.name}</span>
