@@ -88,10 +88,10 @@ export function extractPicoFromQuestion(
 
   // Strategy 1: Check for explicit (P), (I), (C), (O) markers
   // e.g. "In women with preterm birth risk (P), does vaginal progesterone (I) compared with cervical cerclage (C) improve primary patient-centered clinical outcomes (O)?"
-  const explicitPMatch = q.match(/([^(]+?)\s*\(P\)/i);
-  const explicitIMatch = q.match(/([^(]+?)\s*\(I\)/i);
-  const explicitCMatch = q.match(/([^(]+?)\s*\(C\)/i);
-  const explicitOMatch = q.match(/([^(]+?)\s*\(O\)/i);
+  const explicitPMatch = q.match(/^(?:In|For|Among)?\s*(.+?)\s*\(P\)/i) || q.match(/([^(]+?)\s*\(P\)/i);
+  const explicitIMatch = q.match(/\(P\)[^]*?\b(?:does|is|do|what is the effect of)\s+(.+?)\s*\(I\)/i) || q.match(/([^(]+?)\s*\(I\)/i);
+  const explicitCMatch = q.match(/\(I\)[^]*?\b(?:compared with|versus|vs\.?)\s+(.+?)\s*\(C\)/i) || q.match(/([^(]+?)\s*\(C\)/i);
+  const explicitOMatch = q.match(/\(C\)[^]*?(?:improve|reduce|increase|avert|lower|decrease|affect|impact|lead to|shorten|optimize)\s+(.+?)\s*\(O\)/i) || q.match(/([^(]+?)\s*\(O\)/i);
 
   if (explicitPMatch && explicitPMatch[1]) {
     condition = cleanPicoToken(explicitPMatch[1]);
@@ -174,10 +174,10 @@ export function extractPicoFromQuestion(
         const scenario = parseClinicalScenario(topic);
         condition = scenario.population;
       } catch {
-        condition = topic.split(",")[0].trim();
+        condition = topic.split(",")[0]?.trim() || "";
       }
     } else {
-      condition = "high-risk clinical population";
+      condition = "";
     }
   }
 
@@ -201,10 +201,10 @@ export function extractPicoFromQuestion(
         intervention = scenario.intervention;
       } catch {
         const parts = topic.split(",").map(p => p.trim());
-        intervention = parts[1] || parts[0] || "evaluated clinical intervention";
+        intervention = parts[1] || parts[0] || "";
       }
     } else {
-      intervention = "evaluated clinical intervention";
+      intervention = "";
     }
   }
 
@@ -237,11 +237,11 @@ export function extractPicoFromQuestion(
     outcome = specKB.outcomesRanked[0] || "primary clinical outcome";
   }
 
-  // Guarantee condition does not contain comma-separated lists or mixed interventions
+  // Enforce condition does not contain comma-separated lists or mixed interventions
   if (condition.includes(",") || condition.split(/\s+/).length > 5) {
     const scenario = parseClinicalScenario(`${condition} ${topic}`);
     condition = scenario.population;
-    if (!intervention || intervention === "evaluated clinical intervention") {
+    if (!intervention) {
       intervention = scenario.intervention;
     }
     if (!comparator || comparator === "standard protocol") {
@@ -258,7 +258,7 @@ export function extractPicoFromQuestion(
     comparator: comparator.trim(),
     outcome: outcome.trim(),
     specialty,
-    cleanQuestion: cleanQ || `In women with ${condition}, does ${intervention} compared with ${comparator} improve ${outcome}?`,
+    cleanQuestion: cleanQ || (condition && intervention ? `In women with ${condition}, does ${intervention} compared with ${comparator} improve ${outcome}?` : q),
     inferredComparator
   };
 }

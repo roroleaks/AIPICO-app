@@ -169,26 +169,31 @@ test("parseClinicalScenario accurately differentiates poor responders, IVF, grow
     "Population must integrate condition and procedural IVF setting"
   );
   assert.equal(scenario.intervention, "growth hormone", "Growth hormone must strictly be intervention");
-  assert.equal(scenario.comparator, "coenzyme Q10", "Coenzyme Q10 must strictly be comparator");
+  assert.equal(
+    scenario.comparator,
+    "no growth hormone (standard protocol)",
+    "Default comparator should be standard protocol rather than silently forcing second adjuvant"
+  );
+  assert.equal(scenario.clarificationRequired, true, "Must flag clarification required for multiple adjuvants");
+  assert.ok(scenario.comparisonOptions && scenario.comparisonOptions.length > 0, "Must provide comparison options");
   assert.ok(
     scenario.outcomes.some(o => o.toLowerCase().includes("pregnancy rate")),
     "Outcome must include pregnancy rate"
   );
 
   for (const sq of scenario.suggestedQuestions) {
-    assert.ok(sq.question.includes("growth hormone (I)"), "Intervention slot must contain growth hormone");
-    assert.ok(sq.question.includes("coenzyme Q10 (C)"), "Comparator slot must contain coenzyme Q10");
     assert.ok(sq.question.includes("(P)"), "Must have (P) marker");
     assert.ok(sq.question.includes("(O)"), "Must have (O) marker");
-    assert.ok(!sq.question.includes("co enzyme q10 (P)"), "CoQ10 must NEVER be classified as population");
-    assert.ok(!sq.question.includes("growth hormone (O)"), "Growth hormone must NEVER be classified as outcome");
+    assert.ok(!sq.question.includes("co enzyme q10 (P)"), "CoQ10 must not be classified as population");
+    assert.ok(!sq.question.includes("growth hormone (O)"), "Growth hormone must not be classified as outcome");
+    assert.ok(!sq.question.includes("co enzyme q10 (O)"), "CoQ10 must not be classified as outcome");
   }
 
   // Roundtrip extraction
   const extracted = extractPicoFromQuestion(scenario.suggestedQuestions[0].question, input);
   assert.equal(extracted.condition, "poor ovarian response undergoing IVF");
   assert.equal(extracted.intervention, "growth hormone");
-  assert.equal(extracted.comparator, "coenzyme Q10");
+  assert.equal(extracted.comparator, "no growth hormone (standard protocol)");
 });
 
 test("P1-4: outcome synonyms maintain separate canonical outcomes for distinct endpoints", () => {

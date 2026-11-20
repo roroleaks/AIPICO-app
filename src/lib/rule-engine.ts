@@ -1,6 +1,6 @@
 import { KB, QUESTION_TYPES, SYNONYMS, rationalOutcomes, type Analysis, type Clarification, type Formulation, type SpecialtyKey } from "./kb.ts";
 import { buildOutcomeContext, selectOutcomes } from "./outcome-selection.ts";
-import { formulateOutcomeVerbPhrase, toInlineCase } from "./clinical-semantics.ts";
+import { formulateOutcomeVerbPhrase, toInlineCase, resolveKnownOutcome, isAdjuvantIntervention } from "./clinical-semantics.ts";
 
 function normalize(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -165,25 +165,57 @@ export function normalizeCondition(cond: string): string {
 export function ruleFormulate(analysis: Analysis, answered: Record<string, string>): Formulation {
   const a = (analysis || {}) as Partial<Analysis>;
   const ans = (answered || {}) as Record<string, string>;
-  const cond = ans.condition || a.condition || "";
+  const cond = (ans.condition || a.condition || "").trim();
   const cleanCond = normalizeCondition(cond);
-  const iv = ans.intervention || a.intervention || "";
-  const comp = ans.comparator || a.comparator || "no treatment";
-  const out = ans.outcome || "a clinically meaningful outcome";
+  const iv = (ans.intervention || a.intervention || "").trim();
+  const comp = (ans.comparator || a.comparator || "").trim();
 
-  // Without a population and an intervention the switch below emits a fluent, confident question
-  // containing invented content - "In women with the population of interest, does the intervention
-  // compared with no treatment improve a clinically meaningful outcome?" That reads as a clinical
-  // question while asserting nothing, which is worse than an error in a decision-support tool. So
-  // refuse and name the elements the caller still owes, rather than fabricate. Comparator and
-  // outcome keep their neutral defaults: "no treatment" and "a clinically meaningful outcome" are
-  // defensible positions for a PICO, whereas inventing a population is not.
+  // Resolve specialty
+  const specKey: SpecialtyKey | null =
+    a.specialty && KB[a.specialty as SpecialtyKey] ? (a.specialty as SpecialtyKey) : null;
+  const spec = specKey ? KB[specKey] : null;
+
   const missingElements: string[] = [];
-  if (!cond.trim()) missingElements.push("condition");
-  if (!iv.trim()) missingElements.push("intervention");
+  if (!cond) missingElements.push("condition");
+  if (!iv) missingElements.push("intervention");
+
+  let effectiveComp = comp;
+  if (!effectiveComp) {
+    if (specKey === "infertility" && isAdjuvantIntervention(iv)) {
+      effectiveComp = `no ${iv} (standard protocol)`;
+    } else if (specKey === "obstetrics") {
+      effectiveComp = "standard care or expectant management";
+    } else {
+      effectiveComp = "standard care";
+    }
+  }
+
+  const rawOut = (ans.outcome || ((a as unknown as Record<string, unknown>).outcome as string) || "").trim();
+  const isPlaceholder = !rawOut || /a clinically meaningful outcome|meaningful outcome/i.test(rawOut);
+
+  let out: string;
+  if (isPlaceholder) {
+    const outcomeLogic = rationalOutcomes(cleanCond, specKey);
+    out = outcomeLogic.primary || (spec ? spec.outcomesRanked[0] : "") || "live birth rate";
+  } else {
+    const resolved = resolveKnownOutcome(rawOut);
+    const ivLower = iv.toLowerCase();
+    const compLower = effectiveComp.toLowerCase();
+    const rawLower = rawOut.toLowerCase();
+
+    const matchesIvOrComp = (ivLower && rawLower === ivLower) || (compLower && rawLower === compLower) || (resolved && (resolved.canonical.toLowerCase() === ivLower || resolved.canonical.toLowerCase() === compLower));
+
+    if (!resolved || !resolved.valid || matchesIvOrComp) {
+      missingElements.push("outcome");
+      out = "";
+    } else {
+      out = resolved.canonical || rawOut;
+    }
+  }
+
   if (missingElements.length) {
     return {
-      framework: a.framework as Formulation["framework"],
+      framework: (a.framework || "PICO") as Formulation["framework"],
       elements: [],
       finalQuestion: "",
       variants: [],
@@ -198,18 +230,16 @@ export function ruleFormulate(analysis: Analysis, answered: Record<string, strin
 
   let finalQuestion: string;
   let elements: { label: string; value: string }[];
-  // Resolve the specialty once, against the KB, so an unrecognized truthy value such as "nope"
-  // becomes null here instead of being handed to KB lookups further down.
-  const specKey: SpecialtyKey | null =
-    a.specialty && KB[a.specialty as SpecialtyKey] ? (a.specialty as SpecialtyKey) : null;
-  const spec = specKey ? KB[specKey] : null;
-  switch (a.framework) {
+  const framework = a.framework || "PICO";
+  const actionPhrase = formulateOutcomeVerbPhrase("primary", out) || `improve ${toInlineCase(out)}`;
+
+  switch (framework) {
     case "PICO":
-      finalQuestion = `In women with ${toInlineCase(cleanCond)}, does ${toInlineCase(iv)} compared with ${toInlineCase(comp)} ${formulateOutcomeVerbPhrase("primary", out)}?`;
+      finalQuestion = `In women with ${toInlineCase(cleanCond)}, does ${toInlineCase(iv)} compared with ${toInlineCase(effectiveComp)} ${actionPhrase}?`;
       elements = [
         { label: "P — Population", value: `Women with ${cleanCond}` },
         { label: "I — Intervention", value: iv },
-        { label: "C — Comparator", value: comp },
+        { label: "C — Comparator", value: effectiveComp },
         { label: "O — Outcome", value: out }
       ];
       break;
@@ -223,18 +253,18 @@ export function ruleFormulate(analysis: Analysis, answered: Record<string, strin
       ];
       break;
     default:
-      finalQuestion = `In women with ${toInlineCase(cleanCond)}, is exposure to ${iv} associated with ${out} compared with unexposed women?`;
+      finalQuestion = `In women with ${toInlineCase(cleanCond)}, does ${toInlineCase(iv)} compared with ${toInlineCase(effectiveComp)} ${actionPhrase}?`;
       elements = [
         { label: "P — Population", value: `Women with ${cleanCond}` },
-        { label: "E — Exposure", value: iv },
-        { label: "C — Comparator", value: comp },
+        { label: "I — Intervention", value: iv },
+        { label: "C — Comparator", value: effectiveComp },
         { label: "O — Outcome", value: out }
       ];
   }
   const scores = [
     { name: "Population", value: cond ? 18 : 8 },
     { name: "Intervention/Exposure", value: iv ? 19 : 10 },
-    { name: "Comparator", value: comp ? 18 : 12 },
+    { name: "Comparator", value: effectiveComp ? 18 : 12 },
     { name: "Outcome", value: 14 },
     { name: "Specificity", value: 17 }
   ];
@@ -281,10 +311,11 @@ export function ruleFormulate(analysis: Analysis, answered: Record<string, strin
     ...altOutcomes.map((o, idx) => {
       const verbType = idx === 0 ? "secondary" : "subgroup";
       let vQuestion: string;
-      if (a.framework === "PICO") {
-        vQuestion = `In women with ${toInlineCase(cleanCond)}, does ${toInlineCase(iv)} compared with ${toInlineCase(comp)} ${formulateOutcomeVerbPhrase(verbType, o)}?`;
-      } else {
+      const vAction = formulateOutcomeVerbPhrase(verbType, o) || `improve ${toInlineCase(o)}`;
+      if (framework === "Diagnostic accuracy (PIRD)") {
         vQuestion = finalQuestion.replace(new RegExp(out.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), o);
+      } else {
+        vQuestion = `In women with ${toInlineCase(cleanCond)}, does ${toInlineCase(iv)} compared with ${toInlineCase(effectiveComp)} ${vAction}?`;
       }
       return {
         question: vQuestion,
@@ -293,13 +324,13 @@ export function ruleFormulate(analysis: Analysis, answered: Record<string, strin
     })
   ].slice(0, 4);
   return {
-    framework: a.framework as Formulation["framework"],
+    framework: framework as Formulation["framework"],
     elements,
     finalQuestion,
     variants,
     scores,
     advisories,
-    searchTerms: { population: cond, intervention: iv, outcome: out },
+    searchTerms: { population: cleanCond, intervention: iv, outcome: out },
     source: "rules",
     complete: true,
     missingElements: []

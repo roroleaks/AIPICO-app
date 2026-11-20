@@ -1,4 +1,5 @@
 import { KB, type SpecialtyKey } from "./kb.ts";
+import { OUTCOME_ONTOLOGY } from "./outcome-ontology.ts";
 
 export interface ParsedClinicalScenario {
   specialty: SpecialtyKey;
@@ -7,6 +8,11 @@ export interface ParsedClinicalScenario {
   comparator: string;
   outcomes: string[];
   suggestedQuestions: Array<{ question: string; rationale: string }>;
+  unrecognizedTerms?: string[];
+  comparisonOptions?: Array<{ label: string; intervention: string; comparator: string }>;
+  clarificationRequired?: boolean;
+  clarificationPrompt?: string;
+  advisories?: string[];
 }
 
 export type OutcomeDirection = "adverse" | "desirable" | "neutral";
@@ -328,7 +334,8 @@ const MEDICAL_TAXONOMY: MedicalTermEntry[] = [
     specialty: "infertility",
     synonyms: [
       "coenzyme q10", "co enzyme q10", "co-enzyme q10", "coq10",
-      "ubiquinol", "ubiquinone", "coenzyme q10 supplementation", "co enzyme q 10"
+      "ubiquinol", "ubiquinone", "coenzyme q10 supplementation", "co enzyme q 10",
+      "co enzyem q 10", "co enzyem q10"
     ]
   },
   {
@@ -442,7 +449,11 @@ const MEDICAL_TAXONOMY: MedicalTermEntry[] = [
     category: "outcome",
     specialty: "gynecology",
     direction: "desirable",
-    synonyms: ["health-related quality of life", "quality of life", "qol", "patient satisfaction", "ephq-30"]
+    synonyms: [
+      "health-related quality of life", "quality of life", "qol", "patient satisfaction",
+      "patient-reported quality of life", "patient-reported quality of life and treatment satisfaction",
+      "treatment satisfaction", "ephq-30"
+    ]
   },
   {
     canonical: "disease recurrence rate",
@@ -534,6 +545,296 @@ const PRESERVED_ACRONYMS = new Set([
 ]);
 
 /**
+ * Normalization aliases for common clinical misspellings and abbreviation forms.
+ */
+export const CLINICAL_ALIASES: Record<string, string> = {
+  "co enzyem q 10": "coenzyme Q10",
+  "co enzyem q10": "coenzyme Q10",
+  "co enzyme q 10": "coenzyme Q10",
+  "co enzyme q10": "coenzyme Q10",
+  "co-enzyme q 10": "coenzyme Q10",
+  "co-enzyme q10": "coenzyme Q10",
+  "coq 10": "coenzyme Q10",
+  "coq10": "coenzyme Q10",
+  "ubiquinol": "coenzyme Q10",
+  "ubiquinone": "coenzyme Q10",
+  "growth hormon": "growth hormone",
+  "growth-hormone": "growth hormone",
+  "somatotropine": "growth hormone",
+  "clomiphene": "clomiphene citrate",
+  "letrozol": "letrozole",
+  "progesteron": "progesterone",
+  "por": "poor ovarian response",
+  "dor": "diminished ovarian reserve",
+  "pcos": "polycystic ovary syndrome",
+  "gdm": "gestational diabetes mellitus",
+  "pph": "postpartum hemorrhage"
+};
+
+/**
+ * Computes Levenshtein distance between two normalized strings.
+ */
+export function levenshteinDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return dp[m][n];
+}
+
+/**
+ * Check whether an intervention is an adjuvant / add-on pharmacotherapy.
+ */
+export function isAdjuvantIntervention(name: string): boolean {
+  return /growth hormone|somatotropin|coenzyme|coq10|dhea|prp|platelet-rich|antioxidant|inositol|myo-inositol|melatonin|supplement|adjuvant|vitamin\s*[de]/i.test(name);
+}
+
+/**
+ * Resolves a candidate outcome string against MEDICAL_TAXONOMY, OUTCOME_ONTOLOGY, and KB.
+ * Rejects terms that represent interventions or conditions.
+ */
+export function resolveKnownOutcome(outcomeStr: string): {
+  valid: boolean;
+  canonical: string;
+  direction: OutcomeDirection;
+  category?: string;
+} | null {
+  if (!outcomeStr || typeof outcomeStr !== "string") return null;
+  const raw = outcomeStr.trim();
+  const lower = raw.toLowerCase().replace(/[^\w\s-]/g, " ").replace(/\s+/g, " ").trim();
+  if (lower.length < 2) return null;
+
+  // 1. Reject if the term is known to be an INTERVENTION or CONDITION
+  const normalizedAlias = CLINICAL_ALIASES[lower] || lower;
+  const isIntervention = MEDICAL_TAXONOMY.some(
+    m => m.category === "intervention" && (
+      m.canonical.toLowerCase() === lower ||
+      m.canonical.toLowerCase() === normalizedAlias.toLowerCase() ||
+      m.synonyms.some(s => s.toLowerCase() === lower || s.toLowerCase() === normalizedAlias.toLowerCase())
+    )
+  );
+  if (isIntervention) return null;
+
+  const isCondition = MEDICAL_TAXONOMY.some(
+    m => m.category === "condition" && (
+      m.canonical.toLowerCase() === lower ||
+      m.canonical.toLowerCase() === normalizedAlias.toLowerCase() ||
+      m.synonyms.some(s => s.toLowerCase() === lower || s.toLowerCase() === normalizedAlias.toLowerCase())
+    )
+  );
+  if (isCondition) return null;
+
+  if (/^(growth hormone|somatotropin|coenzyme|coq10|dhea|melatonin|letrozole|clomiphene|aspirin|heparin|metformin|insulin|progesterone|cerclage|pessary|dienogest|myomectomy)\b/i.test(lower)) {
+    return null;
+  }
+
+  // 2. Exact or synonym match in MEDICAL_TAXONOMY category "outcome"
+  const taxMatch = MEDICAL_TAXONOMY.find(
+    m => m.category === "outcome" && (
+      m.canonical.toLowerCase() === lower ||
+      m.synonyms.some(s => s.toLowerCase() === lower || s.toLowerCase() === lower + "s" || lower === s.toLowerCase() + "s")
+    )
+  );
+  if (taxMatch) {
+    return {
+      valid: true,
+      canonical: taxMatch.canonical,
+      direction: taxMatch.direction || getOutcomeDirection(taxMatch.canonical),
+      category: "clinical"
+    };
+  }
+
+  // 3. Match in OUTCOME_ONTOLOGY
+  const ontMatch = OUTCOME_ONTOLOGY.find(o => {
+    const l = o.label.toLowerCase();
+    const sl = o.shortLabel.toLowerCase();
+    return l === lower || sl === lower || o.keywords.some(k => k.toLowerCase() === lower);
+  });
+  if (ontMatch) {
+    return {
+      valid: true,
+      canonical: ontMatch.label,
+      direction: getOutcomeDirection(ontMatch.label),
+      category: ontMatch.category
+    };
+  }
+
+  // 4. Match in KB outcomesRanked
+  for (const spec of Object.values(KB)) {
+    const kbMatch = spec.outcomesRanked.find(o => o.toLowerCase() === lower || lower.includes(o.toLowerCase()));
+    if (kbMatch) {
+      return {
+        valid: true,
+        canonical: kbMatch,
+        direction: getOutcomeDirection(kbMatch),
+        category: "clinical"
+      };
+    }
+  }
+
+  // 5. Generic clinical outcome keywords
+  if (
+    /^(live birth|clinical pregnancy|ongoing pregnancy|miscarriage|preterm birth|fetal growth|preeclampsia|pain relief|blood loss|implantation rate|fertilization rate|ovarian reserve|oocyte yield|blastocyst)/i.test(lower)
+  ) {
+    return {
+      valid: true,
+      canonical: raw,
+      direction: getOutcomeDirection(raw),
+      category: "clinical"
+    };
+  }
+
+  // 6. Fuzzy match on taxonomy outcome synonyms (Levenshtein <= 2 for length >= 6)
+  if (lower.length >= 6) {
+    for (const entry of MEDICAL_TAXONOMY) {
+      if (entry.category !== "outcome") continue;
+      for (const syn of entry.synonyms) {
+        if (Math.abs(syn.length - lower.length) <= 2) {
+          const dist = levenshteinDistance(lower, syn.toLowerCase());
+          if (dist <= 2) {
+            return {
+              valid: true,
+              canonical: entry.canonical,
+              direction: entry.direction || getOutcomeDirection(entry.canonical),
+              category: "clinical"
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Deduplicate outcomes using Jaccard token overlap (threshold > 0.7), retaining the more specific outcome.
+ * Preserves the first `preserveFirstN` outcomes (user-matched) so default ontology items do not displace them.
+ */
+export function dedupeOutcomes(outcomes: string[], preserveFirstN = 0): string[] {
+  const result: string[] = [];
+  for (let idx = 0; idx < outcomes.length; idx++) {
+    const outcome = outcomes[idx];
+    const trimmed = outcome.trim();
+    if (!trimmed) continue;
+    const tokens = trimmed.toLowerCase().split(/\s+/).filter(Boolean);
+    let isDupe = false;
+    for (let i = 0; i < result.length; i++) {
+      const existing = result[i];
+      const existingTokens = existing.toLowerCase().split(/\s+/).filter(Boolean);
+      const intersection = tokens.filter(t => existingTokens.includes(t));
+      const union = new Set([...tokens, ...existingTokens]);
+      const jaccard = union.size > 0 ? intersection.length / union.size : 0;
+      if (jaccard > 0.7) {
+        isDupe = true;
+        // If existing is user-matched (i < preserveFirstN), do not overwrite with default
+        if (i < preserveFirstN) {
+          break;
+        }
+        // If current is user-matched (idx < preserveFirstN), it takes precedence over default
+        if (idx < preserveFirstN) {
+          result[i] = trimmed;
+          break;
+        }
+        // Otherwise, keep the more specific one
+        if (tokens.length > existingTokens.length || (tokens.length === existingTokens.length && trimmed.length > existing.length)) {
+          result[i] = trimmed;
+        }
+        break;
+      }
+    }
+    if (!isDupe) {
+      result.push(trimmed);
+    }
+  }
+  return result;
+}
+
+/**
+ * Build dynamic, calibrated rationales based on resolved outcome direction and category.
+ */
+export function buildDynamicRationale(
+  intervention: string,
+  comparator: string,
+  outcome: string,
+  verbType: "primary" | "secondary" | "subgroup" | "qol"
+): string {
+  const resolved = resolveKnownOutcome(outcome);
+  const dir = resolved?.direction || getOutcomeDirection(outcome);
+  const cat = resolved?.category;
+
+  if (verbType === "qol" || cat === "quality-of-life" || /quality of life|satisfaction|qol/i.test(outcome)) {
+    return `Evaluates patient-centered outcomes, treatment burden, and ${outcome}.`;
+  }
+  if (dir === "adverse" || cat === "safety" || /complication|adverse|risk|loss|death|bleeding|pain|ohss|nicu/i.test(outcome)) {
+    return `Evaluates whether ${intervention} compared with ${comparator} reduces the risk of ${outcome}.`;
+  }
+  if (verbType === "primary" || cat === "patient-important") {
+    return `Evaluates the primary therapeutic efficacy of ${intervention} versus ${comparator} on ${outcome}.`;
+  }
+  return `Assesses secondary clinical outcomes and comparative effectiveness of ${intervention} versus ${comparator} on ${outcome}.`;
+}
+
+/**
+ * Matches a candidate token or multi-word phrase against MEDICAL_TAXONOMY and CLINICAL_ALIASES.
+ */
+function matchTaxonomyTerm(candidate: string): {
+  entry: MedicalTermEntry;
+  matchedSynonym: string;
+} | null {
+  const normalized = candidate.trim().toLowerCase().replace(/[^\w\s-]/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized || normalized.length < 2) return null;
+
+  // 1. Alias lookup
+  const aliasTarget = CLINICAL_ALIASES[normalized];
+  if (aliasTarget) {
+    const entry = MEDICAL_TAXONOMY.find(m => m.canonical.toLowerCase() === aliasTarget.toLowerCase());
+    if (entry) return { entry, matchedSynonym: candidate };
+  }
+
+  // 2. Exact match against canonical or synonyms
+  for (const entry of MEDICAL_TAXONOMY) {
+    if (entry.canonical.toLowerCase() === normalized) {
+      return { entry, matchedSynonym: candidate };
+    }
+    for (const syn of entry.synonyms) {
+      const s = syn.toLowerCase();
+      if (s === normalized || s + "s" === normalized || s === normalized + "s") {
+        return { entry, matchedSynonym: candidate };
+      }
+    }
+  }
+
+  // 3. Fuzzy match (length >= 6, Levenshtein <= 2)
+  if (normalized.length >= 6) {
+    for (const entry of MEDICAL_TAXONOMY) {
+      for (const syn of entry.synonyms) {
+        if (Math.abs(syn.length - normalized.length) <= 2) {
+          if (levenshteinDistance(normalized, syn.toLowerCase()) <= 2) {
+            return { entry, matchedSynonym: candidate };
+          }
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
  * Lowercase the first letter of inserted phrases while preserving medical acronyms.
  */
 export function toInlineCase(str: string): string {
@@ -583,9 +884,14 @@ export function getOutcomeDirection(outcomeText: string): OutcomeDirection {
 
 /**
  * Formulate a clinically grammatical verb phrase for an outcome.
+ * Validates the outcome argument and returns null if the string cannot be validated as an outcome.
  */
-export function formulateOutcomeVerbPhrase(verbType: "primary" | "secondary" | "subgroup", outcome: string): string {
-  const dir = getOutcomeDirection(outcome);
+export function formulateOutcomeVerbPhrase(verbType: "primary" | "secondary" | "subgroup", outcome: string): string | null {
+  if (!outcome || typeof outcome !== "string") return null;
+  const resolved = resolveKnownOutcome(outcome);
+  if (!resolved || !resolved.valid) return null;
+
+  const dir = resolved.direction;
   const cleanOutcome = outcome.trim();
   const inlineOutcome = toInlineCase(cleanOutcome);
 
@@ -685,7 +991,7 @@ function formulatePopulationPhrase(population: string, specialty: SpecialtyKey):
 }
 
 /**
- * Parses 4–6 clinical tag words into distinct, non-overlapping PICO roles:
+ * Parses clinical input into distinct, non-overlapping PICO roles:
  * - Population / Clinical Problem (P)
  * - Intervention (I)
  * - Comparator (C)
@@ -693,95 +999,97 @@ function formulatePopulationPhrase(population: string, specialty: SpecialtyKey):
  */
 export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario {
   const cleanInput = (rawInput || "").trim();
-  // Split input by commas, semicolons, dashes, or newlines
-  const rawTokens = cleanInput
-    .split(/[,;\n\r]+/)
-    .map(cleanTokenString)
-    .filter(t => t.length > 1);
 
   const matchedConditions: string[] = [];
   const matchedInterventions: string[] = [];
   const matchedOutcomes: string[] = [];
   const specialtyScores: Record<SpecialtyKey, number> = { obstetrics: 0, gynecology: 0, infertility: 0 };
-
   const unclassified: string[] = [];
 
-  for (const token of rawTokens) {
-    const lower = token.toLowerCase();
-    let found = false;
-
-    // Sort taxonomy so that if condition is already identified, outcome and intervention take precedence
-    const sortedTaxonomy = [...MEDICAL_TAXONOMY].sort((a, b) => {
-      if (matchedConditions.length > 0) {
-        if (a.category === "condition" && b.category !== "condition") return 1;
-        if (b.category === "condition" && a.category !== "condition") return -1;
+  const recordMatch = (entry: MedicalTermEntry) => {
+    specialtyScores[entry.specialty] += 2;
+    if (entry.category === "condition" && !matchedConditions.includes(entry.canonical)) {
+      matchedConditions.push(entry.canonical);
+    } else if (entry.category === "intervention" && !matchedInterventions.includes(entry.canonical)) {
+      matchedInterventions.push(entry.canonical);
+    } else if (entry.category === "outcome") {
+      const target = entry.canonical;
+      if (!matchedOutcomes.includes(target)) {
+        matchedOutcomes.push(target);
       }
-      return 0;
-    });
+    }
+  };
 
-    for (const entry of sortedTaxonomy) {
-      const isMatch = entry.synonyms.some(syn => {
-        const s = syn.toLowerCase();
-        // Exact match or full token match
-        return lower === s || lower === s + "s" || (lower.length >= 4 && s === lower);
-      });
+  const hasSeparators = /[,;\n\r|]/.test(cleanInput);
 
-      if (isMatch) {
-        specialtyScores[entry.specialty] += 2;
-        if (entry.category === "condition" && !matchedConditions.includes(entry.canonical)) {
-          matchedConditions.push(entry.canonical);
-          found = true;
-          break;
-        } else if (entry.category === "intervention" && !matchedInterventions.includes(entry.canonical)) {
-          matchedInterventions.push(entry.canonical);
-          found = true;
-          break;
-        } else if (entry.category === "outcome") {
-          const outcomeLabel = token.toLowerCase().trim();
-          const target = entry.synonyms.includes(outcomeLabel) ? outcomeLabel : entry.canonical;
-          if (!matchedOutcomes.includes(target)) {
-            matchedOutcomes.push(target);
+  if (hasSeparators) {
+    // Comma / semicolon / delimiter separated tag words
+    const rawChunks = cleanInput
+      .split(/[,;\n\r|]+/)
+      .map(cleanTokenString)
+      .filter(t => t.length > 1);
+
+    for (const chunk of rawChunks) {
+      // 1. Try matching chunk as a whole phrase
+      const wholeMatch = matchTaxonomyTerm(chunk);
+      if (wholeMatch) {
+        recordMatch(wholeMatch.entry);
+        continue;
+      }
+
+      // 2. Longest-phrase-first within chunk
+      const words = chunk.split(/\s+/).map(cleanTokenString).filter(Boolean);
+      let i = 0;
+      let chunkMatchedAny = false;
+      while (i < words.length) {
+        let matched = false;
+        const maxLen = Math.min(5, words.length - i);
+        for (let len = maxLen; len >= 1; len--) {
+          const candidate = words.slice(i, i + len).join(" ");
+          const m = matchTaxonomyTerm(candidate);
+          if (m) {
+            recordMatch(m.entry);
+            i += len;
+            matched = true;
+            chunkMatchedAny = true;
+            break;
           }
-          found = true;
+        }
+        if (!matched) {
+          i++;
+        }
+      }
+      if (!chunkMatchedAny) {
+        unclassified.push(chunk);
+      }
+    }
+  } else {
+    // Prose input without delimiters (e.g. "poor ovarian response growth hormone coenzyme q10")
+    const words = cleanInput.split(/\s+/).map(cleanTokenString).filter(Boolean);
+    let i = 0;
+    while (i < words.length) {
+      let matched = false;
+      const maxLen = Math.min(5, words.length - i);
+      for (let len = maxLen; len >= 1; len--) {
+        const candidate = words.slice(i, i + len).join(" ");
+        const m = matchTaxonomyTerm(candidate);
+        if (m) {
+          recordMatch(m.entry);
+          i += len;
+          matched = true;
           break;
         }
       }
-    }
-
-    if (!found) {
-      // Secondary check: substring match on longer tokens
-      for (const entry of sortedTaxonomy) {
-        if (found) break;
-        const isSubstring = entry.synonyms.some(syn => {
-          const s = syn.toLowerCase();
-          return (lower.length > 5 && s.includes(lower)) || (s.length > 5 && lower.includes(s));
-        });
-        if (isSubstring) {
-          specialtyScores[entry.specialty] += 1;
-          if (entry.category === "condition" && !matchedConditions.includes(entry.canonical)) {
-            matchedConditions.push(entry.canonical);
-            found = true;
-          } else if (entry.category === "intervention" && !matchedInterventions.includes(entry.canonical)) {
-            matchedInterventions.push(entry.canonical);
-            found = true;
-          } else if (entry.category === "outcome") {
-            const outcomeLabel = token.toLowerCase().trim();
-            const target = entry.synonyms.includes(outcomeLabel) ? outcomeLabel : entry.canonical;
-            if (!matchedOutcomes.includes(target)) {
-              matchedOutcomes.push(target);
-            }
-            found = true;
-          }
-        }
+      if (!matched) {
+        unclassified.push(words[i]);
+        i++;
       }
-    }
-
-    if (!found) {
-      unclassified.push(token);
     }
   }
 
-  // Heuristic classification for any remaining tokens
+  // Heuristic classification for any remaining unclassified tokens
+  const unrecognizedTerms: string[] = [];
+
   for (const token of unclassified) {
     const lower = token.toLowerCase();
     // Interventions check first so procedures/drugs/hormones never contaminate Condition
@@ -791,26 +1099,27 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
     } else if (/ectomy|scopy|surgery|treatment|therapy|drug|aspirin|progesterone|letrozole|clomiphene|cerclage|pessary|insulin|metformin|heparin|dienogest|embolization|ablation|insemination|transfer/i.test(lower)) {
       if (!matchedInterventions.includes(token)) matchedInterventions.push(token);
     } else if (/rate|relief|pain|birth|loss|bleeding|weight|score|morbidity|mortality|survival|gestational age|reserve|pregnancy|outcome|yield/i.test(lower)) {
-      if (!matchedOutcomes.includes(token)) matchedOutcomes.push(token);
+      const resolved = resolveKnownOutcome(token);
+      if (resolved && resolved.valid) {
+        if (!matchedOutcomes.includes(resolved.canonical)) matchedOutcomes.push(resolved.canonical);
+      } else {
+        unrecognizedTerms.push(token);
+      }
     } else if (/poor\s+responder|low\s+responder|itis|osis|emia|oma|syndrome|disease|preterm|preeclamp|diabetes|cervix|uterus|ovary|ovarian|fibroid|polyps|prolapse|failure|incompetence|restriction/i.test(lower)) {
       if (!matchedConditions.includes(token)) matchedConditions.push(token);
       if (/preterm|cervix|preeclamp|gestation/i.test(lower)) specialtyScores.obstetrics += 1;
       else if (/ivf|icsi|infertil|pcos|responder/i.test(lower)) specialtyScores.infertility += 1;
       else specialtyScores.gynecology += 1;
-    } else if (matchedConditions.length === 0) {
-      matchedConditions.push(token);
-    } else if (matchedInterventions.length === 0) {
-      matchedInterventions.push(token);
     } else {
-      matchedOutcomes.push(token);
+      // Unrecognized: never push into outcomes, conditions, or interventions
+      unrecognizedTerms.push(token);
     }
   }
 
   // In reproductive medicine: if an ART procedure (IVF / ICSI) is present alongside an underlying condition
-  // (e.g. poor ovarian response, diminished ovarian reserve, PCOS) and adjuvant therapies (e.g. growth hormone, CoQ10),
-  // IVF represents the clinical procedural setting of the population, not the test intervention competing with the adjuvant.
+  // and adjuvant therapies, IVF represents the procedural setting of the population.
   const hasArtProcedure = matchedInterventions.some(i => /in vitro fertilization|intracytoplasmic sperm injection|ivf|icsi/i.test(i))
-    || rawTokens.some(t => /\b(ivf|icsi|art)\b/i.test(t));
+    || cleanInput.match(/\b(ivf|icsi|art)\b/i);
   const otherInterventions = matchedInterventions.filter(i => !/in vitro fertilization|intracytoplasmic sperm injection|ivf|icsi/i.test(i));
 
   if (hasArtProcedure && otherInterventions.length >= 1) {
@@ -821,7 +1130,6 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
     } else {
       matchedConditions.push("women undergoing IVF");
     }
-    // Retain only specific drug/adjuvant therapies as interventions
     matchedInterventions.length = 0;
     matchedInterventions.push(...otherInterventions);
     specialtyScores.infertility += 4;
@@ -841,67 +1149,121 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
     specialty = "infertility";
   }
 
-  // Determine clean, non-overlapping P, I, C
+  // Determine Population: only substitute KB default when NO condition was stated
   const population = matchedConditions[0] || (specialty === "obstetrics" ? "short cervix" : specialty === "infertility" ? "poor ovarian response" : "endometriosis");
-  
+
   let intervention = "";
   let comparator = "";
+  let comparisonOptions: Array<{ label: string; intervention: string; comparator: string }> | undefined;
+  let clarificationRequired = false;
+  let clarificationPrompt = "";
 
   if (matchedInterventions.length >= 2) {
-    intervention = matchedInterventions[0];
-    comparator = matchedInterventions[1];
+    const iv1 = matchedInterventions[0];
+    const iv2 = matchedInterventions[1];
+    const iv1IsAddon = isAdjuvantIntervention(iv1);
+    const iv2IsAddon = isAdjuvantIntervention(iv2);
+
+    if (iv1IsAddon || iv2IsAddon) {
+      // Multiple adjuvants: do not silently make the second one the comparator
+      intervention = iv1;
+      comparator = `no ${iv1} (standard protocol)`;
+      clarificationRequired = true;
+      clarificationPrompt = `Multiple interventions identified (${matchedInterventions.join(", ")}). Please select the desired comparison.`;
+      comparisonOptions = [
+        { label: `${iv1} vs standard protocol`, intervention: iv1, comparator: `no ${iv1} (standard protocol)` },
+        { label: `${iv2} vs standard protocol`, intervention: iv2, comparator: `no ${iv2} (standard protocol)` },
+        { label: `${iv1} combined with ${iv2} vs standard protocol`, intervention: `${iv1} combined with ${iv2}`, comparator: "standard protocol" },
+        { label: `${iv1} vs ${iv2} (head-to-head)`, intervention: iv1, comparator: iv2 }
+      ];
+    } else {
+      // Distinct non-adjuvant active interventions (e.g. letrozole vs clomiphene)
+      intervention = iv1;
+      comparator = iv2;
+    }
   } else if (matchedInterventions.length === 1) {
     intervention = matchedInterventions[0];
-    const isAddon = /growth hormone|coenzyme|coq10|dhea|prp|platelet-rich|antioxidant|inositol/i.test(intervention);
+    const isAddon = isAdjuvantIntervention(intervention);
     if (specialty === "infertility" && isAddon) {
       comparator = `no ${intervention} (standard protocol)`;
     } else {
       comparator = specialty === "obstetrics" ? "standard care or expectant management" : "standard care";
     }
   } else {
+    // No interventions matched
     const specDefault = KB[specialty];
     intervention = specDefault.interventions[0] || "first-line therapy";
     comparator = specDefault.interventions[1] || "standard care";
   }
 
-  // Candidate outcomes
+  // Candidate outcomes: deduplicate and validate
   const defaultOutcomes = KB[specialty].outcomesRanked;
-  const outcomes = matchedOutcomes.length > 0
-    ? [...matchedOutcomes, ...defaultOutcomes.filter(d => !matchedOutcomes.includes(d))].slice(0, 6)
-    : defaultOutcomes.slice(0, 6);
+  const rawOutcomes = matchedOutcomes.length > 0
+    ? [...matchedOutcomes, ...defaultOutcomes.filter(d => !matchedOutcomes.includes(d))]
+    : defaultOutcomes;
 
-  const primaryOutcome = outcomes[0] || "primary clinical outcome";
+  const dedupedOutcomes = dedupeOutcomes(rawOutcomes, matchedOutcomes.length);
+  const outcomes = dedupedOutcomes.slice(0, 6);
+
+  const primaryOutcome = outcomes[0] || "live birth rate";
   const secondaryOutcome1 = outcomes[1] || outcomes[0] || "secondary clinical complications";
   const secondaryOutcome2 = outcomes[2] || outcomes[0] || "treatment-related complications";
+  const qolOutcome = outcomes.find(o => /quality of life|satisfaction|qol/i.test(o)) || "health-related quality of life";
 
   const popPhrase = formulatePopulationPhrase(population, specialty);
-  const q1Action = formulateOutcomeVerbPhrase("primary", primaryOutcome);
-  const q2Action = formulateOutcomeVerbPhrase("secondary", secondaryOutcome1);
-  const q3Action = formulateOutcomeVerbPhrase("subgroup", secondaryOutcome2);
+  const q1Action = formulateOutcomeVerbPhrase("primary", primaryOutcome) || `improve ${toInlineCase(primaryOutcome)}`;
+  const q2Action = formulateOutcomeVerbPhrase("secondary", secondaryOutcome1) || `increase ${toInlineCase(secondaryOutcome1)}`;
+  const q3Action = formulateOutcomeVerbPhrase("subgroup", secondaryOutcome2) || `optimize ${toInlineCase(secondaryOutcome2)}`;
+  const q4Action = formulateOutcomeVerbPhrase("secondary", qolOutcome) || `improve ${toInlineCase(qolOutcome)}`;
 
-  // Build 4 strictly calibrated, logically separated PICO questions
-  const suggestedQuestions: Array<{ question: string; rationale: string }> = [
-    {
-      question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q1Action} (O)?`,
-      rationale: `Evaluates the primary therapeutic efficacy of ${intervention} versus ${comparator} on the key clinical endpoint.`
-    },
-    {
-      question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q2Action} (O)?`,
-      rationale: `Addresses secondary therapeutic outcomes, clinical safety, and comparative treatment benefits.`
-    },
-    {
-      question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q3Action} (O)?`,
-      rationale: specialty === "infertility"
-        ? "Focuses on balancing procedural safety, reproductive outcomes, and key clinical milestones."
-        : "Focuses on balancing procedural safety, organ preservation, and key clinical milestones."
-    },
-    {
-      question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) improve patient-reported quality of life and treatment satisfaction (O)?`,
-      rationale: specialty === "infertility"
-        ? "Measures patient-centered outcomes, treatment burden, and overall care satisfaction."
-        : "Measures patient-centered outcomes, symptom relief sustainability, and overall care satisfaction."
-    }
-  ];
+  const suggestedQuestions: Array<{ question: string; rationale: string }> = [];
+
+  if (matchedInterventions.length >= 2 && (isAdjuvantIntervention(matchedInterventions[0]) || isAdjuvantIntervention(matchedInterventions[1]))) {
+    const iv1 = matchedInterventions[0];
+    const iv2 = matchedInterventions[1];
+    suggestedQuestions.push(
+      {
+        question: `In ${popPhrase} (P), does ${iv1} (I) compared with no ${iv1} (standard protocol) (C) ${q1Action} (O)?`,
+        rationale: buildDynamicRationale(iv1, `no ${iv1} (standard protocol)`, primaryOutcome, "primary")
+      },
+      {
+        question: `In ${popPhrase} (P), does ${iv2} (I) compared with no ${iv2} (standard protocol) (C) ${q2Action} (O)?`,
+        rationale: buildDynamicRationale(iv2, `no ${iv2} (standard protocol)`, secondaryOutcome1, "secondary")
+      },
+      {
+        question: `In ${popPhrase} (P), does ${iv1} combined with ${iv2} (I) compared with standard protocol (C) ${q3Action} (O)?`,
+        rationale: buildDynamicRationale(`${iv1} combined with ${iv2}`, "standard protocol", secondaryOutcome2, "subgroup")
+      },
+      {
+        question: `In ${popPhrase} (P), does ${iv1} (I) compared with ${iv2} (C) ${q4Action} (O)?`,
+        rationale: buildDynamicRationale(iv1, iv2, qolOutcome, "qol")
+      }
+    );
+  } else {
+    suggestedQuestions.push(
+      {
+        question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q1Action} (O)?`,
+        rationale: buildDynamicRationale(intervention, comparator, primaryOutcome, "primary")
+      },
+      {
+        question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q2Action} (O)?`,
+        rationale: buildDynamicRationale(intervention, comparator, secondaryOutcome1, "secondary")
+      },
+      {
+        question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q3Action} (O)?`,
+        rationale: buildDynamicRationale(intervention, comparator, secondaryOutcome2, "subgroup")
+      },
+      {
+        question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q4Action} (O)?`,
+        rationale: buildDynamicRationale(intervention, comparator, qolOutcome, "qol")
+      }
+    );
+  }
+
+  const advisories: string[] = [];
+  if (unrecognizedTerms.length > 0) {
+    advisories.push(`Unrecognized terms: ${unrecognizedTerms.join(", ")}`);
+  }
 
   return {
     specialty,
@@ -909,6 +1271,10 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
     intervention,
     comparator,
     outcomes,
-    suggestedQuestions
+    suggestedQuestions,
+    ...(unrecognizedTerms.length > 0 ? { unrecognizedTerms } : {}),
+    ...(comparisonOptions ? { comparisonOptions } : {}),
+    ...(clarificationRequired ? { clarificationRequired, clarificationPrompt } : {}),
+    ...(advisories.length > 0 ? { advisories } : {})
   };
 }

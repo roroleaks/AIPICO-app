@@ -28,7 +28,7 @@ import { finalizeClaims } from "@/lib/claim-finalization";
 import { validateDeliverableIntegrity } from "@/lib/deliverable-integrity";
 import { generateDeterministicGapAnalysis } from "@/lib/deterministic-gap.ts";
 import { extractPicoFromQuestion } from "@/lib/pico-parser";
-import { parseClinicalScenario } from "@/lib/clinical-semantics";
+import { parseClinicalScenario, resolveKnownOutcome } from "@/lib/clinical-semantics";
 import { isAllowedOrigin, corsHeaders } from "@/lib/security-headers";
 import { checkRateLimit } from "@/lib/rate-limiter";
 import { resolveProvenance } from "@/lib/provenance";
@@ -1013,23 +1013,39 @@ function readAnalysisStage(
     response: NextResponse.json({ error }, { status: 400 })
   });
 
-  const raw = body.analysis;
+  const raw = (body.analysis || body.gapAnalysis) as Partial<Analysis> & Record<string, unknown>;
   if (raw === undefined || raw === null) {
     return bad(`Stage "${stage}" requires an "analysis" object.`);
   }
   if (typeof raw !== "object" || Array.isArray(raw)) {
     return bad(`Field "analysis" must be an object, received ${raw === null ? "null" : Array.isArray(raw) ? "array" : typeof raw}.`);
   }
-  const a = raw as Partial<Analysis>;
+  const a = { ...raw } as Partial<Analysis> & Record<string, unknown>;
   if (a.missing !== undefined && !Array.isArray(a.missing)) {
     return bad('Field "analysis.missing" must be an array of strings.');
   }
+
+  // If gapAnalysis fields are present as a separate property
+  if (body.gapAnalysis && typeof body.gapAnalysis === "object" && !Array.isArray(body.gapAnalysis)) {
+    const gap = body.gapAnalysis as Record<string, unknown>;
+    if (!a.condition && typeof gap.condition === "string") a.condition = gap.condition;
+    if (!a.condition && typeof gap.population === "string") a.condition = gap.population;
+    if (!a.intervention && typeof gap.intervention === "string") a.intervention = gap.intervention;
+    if (!a.comparator && typeof gap.comparator === "string") a.comparator = gap.comparator;
+    if (!a.specialty && typeof gap.specialty === "string") a.specialty = gap.specialty as SpecialtyKey;
+  }
+
   const answeredRaw = body.answered;
   if (
     answeredRaw !== undefined && answeredRaw !== null &&
     (typeof answeredRaw !== "object" || Array.isArray(answeredRaw))
   ) {
     return bad('Field "answered" must be an object.');
+  }
+
+  const answered: Record<string, string> = { ...((answeredRaw as Record<string, string>) || {}) };
+  if (!answered.outcome && typeof body.outcome === "string") {
+    answered.outcome = body.outcome;
   }
 
   const missing = Array.isArray(a.missing) ? a.missing.filter((f): f is string => typeof f === "string") : [];
@@ -1048,8 +1064,8 @@ function readAnalysisStage(
 
   return {
     ok: true,
-    analysis: { ...(a as Analysis), missing },
-    answered: (answeredRaw || {}) as Record<string, string>
+    analysis: { ...(a as unknown as Analysis), missing },
+    answered
   };
 }
 
@@ -1102,6 +1118,10 @@ const clarifyFormulateSchema = z.object({
   stage: z.enum(["clarify", "formulate"]),
   analysis: analysisZodSchema.optional().nullable(),
   answered: z.record(z.string(), z.string().max(1000)).optional().nullable(),
+  gapAnalysis: z.any().optional().nullable(),
+  topic: z.string().max(2000).optional().nullable(),
+  selectedQuestion: z.string().max(1000).optional().nullable(),
+  outcome: z.string().max(1000).optional().nullable(),
 });
 
 const commentaryZodSchema = z.object({
@@ -2045,6 +2065,29 @@ Respond ONLY with JSON:
         }
       }
 
+      // Outcome validation boundary check (RC4):
+      // The chosen outcome must resolve to a known outcome AND must not equal either intervention or comparator.
+      const outcomeToCheck = answered.outcome || ((analysis as unknown as Record<string, unknown>).outcome as string) || (typeof body.outcome === "string" ? body.outcome : "");
+      if (outcomeToCheck) {
+        const resolved = resolveKnownOutcome(outcomeToCheck);
+        const ivLower = (answered.intervention || analysis.intervention || "").toLowerCase().trim();
+        const compLower = (answered.comparator || analysis.comparator || "").toLowerCase().trim();
+        const outLower = outcomeToCheck.toLowerCase().trim();
+
+        const matchesIvOrComp = (ivLower && outLower === ivLower) || (compLower && outLower === compLower) || (resolved && (resolved.canonical.toLowerCase() === ivLower || resolved.canonical.toLowerCase() === compLower));
+
+        if (!resolved || !resolved.valid || matchesIvOrComp) {
+          return NextResponse.json(
+            {
+              error: `The specified outcome "${outcomeToCheck}" is invalid or matches an intervention/comparator. Please select a valid clinical endpoint.`,
+              clarificationRequired: true,
+              prompt: `"${outcomeToCheck}" appears to be an intervention or unrecognized term rather than a patient-centered clinical endpoint. Please select a measurable clinical outcome.`
+            },
+            { status: 422 }
+          );
+        }
+      }
+
       if (KEY && analysis?.specialty && isSpecialty(analysis.specialty)) {
         const outcomeLogic = rationalOutcomes(answered.condition || analysis.condition || "", analysis.specialty);
         const out = await callLLM(
@@ -2061,6 +2104,27 @@ Respond ONLY with JSON.`,
           { analysis, answered, specialtyKnowledge: analysis.specialty ? KB[analysis.specialty] : null, outcomeLogic },
           { stage: "formulate", timeoutMs: 14_000 }
         );
+
+        const aiOut = out as { elements?: Array<{ label?: string; value?: string }>; searchTerms?: { outcome?: string } };
+        const aiOutcome = aiOut?.elements?.find((e: { label?: string }) => e?.label?.startsWith("O"))?.value || aiOut?.searchTerms?.outcome || "";
+        if (aiOutcome) {
+          const resolvedAi = resolveKnownOutcome(aiOutcome);
+          const ivLower = (answered.intervention || analysis.intervention || "").toLowerCase().trim();
+          const compLower = (answered.comparator || analysis.comparator || "").toLowerCase().trim();
+          const outLower = aiOutcome.toLowerCase().trim();
+          const matches = (ivLower && outLower === ivLower) || (compLower && outLower === compLower) || (resolvedAi && (resolvedAi.canonical.toLowerCase() === ivLower || resolvedAi.canonical.toLowerCase() === compLower));
+          if (!resolvedAi || !resolvedAi.valid || matches) {
+            return NextResponse.json(
+              {
+                error: `The formulated outcome "${aiOutcome}" is invalid or matches an intervention/comparator. Please select a valid clinical endpoint.`,
+                clarificationRequired: true,
+                prompt: `"${aiOutcome}" appears to be an intervention or unrecognized term rather than a patient-centered clinical endpoint. Please select a measurable clinical outcome.`
+              },
+              { status: 422 }
+            );
+          }
+        }
+
         return NextResponse.json({ ...out, source: "ai", complete: true, missingElements: [] });
       }
       return formulated(ruleFormulate(analysis, answered));
