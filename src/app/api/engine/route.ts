@@ -1927,10 +1927,12 @@ Respond ONLY with valid JSON, no preamble or commentary.`,
       const knownPts = normPoints(gapAnalysis.known).slice(0, 4);
       const uncertainPts = normPoints(gapAnalysis.uncertain).slice(0, 4);
 
+      const primaryOutcome = scenario.derivedOutcomes?.[0]?.outcome || scenario.outcomes[0] || "live birth rate";
       const scenarioElements: PicoElement[] = [
         { label: "P — Population", value: scenario.population },
         { label: "I — Intervention", value: scenario.intervention },
-        { label: "C — Comparator", value: scenario.comparator }
+        { label: "C — Comparator", value: scenario.comparator },
+        { label: "O — Outcome", value: primaryOutcome }
       ];
 
       const usedRefKeys = new Set<string>();
@@ -1950,7 +1952,9 @@ Respond ONLY with valid JSON, no preamble or commentary.`,
         topic,
         source: gapSource,
         known: knownWithRefs,
-        uncertain: uncertainWithRefs
+        uncertain: uncertainWithRefs,
+        picoSlots: scenario.picoSlots,
+        derivedOutcomes: scenario.derivedOutcomes
       }, { headers: { "x-aipico-source": gapSource } });
     }
 

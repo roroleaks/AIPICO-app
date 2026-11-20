@@ -1,5 +1,15 @@
 import { KB, type SpecialtyKey } from "./kb.ts";
 import { OUTCOME_ONTOLOGY } from "./outcome-ontology.ts";
+import { deriveOutcomes, type DerivedOutcome } from "./outcome-derivation.ts";
+
+export interface PicoSlots {
+  population: string[];        // 0..n recognized population/condition phrases
+  interventions: string[];     // 0..n canonical interventions
+  comparators: string[];       // 0..n canonical comparators (explicit or implied)
+  outcomes: string[];          // 0..n canonical outcomes stated by the clinician
+  unresolved: string[];        // phrases that could not be classified — never silently dropped, never silently slotted
+  cues: { comparative: string[]; directionVerbs: string[] };  // evidence for the assignment decisions
+}
 
 export interface ParsedClinicalScenario {
   specialty: SpecialtyKey;
@@ -13,6 +23,8 @@ export interface ParsedClinicalScenario {
   clarificationRequired?: boolean;
   clarificationPrompt?: string;
   advisories?: string[];
+  picoSlots?: PicoSlots;
+  derivedOutcomes?: DerivedOutcome[];
 }
 
 export type OutcomeDirection = "adverse" | "desirable" | "neutral";
@@ -997,61 +1009,123 @@ function formulatePopulationPhrase(population: string, specialty: SpecialtyKey):
  * - Comparator (C)
  * - Candidate Outcomes (O)
  */
-export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario {
+const COMPARATIVE_PATTERN = /\b(versus|vs\.?|compared with|compared to|against|instead of)\b/i;
+
+const STOPWORDS = new Set([
+  "in", "for", "among", "with", "does", "is", "do", "what", "are", "the", "a", "an", "of", "and", "or", "to", "on",
+  "effect", "effects", "impact", "between", "associated", "when", "as", "by", "from", "at", "women", "patients",
+  "pregnant", "individuals", "undergoing", "diagnosed", "aged", "rate", "rates", "setting", "trial", "trials"
+]);
+
+/**
+ * Extracts distinct PICO slots from clinical input:
+ * - Population / Clinical Problem (P)
+ * - Interventions (I)
+ * - Comparators (C)
+ * - Outcomes (O)
+ * - Unresolved terms
+ */
+export function extractPicoSlots(rawInput: string): PicoSlots {
   const cleanInput = (rawInput || "").trim();
+  if (!cleanInput) {
+    return {
+      population: [],
+      interventions: [],
+      comparators: [],
+      outcomes: [],
+      unresolved: [],
+      cues: { comparative: [], directionVerbs: [] }
+    };
+  }
 
-  const matchedConditions: string[] = [];
-  const matchedInterventions: string[] = [];
-  const matchedOutcomes: string[] = [];
-  const specialtyScores: Record<SpecialtyKey, number> = { obstetrics: 0, gynecology: 0, infertility: 0 };
-  const unclassified: string[] = [];
+  const comparativeCues: string[] = [];
+  const directionVerbs: string[] = [];
 
-  const recordMatch = (entry: MedicalTermEntry) => {
-    specialtyScores[entry.specialty] += 2;
-    if (entry.category === "condition" && !matchedConditions.includes(entry.canonical)) {
-      matchedConditions.push(entry.canonical);
-    } else if (entry.category === "intervention" && !matchedInterventions.includes(entry.canonical)) {
-      matchedInterventions.push(entry.canonical);
-    } else if (entry.category === "outcome") {
-      const target = entry.canonical;
-      if (!matchedOutcomes.includes(target)) {
-        matchedOutcomes.push(target);
-      }
+  const compMatches = cleanInput.match(/\b(versus|vs\.?|compared with|compared to|against|instead of)\b/gi);
+  if (compMatches) {
+    for (const m of compMatches) {
+      const lower = m.toLowerCase();
+      if (!comparativeCues.includes(lower)) comparativeCues.push(lower);
     }
+  }
+
+  const verbMatches = cleanInput.match(/\b(improve|improves|improving|increase|increases|increasing|reduce|reduces|reducing|lower|lowers|lowering|raise|raises|raising|enhance|enhances|enhancing|shorten|shortens|shortening|prevent|prevents|preventing)\b/gi);
+  if (verbMatches) {
+    for (const m of verbMatches) {
+      const lower = m.toLowerCase();
+      if (!directionVerbs.includes(lower)) directionVerbs.push(lower);
+    }
+  }
+
+  const population: string[] = [];
+  const interventions: string[] = [];
+  const comparators: string[] = [];
+  const outcomes: string[] = [];
+  const unresolved: string[] = [];
+
+  const addUnique = (arr: string[], item: string) => {
+    if (item && !arr.includes(item)) arr.push(item);
+  };
+
+  const compIndex = cleanInput.search(COMPARATIVE_PATTERN);
+
+  interface MatchedSpan {
+    entry: MedicalTermEntry;
+    matchedSynonym: string;
+    charIndex: number;
+    rawText: string;
+  }
+  const matchedSpans: MatchedSpan[] = [];
+  const consumedIntervals: Array<{ start: number; end: number }> = [];
+
+  const isConsumed = (start: number, end: number) => {
+    return consumedIntervals.some(inv => (start >= inv.start && start < inv.end) || (end > inv.start && end <= inv.end));
   };
 
   const hasSeparators = /[,;\n\r|]/.test(cleanInput);
 
   if (hasSeparators) {
-    // Comma / semicolon / delimiter separated tag words
-    const rawChunks = cleanInput
-      .split(/[,;\n\r|]+/)
-      .map(cleanTokenString)
-      .filter(t => t.length > 1);
-
+    const rawChunks = cleanInput.split(/[,;\n\r|]+/).map(t => t.trim()).filter(Boolean);
+    let offset = 0;
     for (const chunk of rawChunks) {
-      // 1. Try matching chunk as a whole phrase
+      const chunkPos = cleanInput.indexOf(chunk, offset);
+      if (chunkPos !== -1) offset = chunkPos + chunk.length;
+
+      // 1. Whole chunk match
       const wholeMatch = matchTaxonomyTerm(chunk);
       if (wholeMatch) {
-        recordMatch(wholeMatch.entry);
+        matchedSpans.push({
+          entry: wholeMatch.entry,
+          matchedSynonym: wholeMatch.matchedSynonym,
+          charIndex: chunkPos !== -1 ? chunkPos : 0,
+          rawText: chunk
+        });
+        consumedIntervals.push({ start: chunkPos, end: chunkPos + chunk.length });
         continue;
       }
 
       // 2. Longest-phrase-first within chunk
-      const words = chunk.split(/\s+/).map(cleanTokenString).filter(Boolean);
+      const words = chunk.split(/\s+/).filter(Boolean);
       let i = 0;
-      let chunkMatchedAny = false;
+      let matchedAnyInChunk = false;
       while (i < words.length) {
         let matched = false;
         const maxLen = Math.min(5, words.length - i);
         for (let len = maxLen; len >= 1; len--) {
-          const candidate = words.slice(i, i + len).join(" ");
-          const m = matchTaxonomyTerm(candidate);
+          const phrase = words.slice(i, i + len).join(" ");
+          const m = matchTaxonomyTerm(phrase);
           if (m) {
-            recordMatch(m.entry);
+            const phrasePos = chunkPos !== -1 ? cleanInput.indexOf(phrase, chunkPos) : 0;
+            matchedSpans.push({
+              entry: m.entry,
+              matchedSynonym: m.matchedSynonym,
+              charIndex: phrasePos !== -1 ? phrasePos : 0,
+              rawText: phrase
+            });
+            consumedIntervals.push({ start: phrasePos, end: phrasePos + phrase.length });
             i += len;
             matched = true;
-            chunkMatchedAny = true;
+            matchedAnyInChunk = true;
             break;
           }
         }
@@ -1059,85 +1133,104 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
           i++;
         }
       }
-      if (!chunkMatchedAny) {
-        unclassified.push(chunk);
+      if (!matchedAnyInChunk) {
+        const cleanChunk = cleanTokenString(chunk);
+        if (cleanChunk.length > 1 && !STOPWORDS.has(cleanChunk.toLowerCase())) {
+          unresolved.push(chunk);
+        }
       }
     }
   } else {
-    // Prose input without delimiters (e.g. "poor ovarian response growth hormone coenzyme q10")
-    const words = cleanInput.split(/\s+/).map(cleanTokenString).filter(Boolean);
+    // Prose input without separators
+    const words = cleanInput.split(/\s+/).filter(Boolean);
+    let searchStart = 0;
     let i = 0;
     while (i < words.length) {
       let matched = false;
       const maxLen = Math.min(5, words.length - i);
       for (let len = maxLen; len >= 1; len--) {
-        const candidate = words.slice(i, i + len).join(" ");
-        const m = matchTaxonomyTerm(candidate);
+        const phrase = words.slice(i, i + len).join(" ");
+        const m = matchTaxonomyTerm(phrase);
         if (m) {
-          recordMatch(m.entry);
+          const phrasePos = cleanInput.indexOf(phrase, searchStart);
+          matchedSpans.push({
+            entry: m.entry,
+            matchedSynonym: m.matchedSynonym,
+            charIndex: phrasePos !== -1 ? phrasePos : searchStart,
+            rawText: phrase
+          });
+          consumedIntervals.push({ start: phrasePos !== -1 ? phrasePos : searchStart, end: (phrasePos !== -1 ? phrasePos : searchStart) + phrase.length });
+          searchStart = (phrasePos !== -1 ? phrasePos : searchStart) + phrase.length;
           i += len;
           matched = true;
           break;
         }
       }
       if (!matched) {
-        unclassified.push(words[i]);
+        const w = cleanTokenString(words[i]);
+        const wPos = cleanInput.indexOf(words[i], searchStart);
+        if (!isConsumed(wPos, wPos + words[i].length)) {
+          if (w.length > 1 && !STOPWORDS.has(w.toLowerCase()) && !/^(versus|vs|compared|against|improve|increase|reduce|shorten|lower|raise|enhance|prevent)\b/i.test(w)) {
+            unresolved.push(words[i]);
+          }
+        }
+        searchStart = wPos !== -1 ? wPos + words[i].length : searchStart + words[i].length;
         i++;
       }
     }
   }
 
-  // Heuristic classification for any remaining unclassified tokens
-  const unrecognizedTerms: string[] = [];
+  // Sort matched spans by appearance order
+  matchedSpans.sort((a, b) => a.charIndex - b.charIndex);
 
-  for (const token of unclassified) {
-    const lower = token.toLowerCase();
-    // Interventions check first so procedures/drugs/hormones never contaminate Condition
-    if (/hormone|coq10|coenzyme|dhea|melatonin|inositol|somatotropin|antioxidant|priming|supplements?|adjuvant|stimulat/i.test(lower)) {
-      if (!matchedInterventions.includes(token)) matchedInterventions.push(token);
-      specialtyScores.infertility += 2;
-    } else if (/ectomy|scopy|surgery|treatment|therapy|drug|aspirin|progesterone|letrozole|clomiphene|cerclage|pessary|insulin|metformin|heparin|dienogest|embolization|ablation|insemination|transfer/i.test(lower)) {
-      if (!matchedInterventions.includes(token)) matchedInterventions.push(token);
-    } else if (/rate|relief|pain|birth|loss|bleeding|weight|score|morbidity|mortality|survival|gestational age|reserve|pregnancy|outcome|yield/i.test(lower)) {
-      const resolved = resolveKnownOutcome(token);
-      if (resolved && resolved.valid) {
-        if (!matchedOutcomes.includes(resolved.canonical)) matchedOutcomes.push(resolved.canonical);
+  // Assign matched spans to slots
+  for (const span of matchedSpans) {
+    const entry = span.entry;
+    const isAfterComparative = compIndex !== -1 && span.charIndex > compIndex;
+
+    if (entry.category === "condition") {
+      addUnique(population, entry.canonical);
+    } else if (entry.category === "intervention") {
+      if (isAfterComparative) {
+        addUnique(comparators, entry.canonical);
       } else {
-        unrecognizedTerms.push(token);
+        addUnique(interventions, entry.canonical);
       }
-    } else if (/poor\s+responder|low\s+responder|itis|osis|emia|oma|syndrome|disease|preterm|preeclamp|diabetes|cervix|uterus|ovary|ovarian|fibroid|polyps|prolapse|failure|incompetence|restriction/i.test(lower)) {
-      if (!matchedConditions.includes(token)) matchedConditions.push(token);
-      if (/preterm|cervix|preeclamp|gestation/i.test(lower)) specialtyScores.obstetrics += 1;
-      else if (/ivf|icsi|infertil|pcos|responder/i.test(lower)) specialtyScores.infertility += 1;
-      else specialtyScores.gynecology += 1;
-    } else {
-      // Unrecognized: never push into outcomes, conditions, or interventions
-      unrecognizedTerms.push(token);
+    } else if (entry.category === "comparator") {
+      addUnique(comparators, entry.canonical);
+    } else if (entry.category === "outcome") {
+      // Hard invariant: a canonical intervention or comparator can never be emitted as an outcome
+      const isAlreadyIvOrComp = interventions.includes(entry.canonical) || comparators.includes(entry.canonical);
+      if (!isAlreadyIvOrComp) {
+        addUnique(outcomes, entry.canonical);
+      }
     }
   }
 
-  // In reproductive medicine: if an ART procedure (IVF / ICSI) is present alongside an underlying condition
-  // and adjuvant therapies, IVF represents the procedural setting of the population.
-  const hasArtProcedure = matchedInterventions.some(i => /in vitro fertilization|intracytoplasmic sperm injection|ivf|icsi/i.test(i))
+  // ART procedure logic (IVF / ICSI as population setting)
+  const hasArtProcedure = interventions.some(iv => /in vitro fertilization|intracytoplasmic sperm injection|ivf|icsi/i.test(iv))
     || cleanInput.match(/\b(ivf|icsi|art)\b/i);
-  const otherInterventions = matchedInterventions.filter(i => !/in vitro fertilization|intracytoplasmic sperm injection|ivf|icsi/i.test(i));
+  const otherInterventions = interventions.filter(iv => !/in vitro fertilization|intracytoplasmic sperm injection|ivf|icsi/i.test(iv));
 
   if (hasArtProcedure && otherInterventions.length >= 1) {
-    if (matchedConditions.length > 0) {
-      if (!/ivf|icsi|in vitro|art/i.test(matchedConditions[0])) {
-        matchedConditions[0] = `${matchedConditions[0]} undergoing IVF`;
+    if (population.length > 0) {
+      if (!/ivf|icsi|in vitro|art/i.test(population[0])) {
+        population[0] = `${population[0]} undergoing IVF`;
       }
     } else {
-      matchedConditions.push("women undergoing IVF");
+      population.push("women undergoing IVF");
     }
-    matchedInterventions.length = 0;
-    matchedInterventions.push(...otherInterventions);
-    specialtyScores.infertility += 4;
-  } else if (hasArtProcedure && matchedConditions.length === 0) {
-    matchedConditions.push("women undergoing IVF");
+    interventions.length = 0;
+    interventions.push(...otherInterventions);
+  } else if (hasArtProcedure && population.length === 0 && interventions.length === 0) {
+    population.push("women undergoing IVF");
   }
 
-  // Determine specialty
+  // Specialty determination from matched spans
+  const specialtyScores: Record<SpecialtyKey, number> = { obstetrics: 0, gynecology: 0, infertility: 0 };
+  for (const span of matchedSpans) {
+    specialtyScores[span.entry.specialty] += 2;
+  }
   let specialty: SpecialtyKey = "obstetrics";
   if (specialtyScores.infertility > specialtyScores.obstetrics && specialtyScores.infertility >= specialtyScores.gynecology) {
     specialty = "infertility";
@@ -1149,27 +1242,118 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
     specialty = "infertility";
   }
 
-  // Determine Population: only substitute KB default when NO condition was stated
-  const population = matchedConditions[0] || (specialty === "obstetrics" ? "short cervix" : specialty === "infertility" ? "poor ovarian response" : "endometriosis");
+  // Comparators completion: if none explicit, provide implied comparators
+  if (comparators.length === 0) {
+    if (interventions.length === 1) {
+      const isAddon = isAdjuvantIntervention(interventions[0]);
+      if (specialty === "infertility" && isAddon) {
+        comparators.push(`no ${interventions[0]} (standard protocol)`);
+      } else if (specialty === "obstetrics") {
+        comparators.push("standard care or expectant management");
+      } else {
+        comparators.push("standard care");
+      }
+    } else if (interventions.length >= 2) {
+      for (const iv of interventions) {
+        comparators.push(`no ${iv} (standard protocol)`);
+      }
+    }
+  }
 
-  let intervention = "";
-  let comparator = "";
+  // Enforce cross-slot conflict rule strictly across all outcomes
+  for (let idx = outcomes.length - 1; idx >= 0; idx--) {
+    const outCanonical = outcomes[idx].toLowerCase();
+    const isConflict = interventions.some(iv => iv.toLowerCase() === outCanonical) ||
+                       comparators.some(c => c.toLowerCase() === outCanonical);
+    if (isConflict) {
+      outcomes.splice(idx, 1);
+    }
+  }
+
+  return {
+    population,
+    interventions,
+    comparators,
+    outcomes,
+    unresolved,
+    cues: {
+      comparative: comparativeCues,
+      directionVerbs
+    }
+  };
+}
+
+/**
+ * Parses clinical input into distinct, non-overlapping PICO roles:
+ * - Population / Clinical Problem (P)
+ * - Intervention (I)
+ * - Comparator (C)
+ * - Candidate Outcomes (O)
+ */
+export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario {
+  const slots = extractPicoSlots(rawInput);
+
+  // Specialty scoring from recognized slots and taxonomy
+  const specialtyScores: Record<SpecialtyKey, number> = { obstetrics: 0, gynecology: 0, infertility: 0 };
+  for (const p of slots.population) {
+    const entry = MEDICAL_TAXONOMY.find(m => m.canonical.toLowerCase() === p.toLowerCase());
+    if (entry) {
+      specialtyScores[entry.specialty] += 4;
+    } else if (/preterm|cervix|preeclamp|gestat|pregnancy|loss/i.test(p)) {
+      specialtyScores.obstetrics += 3;
+    } else if (/ivf|icsi|infertil|pcos|responder|ovarian|dor/i.test(p)) {
+      specialtyScores.infertility += 3;
+    } else {
+      specialtyScores.gynecology += 2;
+    }
+  }
+  for (const iv of slots.interventions) {
+    const entry = MEDICAL_TAXONOMY.find(m => m.canonical.toLowerCase() === iv.toLowerCase());
+    if (entry) {
+      specialtyScores[entry.specialty] += 3;
+    } else if (/growth hormone|coenzyme|coq10|dhea|prp|letrozole|clomiphene/i.test(iv)) {
+      specialtyScores.infertility += 2;
+    } else if (/cerclage|pessary|aspirin|heparin/i.test(iv)) {
+      specialtyScores.obstetrics += 2;
+    } else if (/dienogest|myomectomy|embolization/i.test(iv)) {
+      specialtyScores.gynecology += 2;
+    }
+  }
+  let specialty: SpecialtyKey = "obstetrics";
+  if (specialtyScores.infertility > specialtyScores.obstetrics && specialtyScores.infertility >= specialtyScores.gynecology) {
+    specialty = "infertility";
+  } else if (specialtyScores.gynecology > specialtyScores.obstetrics && specialtyScores.gynecology > specialtyScores.infertility) {
+    specialty = "gynecology";
+  } else if (specialtyScores.obstetrics > 0) {
+    specialty = "obstetrics";
+  } else if (specialtyScores.infertility > 0) {
+    specialty = "infertility";
+  }
+
+  // Derive outcomes from slots
+  const derivation = deriveOutcomes(slots, specialty);
+  const outcomes = derivation.outcomes.map(d => d.outcome);
+
+  // Determine Population: only substitute default when no condition stated
+  const population = slots.population[0] || (specialty === "obstetrics" ? "short cervix" : specialty === "infertility" ? "poor ovarian response" : "endometriosis");
+
+  let intervention = slots.interventions[0] || (KB[specialty].interventions[0] || "first-line therapy");
+  let comparator = slots.comparators[0] || (specialty === "obstetrics" ? "standard care or expectant management" : "standard protocol");
   let comparisonOptions: Array<{ label: string; intervention: string; comparator: string }> | undefined;
-  let clarificationRequired = false;
+  let clarificationRequired = slots.unresolved.length > 0;
   let clarificationPrompt = "";
 
-  if (matchedInterventions.length >= 2) {
-    const iv1 = matchedInterventions[0];
-    const iv2 = matchedInterventions[1];
+  if (slots.interventions.length >= 2) {
+    const iv1 = slots.interventions[0];
+    const iv2 = slots.interventions[1];
     const iv1IsAddon = isAdjuvantIntervention(iv1);
     const iv2IsAddon = isAdjuvantIntervention(iv2);
 
     if (iv1IsAddon || iv2IsAddon) {
-      // Multiple adjuvants: do not silently make the second one the comparator
       intervention = iv1;
       comparator = `no ${iv1} (standard protocol)`;
       clarificationRequired = true;
-      clarificationPrompt = `Multiple interventions identified (${matchedInterventions.join(", ")}). Please select the desired comparison.`;
+      clarificationPrompt = `Multiple interventions identified (${slots.interventions.join(", ")}). Please select the desired comparison.`;
       comparisonOptions = [
         { label: `${iv1} vs standard protocol`, intervention: iv1, comparator: `no ${iv1} (standard protocol)` },
         { label: `${iv2} vs standard protocol`, intervention: iv2, comparator: `no ${iv2} (standard protocol)` },
@@ -1177,33 +1361,13 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
         { label: `${iv1} vs ${iv2} (head-to-head)`, intervention: iv1, comparator: iv2 }
       ];
     } else {
-      // Distinct non-adjuvant active interventions (e.g. letrozole vs clomiphene)
       intervention = iv1;
       comparator = iv2;
     }
-  } else if (matchedInterventions.length === 1) {
-    intervention = matchedInterventions[0];
-    const isAddon = isAdjuvantIntervention(intervention);
-    if (specialty === "infertility" && isAddon) {
-      comparator = `no ${intervention} (standard protocol)`;
-    } else {
-      comparator = specialty === "obstetrics" ? "standard care or expectant management" : "standard care";
-    }
-  } else {
-    // No interventions matched
-    const specDefault = KB[specialty];
-    intervention = specDefault.interventions[0] || "first-line therapy";
-    comparator = specDefault.interventions[1] || "standard care";
+  } else if (slots.interventions.length === 1) {
+    intervention = slots.interventions[0];
+    comparator = slots.comparators[0] || (specialty === "obstetrics" ? "standard care or expectant management" : "standard care");
   }
-
-  // Candidate outcomes: deduplicate and validate
-  const defaultOutcomes = KB[specialty].outcomesRanked;
-  const rawOutcomes = matchedOutcomes.length > 0
-    ? [...matchedOutcomes, ...defaultOutcomes.filter(d => !matchedOutcomes.includes(d))]
-    : defaultOutcomes;
-
-  const dedupedOutcomes = dedupeOutcomes(rawOutcomes, matchedOutcomes.length);
-  const outcomes = dedupedOutcomes.slice(0, 6);
 
   const primaryOutcome = outcomes[0] || "live birth rate";
   const secondaryOutcome1 = outcomes[1] || outcomes[0] || "secondary clinical complications";
@@ -1218,51 +1382,54 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
 
   const suggestedQuestions: Array<{ question: string; rationale: string }> = [];
 
-  if (matchedInterventions.length >= 2 && (isAdjuvantIntervention(matchedInterventions[0]) || isAdjuvantIntervention(matchedInterventions[1]))) {
-    const iv1 = matchedInterventions[0];
-    const iv2 = matchedInterventions[1];
+  if (slots.interventions.length >= 2 && (isAdjuvantIntervention(slots.interventions[0]) || isAdjuvantIntervention(slots.interventions[1]))) {
+    const iv1 = slots.interventions[0];
+    const iv2 = slots.interventions[1];
     suggestedQuestions.push(
       {
         question: `In ${popPhrase} (P), does ${iv1} (I) compared with no ${iv1} (standard protocol) (C) ${q1Action} (O)?`,
-        rationale: buildDynamicRationale(iv1, `no ${iv1} (standard protocol)`, primaryOutcome, "primary")
+        rationale: derivation.outcomes[0]?.rationale || buildDynamicRationale(iv1, `no ${iv1} (standard protocol)`, primaryOutcome, "primary")
       },
       {
         question: `In ${popPhrase} (P), does ${iv2} (I) compared with no ${iv2} (standard protocol) (C) ${q2Action} (O)?`,
-        rationale: buildDynamicRationale(iv2, `no ${iv2} (standard protocol)`, secondaryOutcome1, "secondary")
+        rationale: derivation.outcomes[1]?.rationale || buildDynamicRationale(iv2, `no ${iv2} (standard protocol)`, secondaryOutcome1, "secondary")
       },
       {
         question: `In ${popPhrase} (P), does ${iv1} combined with ${iv2} (I) compared with standard protocol (C) ${q3Action} (O)?`,
-        rationale: buildDynamicRationale(`${iv1} combined with ${iv2}`, "standard protocol", secondaryOutcome2, "subgroup")
+        rationale: derivation.outcomes[2]?.rationale || buildDynamicRationale(`${iv1} combined with ${iv2}`, "standard protocol", secondaryOutcome2, "subgroup")
       },
       {
         question: `In ${popPhrase} (P), does ${iv1} (I) compared with ${iv2} (C) ${q4Action} (O)?`,
-        rationale: buildDynamicRationale(iv1, iv2, qolOutcome, "qol")
+        rationale: derivation.outcomes[3]?.rationale || buildDynamicRationale(iv1, iv2, qolOutcome, "qol")
       }
     );
   } else {
     suggestedQuestions.push(
       {
         question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q1Action} (O)?`,
-        rationale: buildDynamicRationale(intervention, comparator, primaryOutcome, "primary")
+        rationale: derivation.outcomes[0]?.rationale || buildDynamicRationale(intervention, comparator, primaryOutcome, "primary")
       },
       {
         question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q2Action} (O)?`,
-        rationale: buildDynamicRationale(intervention, comparator, secondaryOutcome1, "secondary")
+        rationale: derivation.outcomes[1]?.rationale || buildDynamicRationale(intervention, comparator, secondaryOutcome1, "secondary")
       },
       {
         question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q3Action} (O)?`,
-        rationale: buildDynamicRationale(intervention, comparator, secondaryOutcome2, "subgroup")
+        rationale: derivation.outcomes[2]?.rationale || buildDynamicRationale(intervention, comparator, secondaryOutcome2, "subgroup")
       },
       {
         question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q4Action} (O)?`,
-        rationale: buildDynamicRationale(intervention, comparator, qolOutcome, "qol")
+        rationale: derivation.outcomes[3]?.rationale || buildDynamicRationale(intervention, comparator, qolOutcome, "qol")
       }
     );
   }
 
   const advisories: string[] = [];
-  if (unrecognizedTerms.length > 0) {
-    advisories.push(`Unrecognized terms: ${unrecognizedTerms.join(", ")}`);
+  if (slots.unresolved.length > 0) {
+    advisories.push(`Unrecognized terms: ${slots.unresolved.join(", ")}`);
+    if (!clarificationPrompt) {
+      clarificationPrompt = `Unrecognized clinical terms: ${slots.unresolved.join(", ")}. Please clarify the intended population, intervention, or outcome.`;
+    }
   }
 
   return {
@@ -1272,7 +1439,9 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
     comparator,
     outcomes,
     suggestedQuestions,
-    ...(unrecognizedTerms.length > 0 ? { unrecognizedTerms } : {}),
+    picoSlots: slots,
+    derivedOutcomes: derivation.outcomes,
+    ...(slots.unresolved.length > 0 ? { unrecognizedTerms: slots.unresolved } : {}),
     ...(comparisonOptions ? { comparisonOptions } : {}),
     ...(clarificationRequired ? { clarificationRequired, clarificationPrompt } : {}),
     ...(advisories.length > 0 ? { advisories } : {})

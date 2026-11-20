@@ -1,16 +1,34 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseClinicalScenario, formulateOutcomeVerbPhrase, resolveKnownOutcome, dedupeOutcomes } from "./clinical-semantics.ts";
+import {
+  parseClinicalScenario,
+  extractPicoSlots,
+  formulateOutcomeVerbPhrase,
+  resolveKnownOutcome,
+  dedupeOutcomes
+} from "./clinical-semantics.ts";
+import { deriveOutcomes } from "./outcome-derivation.ts";
+import { generateDeterministicGapAnalysis } from "./deterministic-gap.ts";
 import { ruleFormulate } from "./rule-engine.ts";
 import type { Analysis } from "./kb.ts";
 
 test("Regression 1: parseClinicalScenario normalizes misspelled intervention and excludes it from outcome slots", () => {
   const scenario = parseClinicalScenario("poor ovarian response, growth hormone, co enzyem q 10");
+  assert.equal(scenario.population, "poor ovarian response");
   assert.equal(scenario.intervention, "growth hormone");
   assert.ok(
     scenario.comparisonOptions?.some(opt => opt.intervention.includes("coenzyme Q10") || opt.comparator.includes("coenzyme Q10")),
     "Should include normalized coenzyme Q10 in comparison options"
   );
+  assert.ok(scenario.picoSlots, "Scenario must contain picoSlots");
+  assert.ok(scenario.picoSlots.population.includes("poor ovarian response"), "P must contain poor ovarian response");
+  assert.ok(scenario.picoSlots.interventions.includes("growth hormone"), "I must contain growth hormone");
+  assert.ok(scenario.picoSlots.interventions.includes("coenzyme Q10"), "I must contain normalized coenzyme Q10");
+  assert.ok(
+    scenario.picoSlots.comparators.some(c => c.includes("no growth hormone")),
+    "Comparators should include implied per-adjuvant standard protocol"
+  );
+
   for (const sq of scenario.suggestedQuestions) {
     assert.ok(!sq.question.includes("co enzyem q 10"), `Must not contain typo: ${sq.question}`);
     assert.ok(!sq.question.includes("growth hormone (O)"), `Must not have growth hormone in (O): ${sq.question}`);
@@ -24,7 +42,66 @@ test("Regression 1: parseClinicalScenario normalizes misspelled intervention and
   }
 });
 
-test("Regression 2: Prose input without commas preserves stated interventions without KB-default substitution", () => {
+test("Regression 2: Prose input with comparative cue correctly separates I, C, O, P", () => {
+  const slots = extractPicoSlots("growth hormone versus letrozole for live birth rate in poor ovarian response");
+  assert.deepEqual(slots.interventions, ["growth hormone"]);
+  assert.deepEqual(slots.comparators, ["letrozole"]);
+  assert.deepEqual(slots.outcomes, ["live birth rate"]);
+  assert.deepEqual(slots.population, ["poor ovarian response"]);
+  assert.ok(slots.cues.comparative.includes("versus"), "Must detect comparative cue 'versus'");
+});
+
+test("Regression 3: Multi-adjuvant input recognizes both interventions and avoids auto head-to-head comparator", () => {
+  const slots = extractPicoSlots("growth hormone and coenzyme q10");
+  assert.ok(slots.interventions.includes("growth hormone"));
+  assert.ok(slots.interventions.includes("coenzyme Q10"));
+  assert.ok(slots.comparators.some(c => c.includes("no growth hormone")));
+  assert.ok(slots.comparators.some(c => c.includes("no coenzyme Q10")));
+  assert.ok(!slots.comparators.includes("coenzyme Q10"), "Second adjuvant must not be auto head-to-head comparator");
+});
+
+test("Regression 4: Outcome derivation produces ranked tier suggestions with rationales and zero interventions in outcomes", () => {
+  const slots = extractPicoSlots("poor ovarian response, growth hormone, co enzyem q 10");
+  const derivation = deriveOutcomes(slots, "infertility");
+  assert.ok(derivation.outcomes.length > 0, "Must derive outcomes");
+  assert.ok(derivation.primaryOutcome, "Must have a primary outcome");
+  assert.equal(derivation.primaryOutcome.tier, "critical", "Primary outcome must be patient-centered critical tier");
+  assert.ok(
+    derivation.primaryOutcome.canonical.toLowerCase().includes("live birth"),
+    "Top suggestion must be live birth endpoint"
+  );
+  assert.ok(derivation.primaryOutcome.rationale.length > 0, "Must contain dynamic rationale");
+  assert.ok(
+    derivation.primaryOutcome.rationale.includes("growth hormone") || derivation.primaryOutcome.rationale.includes("poor ovarian response"),
+    "Rationale must connect P and I"
+  );
+  assert.ok(
+    derivation.safetyOutcome !== null || derivation.outcomes.some(o => o.tier === "safety"),
+    "Safety tier outcome must be present"
+  );
+
+  for (const outcome of derivation.outcomes) {
+    assert.ok(
+      !outcome.canonical.toLowerCase().includes("growth hormone") &&
+      !outcome.canonical.toLowerCase().includes("coenzyme"),
+      `Outcome cannot be an intervention: ${outcome.canonical}`
+    );
+  }
+});
+
+test("Regression 5: Unresolvable input lands in unresolved without being slotted and raises clarification", () => {
+  const slots = extractPicoSlots("poor ovarian response, growth hormone, xyzzy foo");
+  assert.ok(slots.unresolved.includes("xyzzy foo"), "Unresolvable phrase must be in unresolved slot");
+  assert.ok(!slots.outcomes.includes("xyzzy foo"), "Unresolvable phrase must not land in outcomes");
+  assert.ok(!slots.interventions.includes("xyzzy foo"), "Unresolvable phrase must not land in interventions");
+
+  const scenario = parseClinicalScenario("poor ovarian response, growth hormone, xyzzy foo");
+  assert.equal(scenario.clarificationRequired, true, "Clarification must be required");
+  assert.ok(scenario.clarificationPrompt?.includes("xyzzy foo"), "Prompt must mention unresolvable phrase");
+  assert.ok(!scenario.outcomes.includes("xyzzy foo"), "Scenario outcomes must not contain unresolvable phrase");
+});
+
+test("Regression 6: Prose input without commas preserves stated interventions without KB-default substitution", () => {
   const scenario = parseClinicalScenario("poor ovarian response growth hormone coenzyme q10");
   assert.equal(scenario.population, "poor ovarian response");
   assert.equal(scenario.intervention, "growth hormone");
@@ -32,7 +109,32 @@ test("Regression 2: Prose input without commas preserves stated interventions wi
   assert.ok(!scenario.comparator.toLowerCase().includes("clomiphene"), "Must not substitute clomiphene");
 });
 
-test("Regression 3: formulateOutcomeVerbPhrase rejects non-outcomes and validates directionality", () => {
+test("Regression 7: Outcome deduplication removes near-duplicate outcomes with Jaccard overlap > 0.7", () => {
+  const rawList = ["cumulative live birth rate", "live birth rate", "clinical pregnancy rate", "miscarriage rate"];
+  const deduped = dedupeOutcomes(rawList);
+  assert.ok(
+    deduped.includes("cumulative live birth rate"),
+    "Should retain more specific outcome"
+  );
+  assert.ok(
+    !deduped.includes("live birth rate"),
+    "Should deduplicate live birth rate when cumulative live birth rate is present"
+  );
+  assert.ok(deduped.length < rawList.length, "Deduped list must have fewer items than raw list");
+});
+
+test("Regression 8: Gap analysis search queries directly parameterize derived outcome phrases", () => {
+  const gap = generateDeterministicGapAnalysis("poor ovarian response, growth hormone, co enzyem q 10");
+  assert.ok(gap.picoSlots, "Gap must expose picoSlots");
+  assert.ok(gap.derivedOutcomes && gap.derivedOutcomes.length > 0, "Gap must expose derivedOutcomes");
+  const allQueries = [...gap.known.map(k => k.searchQuery), ...gap.uncertain.map(u => u.searchQuery)].join(" ");
+  assert.ok(
+    allQueries.includes("Live birth rate") || allQueries.includes("live birth rate"),
+    "Search queries must include derived primary outcome phrase"
+  );
+});
+
+test("Regression 9: formulateOutcomeVerbPhrase rejects non-outcomes and validates directionality", () => {
   const invalidResult = formulateOutcomeVerbPhrase("secondary", "co enzyem q 10");
   assert.equal(invalidResult, null, "Must return null for unresolvable or intervention token");
 
@@ -46,7 +148,7 @@ test("Regression 3: formulateOutcomeVerbPhrase rejects non-outcomes and validate
   );
 });
 
-test("Regression 4: formulate stage with complete gap analysis contains actual condition and intervention without placeholders", () => {
+test("Regression 10: formulate stage with complete gap analysis contains actual condition and intervention without placeholders", () => {
   const analysis: Partial<Analysis> = {
     condition: "poor ovarian response",
     intervention: "growth hormone",
@@ -59,27 +161,4 @@ test("Regression 4: formulate stage with complete gap analysis contains actual c
   assert.ok(formulation.finalQuestion.includes("growth hormone"));
   assert.ok(!formulation.finalQuestion.includes("high-risk clinical population"), "Must not contain high-risk clinical population placeholder");
   assert.ok(!formulation.finalQuestion.includes("a clinically meaningful outcome"), "Must not contain clinically meaningful outcome placeholder");
-});
-
-test("Regression 5: Two-adjuvant input defaults comparator to standard protocol and provides clarification prompt", () => {
-  const scenario = parseClinicalScenario("poor ovarian response, growth hormone, coenzyme q10");
-  assert.notEqual(scenario.comparator, "coenzyme Q10", "Comparator must not be silently assigned the second adjuvant without choice");
-  assert.equal(scenario.comparator, "no growth hormone (standard protocol)");
-  assert.equal(scenario.clarificationRequired, true);
-  assert.ok(scenario.clarificationPrompt && scenario.clarificationPrompt.length > 0);
-  assert.ok(scenario.comparisonOptions && scenario.comparisonOptions.length >= 3);
-});
-
-test("Regression 6: Outcome deduplication removes near-duplicate outcomes with Jaccard overlap > 0.7", () => {
-  const rawList = ["cumulative live birth rate", "live birth rate", "clinical pregnancy rate", "miscarriage rate"];
-  const deduped = dedupeOutcomes(rawList);
-  assert.ok(
-    deduped.includes("cumulative live birth rate"),
-    "Should retain more specific outcome"
-  );
-  assert.ok(
-    !deduped.includes("live birth rate"),
-    "Should deduplicate live birth rate when cumulative live birth rate is present"
-  );
-  assert.ok(deduped.length < rawList.length, "Deduped list must have fewer items than raw list");
 });

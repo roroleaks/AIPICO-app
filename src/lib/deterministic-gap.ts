@@ -1,5 +1,6 @@
 import { type SpecialtyKey } from "./kb.ts";
-import { parseClinicalScenario } from "./clinical-semantics.ts";
+import { parseClinicalScenario, type PicoSlots } from "./clinical-semantics.ts";
+import { type DerivedOutcome } from "./outcome-derivation.ts";
 
 export interface DeterministicGapPoint {
   point: string;
@@ -14,6 +15,8 @@ export interface DeterministicGapPayload {
   uncertain: DeterministicGapPoint[];
   gaps: Array<{ gap: string; why: string }>;
   suggestedQuestions: Array<{ question: string; rationale: string }>;
+  picoSlots?: PicoSlots;
+  derivedOutcomes?: DerivedOutcome[];
 }
 
 /**
@@ -50,43 +53,50 @@ export function generateDeterministicGapAnalysis(rawTopic: string): Deterministi
     ? `Systematic baseline evaluation of ovarian reserve markers and reproductive history in patients with ${condition} informs protocol selection.`
     : `Standardized clinical screening and risk-factor assessment in patients presenting with ${condition} supports timely identification of at-risk individuals.`;
 
-  // Build 4 search theme points
+  // Derived clinical outcomes
+  const derivedOutcomes = scenario.derivedOutcomes || [];
+  const primaryOutcome = derivedOutcomes[0]?.outcome || scenario.outcomes[0] || "live birth rate";
+  const secondaryOutcome = derivedOutcomes[1]?.outcome || scenario.outcomes[1] || "clinical pregnancy rate";
+  const safetyOutcome = derivedOutcomes.find(d => d.tier === "safety")?.outcome || "adverse events";
+  const qolOutcome = derivedOutcomes.find(d => d.tier === "patient-reported")?.outcome || "health-related quality of life";
+
+  // Build 4 search theme points parameterized by condition, intervention, and derived outcomes
   const known: DeterministicGapPoint[] = [
     {
       point: screeningPhrase,
       searchQuery: `${condition} screening risk assessment`
     },
     {
-      point: `The therapeutic efficacy of ${intervention} for ${condition} depends on ${stagingPhrase}.`,
-      searchQuery: `${condition} ${intervention} efficacy clinical trial`
+      point: `The therapeutic efficacy of ${intervention} for ${condition} is evaluated by its impact on ${primaryOutcome}, influenced by ${stagingPhrase}.`,
+      searchQuery: `${condition} ${intervention} ${primaryOutcome} clinical trial`
     },
     {
       point: `Clinical practice recommendations emphasize individualized clinical evaluation before initiating ${intervention} in patients with ${condition}.`,
       searchQuery: `${condition} ${intervention} guideline practice recommendation`
     },
     {
-      point: monitoringPhrase,
-      searchQuery: `${condition} surveillance outcomes prospective study`
+      point: `${monitoringPhrase} Surveillance of secondary clinical endpoints including ${secondaryOutcome} provides essential prognostic insight.`,
+      searchQuery: `${condition} ${intervention} ${secondaryOutcome} outcomes study`
     }
   ];
 
-  // Build 4 conflicting / uncertain evidence points
+  // Build 4 conflicting / uncertain evidence points parameterized by comparison and outcomes
   const uncertain: DeterministicGapPoint[] = [
     {
-      point: `The comparative effectiveness of ${intervention} versus ${comparator} for ${condition} remains contested due to heterogeneous inclusion criteria across trials.`,
-      searchQuery: `${condition} ${intervention} versus ${comparator} randomized trial`
+      point: `The comparative effectiveness of ${intervention} versus ${comparator} on ${primaryOutcome} in ${condition} remains contested due to heterogeneous trial definitions.`,
+      searchQuery: `${condition} ${intervention} versus ${comparator} ${primaryOutcome} randomized trial`
     },
     {
       point: `Optimal intervention thresholds and timing for ${intervention} in ${condition} show conflicting findings across multicenter cohort studies.`,
       searchQuery: `${condition} ${intervention} threshold timing observational cohort`
     },
     {
-      point: `The incremental clinical benefit of combining ${intervention} with adjuvant pharmacotherapy for ${condition} is uncertain due to limited powered trials.`,
-      searchQuery: `${condition} ${intervention} combination therapy trial`
+      point: `The incremental clinical benefit of combining ${intervention} with adjuvant pharmacotherapy on ${secondaryOutcome} for ${condition} is uncertain due to limited powered trials.`,
+      searchQuery: `${condition} ${intervention} ${secondaryOutcome} combination therapy trial`
     },
     {
-      point: `Long-term functional and clinical outcomes associated with ${intervention} for ${condition} remain under-characterized relative to short-term endpoints.`,
-      searchQuery: `${condition} ${intervention} long-term outcomes follow-up`
+      point: `Long-term functional, safety, and patient-reported endpoints (${safetyOutcome} and ${qolOutcome}) associated with ${intervention} for ${condition} remain under-characterized relative to acute endpoints.`,
+      searchQuery: `${condition} ${intervention} ${safetyOutcome} ${qolOutcome} follow-up`
     }
   ];
 
@@ -138,6 +148,8 @@ export function generateDeterministicGapAnalysis(rawTopic: string): Deterministi
     known,
     uncertain,
     gaps,
-    suggestedQuestions: scenario.suggestedQuestions?.length ? scenario.suggestedQuestions : suggestedQuestions
+    suggestedQuestions: scenario.suggestedQuestions?.length ? scenario.suggestedQuestions : suggestedQuestions,
+    picoSlots: scenario.picoSlots,
+    derivedOutcomes: scenario.derivedOutcomes
   };
 }
