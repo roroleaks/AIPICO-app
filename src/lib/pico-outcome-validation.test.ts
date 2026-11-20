@@ -197,3 +197,24 @@ test("Regression 12: Demographic qualifiers in clinical scenario are captured in
     "Demographic qualifier must be preserved in population cues"
   );
 });
+
+test("Regression 13: Tier-balanced selection includes safety tier while preserving top-3 live-birth endpoints", () => {
+  const slots = extractPicoSlots("poor ovarian response, growth hormone, co enzyem q 10");
+  const derivation = deriveOutcomes(slots);
+
+  assert.ok(derivation.outcomes.length <= 8, "Total list length must stay <= 8");
+  assert.ok(
+    derivation.outcomes.some(o => o.tier === "safety"),
+    "Must contain at least one outcome with tier === 'safety'"
+  );
+  assert.ok(
+    derivation.outcomes.some(o => /cycle cancellation|miscarriage/i.test(o.canonical)),
+    "Safety candidate should be cycle cancellation or miscarriage"
+  );
+
+  const top3 = derivation.outcomes.slice(0, 3);
+  for (const item of top3) {
+    assert.equal(item.tier, "critical", "Top-3 outcome must be critical tier");
+    assert.ok(/live birth/i.test(item.canonical), `Top-3 outcome must be live-birth-centered: ${item.canonical}`);
+  }
+});

@@ -307,13 +307,54 @@ export function deriveOutcomes(
     });
   }
 
-  const primaryOutcome = deduped[0];
-  const secondaryOutcomes = deduped.slice(1, 6);
-  const safetyOutcome = deduped.find(d => d.tier === "safety");
-  const patientReportedOutcome = deduped.find(d => d.tier === "patient-reported");
+  // Tier-balanced candidate selection: top 3 critical, top 3 surrogate, top 1 safety, top 1 patient-reported
+  const selectedOutcomes: DerivedOutcome[] = [];
+  const selectedKeys = new Set<string>();
+
+  const addCandidate = (item: DerivedOutcome | undefined) => {
+    if (!item) return;
+    const key = item.canonical.toLowerCase();
+    if (!selectedKeys.has(key) && selectedOutcomes.length < 8) {
+      selectedKeys.add(key);
+      selectedOutcomes.push(item);
+    }
+  };
+
+  // Retain clinician stated outcomes first
+  for (const d of deduped) {
+    if (statedOutcomes.some(so => so.toLowerCase() === d.outcome.toLowerCase() || so.toLowerCase() === d.canonical.toLowerCase())) {
+      addCandidate(d);
+    }
+  }
+
+  // Top 3 critical candidates by score
+  deduped.filter(d => d.tier === "critical").slice(0, 3).forEach(addCandidate);
+
+  // Top 3 surrogate candidates by score
+  deduped.filter(d => d.tier === "surrogate").slice(0, 3).forEach(addCandidate);
+
+  // Top 1 safety candidate by score
+  deduped.filter(d => d.tier === "safety").slice(0, 1).forEach(addCandidate);
+
+  // Top 1 patient-reported candidate by score
+  deduped.filter(d => d.tier === "patient-reported").slice(0, 1).forEach(addCandidate);
+
+  // Fill remaining slots from remaining candidates by descending score until 8 total
+  for (const candidate of deduped) {
+    if (selectedOutcomes.length >= 8) break;
+    addCandidate(candidate);
+  }
+
+  // Preserve the established tier and score ordering among the selected candidates
+  const finalOutcomes = deduped.filter(d => selectedKeys.has(d.canonical.toLowerCase())).slice(0, 8);
+
+  const primaryOutcome = finalOutcomes[0] || deduped[0];
+  const secondaryOutcomes = finalOutcomes.slice(1, 6);
+  const safetyOutcome = finalOutcomes.find(d => d.tier === "safety") || deduped.find(d => d.tier === "safety");
+  const patientReportedOutcome = finalOutcomes.find(d => d.tier === "patient-reported") || deduped.find(d => d.tier === "patient-reported");
 
   return {
-    outcomes: deduped.slice(0, 8),
+    outcomes: finalOutcomes,
     primaryOutcome,
     secondaryOutcomes,
     safetyOutcome,
