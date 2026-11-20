@@ -189,7 +189,7 @@ export function generateDeterministicCommentary(
       abstract:
         `Background: The clinical question addressed is: ${cleanQ}. ` +
         `Objective: To evaluate the comparative clinical evidence for ${inlineInt || "the intervention"} versus ${inlineComp || "the comparator"} in ${inlinePop || "the target population"}. ` +
-        `Methods: Databases including PubMed, Europe PMC, OpenAlex, and Crossref were queried against structured PICO criteria for ${inlineOut}. ` +
+        `Methods: Databases including PubMed, Cochrane CENTRAL, ClinicalTrials.gov, Semantic Scholar, preprints, Europe PMC, OpenAlex, and Crossref were queried against structured PICO criteria for ${inlineOut}. ` +
         `Results: No directly supporting clinical records meeting the claim verification filter were retained. ` +
         `Conclusion: Direct comparative evidence for this specific clinical configuration remains sparse in current indexed literature.`,
       keywords: keywordList,
@@ -212,7 +212,7 @@ export function generateDeterministicCommentary(
   const abstract =
     `Background: Clinical management of ${inlinePop || "the target clinical cohort"} presents significant therapeutic complexity, where optimizing ${inlineOut} represents a paramount clinical milestone. Underlying biological variations and heterogeneous protocolization often lead to clinical equipoise regarding therapeutic strategies. ` +
     `Objective: To systematically synthesize and critically appraise current peer-reviewed evidence evaluating ${inlineQ}. ` +
-    `Methods & Evidence Scope: Multi-database indexing across PubMed/MEDLINE, Europe PMC, OpenAlex, and Crossref was filtered against strict PICO claim-level relevance boundaries. A total of ${n} clinical record${plural ? "" : "s"} ${yearSpanText} ${plural ? "was" : "were"} retrieved and cataloged for ${inlineOut}. ` +
+    `Methods & Evidence Scope: Multi-database indexing across PubMed/MEDLINE, Cochrane CENTRAL, ClinicalTrials.gov, Semantic Scholar, preprints, Europe PMC, OpenAlex, and Crossref was filtered against strict PICO claim-level relevance boundaries. A total of ${n} clinical record${plural ? "" : "s"} ${yearSpanText} ${plural ? "was" : "were"} retrieved and cataloged for ${inlineOut}. ` +
     `Results & Synthesis: The retained records provide grounded clinical data examining therapeutic protocols and observed clinical endpoints across the evaluated patient cohort. ` +
     `    Clinical Interpretation: Current literature underscores the necessity of precise patient stratification, individualized intervention timing, and meticulous clinical risk evaluation rather than empirical universal application. ` +
     `Conclusion: The available evidence base provides essential clinical insights into ${inlineOut} in ${inlinePop || "this population"}, while highlighting the imperative for standardized multi-center randomized investigations to resolve remaining clinical uncertainties.`;
@@ -252,7 +252,7 @@ export function generateDeterministicCommentary(
 
   const discScope =
     `#### Evidence Base Scope & Methodological Characteristics\n` +
-    `The assembled evidence base comprises ${n} peer-reviewed publication${plural ? "" : "s"} ${yearSpanText}, retrieved through systematic querying across PubMed/MEDLINE, Europe PMC, OpenAlex, and Crossref. ` +
+    `The assembled evidence base comprises ${n} peer-reviewed publication${plural ? "" : "s"} ${yearSpanText}, retrieved through systematic querying across PubMed/MEDLINE, Cochrane CENTRAL, ClinicalTrials.gov, Semantic Scholar, preprints, Europe PMC, OpenAlex, and Crossref. ` +
     `Each included record underwent claim-specific filtering to ensure direct relevance to ${inlinePop || "the clinical population"}, the intervention pathways under review, and the primary endpoint of ${inlineOut}. ` +
     `The evidence base incorporates diverse study designs, offering valuable perspectives across observational cohorts and structured clinical evaluations.`;
 

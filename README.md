@@ -1,4 +1,4 @@
-# AIPICO v3.2 — Evidence-Grounded Clinical Question Assistant (Obstetrics & Gynecology)
+# AIPICO v3.3 — Evidence-Grounded Clinical Question Assistant (Obstetrics & Gynecology)
 
 Turns a clinical inquiry into a structured PICO, formulates candidate literature queries, retrieves and validates evidence from PubMed and partner repositories, and generates publication-grade evidence syntheses and commentaries where **every cited reference resolves strictly to a source that survived deterministic, claim-specific filtering**.
 
@@ -72,6 +72,13 @@ The application has undergone verification against all 13 defect items from `res
   - **Structural Integrity & Clinical Endpoints (P1)**: Markdown structure preserved across claim finalization; study summaries treated as cohesive units; commentary retry recursion replaced with sequential loop and single lock; user's specified outcome preserved verbatim across all stages; IVF outcome ontology added.
   - **Multi-Provider Failover & Telemetry (P2)**: Per-stage timeouts with request deadline tracking; automatic failover across Gemini, Groq, OpenRouter, and OpenAI providers; rate limits adjusted to 20 req/min with `x-real-ip` support.
   - **Dependency Upgrades & CI (P3)**: Next.js upgraded to 16.4.6, Zod to ^4.6.6; production dependencies verified clean (0 vulnerabilities); zero ESLint errors; GitHub Actions CI workflow added; UI icons and terminology refined.
+- **v3.3 Enhancements (Multi-Source Search, Performance & Export Polish)**:
+  - **9-Source Search Engine Coverage (P0)**: Searches PubMed, Europe PMC, OpenAlex, Crossref, Cochrane CENTRAL (Europe PMC CTR), ClinicalTrials.gov API v2, Semantic Scholar Graph API, preprints (OpenAlex), and Google Scholar (honest scholarly proxy). Clinical trials route strictly to indirect evidence; preprints display `[preprint — not peer reviewed]` badges and cannot solely support efficacy claims.
+  - **PubMed Abstract Enrichment (P1)**: Batch-fetches abstracts via NCBI `efetch.fcgi` XML parser, populating `context` and removing the retrieval handicap against PubMed records.
+  - **Population Term Normalization (P1)**: Normalizes clinical conditions by stripping leading gender and demographic prefixes before PICO question generation, removing redundant wording.
+  - **Deterministic Gap Stage Concurrency (P1)**: Bounded concurrency helper (max 2 in flight), early review ladder completion, and a 25-second overall deadline budget.
+  - **PDF Export Polish (P0)**: Native PDFKit paragraph wrapping with `lineGap: 3`, three non-overlapping running footer segments with ≥ 8pt clearance, and page budgets maintained under 6 pages.
+  - **Runtime & CI Hygiene (P2)**: `"engines": { "node": ">=22.6" }` declared in `package.json` and GitHub Actions CI workflow updated to Node 22.
 
 ---
 

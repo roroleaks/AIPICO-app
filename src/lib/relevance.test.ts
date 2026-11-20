@@ -384,3 +384,35 @@ test("R25. every audit marks whether the record resolved to a citable source", (
   assert.equal(audits.get("11100001")?.resolved, true);
   assert.equal(audits.get("11100001")?.doiOk, true);
 });
+
+test("R26. PubMed record with abstract context passes auditRef on outcome token present only in abstract", () => {
+  const elements: PicoElement[] = [
+    { label: "Population", value: "pregnant individuals with short cervix" },
+    { label: "Intervention", value: "vaginal progesterone" },
+    { label: "Comparator", value: "expectant management" },
+    { label: "Outcome", value: "preterm birth before 34 weeks" }
+  ];
+
+  // Title mentions population, intervention and comparator, but NO outcome:
+  const withoutAbstract = {
+    pmid: "31422734",
+    title: "Vaginal progesterone versus expectant management in short cervix pregnancy",
+    authors: "Smith A, Jones B",
+    year: "2023",
+    journal: "Am J Obstet Gynecol",
+    doi: "10.1016/j.ajog.2023.01.001"
+  };
+
+  const auditWithout = auditRef(withoutAbstract, elements);
+  assert.equal(auditWithout.outcome, false, "Outcome must not match when absent from title/journal/authors");
+
+  // With abstract supplied (as fetched via efetch.fcgi):
+  const withAbstract = {
+    ...withoutAbstract,
+    context: "Randomized double-blind trial. The primary outcome was preterm birth before 34 weeks gestation. Significant reduction was observed."
+  };
+
+  const auditWith = auditRef(withAbstract, elements);
+  assert.equal(auditWith.outcome, true, "Outcome must match when present in abstract context");
+  assert.ok(auditWith.score >= 3, `Score should reflect matched outcome: got ${auditWith.score}`);
+});

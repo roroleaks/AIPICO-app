@@ -196,7 +196,7 @@ export default function GapPage() {
           <section className="card">
             <AnimatedProcessingIndicator
               message="Mapping the evidence"
-              secondaryMessage="Retrieving from PubMed / Europe PMC / OpenAlex / Crossref… (~20–60 s)"
+              secondaryMessage="Retrieving from PubMed / Europe PMC / Cochrane CENTRAL / ClinicalTrials.gov / Semantic Scholar / Preprints / OpenAlex / Crossref… (~15–25 s)"
             />
             <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 20 }}>
               {Array.from({ length: 6 }).map((_, i) => (

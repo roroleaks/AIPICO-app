@@ -16,7 +16,7 @@ import {
   formatBibliographyList
 } from "@/lib/citation-formatter";
 
-interface ReferenceItem { pmid: string; title: string; authors: string; year: string; journal: string; doi?: string; url: string }
+interface ReferenceItem { pmid: string; title: string; authors: string; year: string; journal: string; doi?: string; url: string; context?: string; source?: string }
 type PubMedResult = ReferenceItem;
 interface GapSnapshot {
   topic?: string;
@@ -659,7 +659,8 @@ export default function PaperPage() {
         { heading: "Conclusion", blocks: [commentary.conclusion] }
       ],
       references: refs.length ? refs : undefined,
-      retainedReferences: refs.length ? retainedPayload() : undefined
+      retainedReferences: refs.length ? retainedPayload() : undefined,
+      provenance: (commentary as unknown as { provenance?: unknown })?.provenance
     }, slug(commentary.title) + "-commentary.pdf", "commentary");
   };
 
@@ -689,7 +690,8 @@ export default function PaperPage() {
           { heading: "Clinical Conclusion", blocks: [commentary.conclusion] }
         ],
         references: refs.length ? refs : undefined,
-        retainedReferences: retainedPayload()
+        retainedReferences: retainedPayload(),
+        provenance: (commentary as unknown as { provenance?: unknown })?.provenance
       };
 
       const res = await fetch("/api/docx", {
@@ -984,7 +986,7 @@ export default function PaperPage() {
                     <div style={{ marginTop: 14 }}>
                       <h3 className="sec-h">Reference Validation</h3>
                       <p className="hint" style={{ marginTop: 4 }}>
-                        Claim-to-reference audit: each source (PubMed · Europe PMC · OpenAlex · Crossref) is checked against the PICO elements (population · intervention · comparator · outcome) and every in-text citation is checked against the reference list.
+                        Claim-to-reference audit: each source (PubMed · Cochrane CENTRAL · ClinicalTrials.gov · Semantic Scholar · Preprints · Europe PMC · OpenAlex · Crossref · Google Scholar proxy) is checked against the PICO elements (population · intervention · comparator · outcome) and every in-text citation is checked against the reference list.
                       </p>
                       <p className="hint" style={{ marginTop: 4 }}>
                         🔗 Sources resolved: {resolved}/{a.length} · Valid DOIs: {withDoi} · In-text citations matched: {c.citedRefs}/{c.totalRefs}
@@ -1036,7 +1038,7 @@ export default function PaperPage() {
         {!!commentary?.fetchedReferences?.length && (
           <section className="card">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <span className="pill">📚 Evidence sources (PubMed · Europe PMC · OpenAlex · Crossref)</span>
+              <span className="pill">📚 Evidence sources (PubMed · CENTRAL · ClinicalTrials.gov · Semantic Scholar · Preprints · Europe PMC · OpenAlex · Crossref · Google Scholar proxy)</span>
               <button className="secondary" disabled={!!exporting} onClick={() => exportRefsPDF(commentary.fetchedReferences || [], commentary.title, "Evidence Sources", "sources")}>{exporting === "sources" ? "⏳ Generating PDF…" : "📄 References PDF"}</button>
             </div>
             {commentary.fetchedReferences.map(r => {
@@ -1045,7 +1047,9 @@ export default function PaperPage() {
                 <a key={r.pmid} className="result" href={r.url} target="_blank" rel="noopener noreferrer">
                   <div className="r-title">{r.title}</div>
                   <div className="r-meta">
-{r.authors} · {r.journal} · {r.year} · {/^(pmc|epmc|oax|cr):/.test(r.pmid) ? `ID: ${r.pmid}` : `PMID: ${r.pmid}`}{r.doi ? ` · DOI: ${r.doi}` : ""}
+                    {r.authors} · {r.journal} · {r.year} · {/^(pmc|epmc|oax|cr|cen|ctg|s2|pre):/.test(r.pmid) ? `ID: ${r.pmid}` : `PMID: ${r.pmid}`}{r.doi ? ` · DOI: ${r.doi}` : ""}
+                    {r.source === "preprint" && <span className="pill" style={{ marginLeft: 6, fontSize: 11, background: "#fef3c7", color: "#92400e" }}>Preprint (not peer reviewed)</span>}
+                    {r.source === "clinicaltrials" && <span className="pill" style={{ marginLeft: 6, fontSize: 11, background: "#e0f2fe", color: "#0369a1" }}>Trial Registration</span>}
                     {audit && (
                       <div style={{ marginTop: 4 }}>
                         <span className="tag">{audit.design}</span>

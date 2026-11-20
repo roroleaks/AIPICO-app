@@ -166,3 +166,50 @@ test("ruleFormulate calibrates question variant verb phrases to outcome directio
     assert.ok(!/presenting symptom/i.test(v.question), `infertility variants must not offer presenting symptom: ${v.question}`);
   }
 });
+
+test("ruleFormulate normalizes condition to avoid population doubling (e.g., 'women with endometriosis')", () => {
+  const inputs = [
+    "women with endometriosis",
+    "woman with endometriosis",
+    "pregnant women with gestational diabetes",
+    "patients with uterine fibroids",
+    "Women With Endometriosis"
+  ];
+
+  for (const cond of inputs) {
+    const r = ruleFormulate(
+      {
+        specialty: "gynecology",
+        specialtyLabel: "Gynecology",
+        condition: cond,
+        intervention: "laparoscopic excision",
+        comparator: "medical suppression",
+        questionType: "Intervention",
+        framework: "PICO",
+        missing: [],
+        interpretation: "Treatment question",
+        source: "rules"
+      },
+      {}
+    );
+
+    assert.equal(r.complete, true);
+    assert.ok(!r.finalQuestion.includes("women with women with"), `doubled in finalQuestion: ${r.finalQuestion}`);
+    assert.ok(!r.finalQuestion.includes("women with woman with"), `doubled in finalQuestion: ${r.finalQuestion}`);
+    assert.ok(!r.finalQuestion.includes("women with pregnant women with"), `doubled in finalQuestion: ${r.finalQuestion}`);
+    assert.ok(!r.finalQuestion.includes("women with patients with"), `doubled in finalQuestion: ${r.finalQuestion}`);
+
+    const popEl = r.elements.find(e => e.label.startsWith("P — Population"));
+    assert.ok(popEl, "Population element should exist");
+    assert.ok(!popEl.value.includes("Women with women with"), `doubled in element: ${popEl.value}`);
+    assert.ok(!popEl.value.includes("Women with woman with"), `doubled in element: ${popEl.value}`);
+    assert.ok(!popEl.value.includes("Women with pregnant women with"), `doubled in element: ${popEl.value}`);
+    assert.ok(!popEl.value.includes("Women with patients with"), `doubled in element: ${popEl.value}`);
+
+    if (r.variants) {
+      for (const v of r.variants) {
+        assert.ok(!v.question.includes("women with women with"), `doubled in variant: ${v.question}`);
+      }
+    }
+  }
+});

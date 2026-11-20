@@ -245,7 +245,7 @@ export function auditRef(ref: AuditableRef, elements: PicoElement[]): RefAudit {
 
   const pmidResolved = !!ref.pmid && /^\d+$/.test(String(ref.pmid).trim());
   const doiResolved = /10\.\d{4,}\//.test(String(ref.doi || ""));
-  const resolved = pmidResolved || (!!ref.pmid && /^(pmc|epmc|oax|cr):/.test(String(ref.pmid).trim()));
+  const resolved = pmidResolved || (!!ref.pmid && /^(pmc|epmc|oax|cr|cen|ctg|s2|pre):/.test(String(ref.pmid).trim()));
 
   return {
     pmid: ref.pmid || "",
@@ -333,6 +333,13 @@ export function isDirectSupportEligible(
 ): { eligible: boolean; confidence: "high" | "moderate" | "low"; reason?: string } {
   const audit = auditRef(ref, elements);
   const confidence = audit.metadataCompleteness?.confidence ?? "low";
+
+  // Clinical trial registrations are prospective study protocols or tracking entries,
+  // not published evidence of effect.
+  if (ref.source === "clinicaltrials" || String(ref.pmid || "").startsWith("ctg:")) {
+    return { eligible: false, confidence, reason: "no direct support: trial registration (not evidence of effect)" };
+  }
+
   // A published reference has to be checkable by the reader. A record with neither a DOI nor a
   // PMID cannot be resolved to a paper, so matching wording is not enough to publish it, however
   // long its title is and however well the text fits the claim.
@@ -671,11 +678,15 @@ export function resolveReference<T extends AuditableRef>(raw: string, pool: T[])
  */
 export function formatReference(ref: AuditableRef, style: "vancouver" | "chicago" = "vancouver"): string {
   const url = ref.url || (ref.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${ref.pmid}/` : "");
+  const isPreprint = ref.source === "preprint" || String(ref.pmid || "").startsWith("pre:");
+  const isTrial = ref.source === "clinicaltrials" || String(ref.pmid || "").startsWith("ctg:");
+  const badge = isPreprint ? " [preprint — not peer reviewed]" : isTrial ? " [trial registration — not evidence of effect]" : "";
+
   if (style === "chicago") {
     return [
       ref.authors ? `${ref.authors}.` : "",
       ref.year ? `${ref.year}.` : "",
-      `"${(ref.title || "").replace(/\.$/, "")}."`,
+      `"${(ref.title || "").replace(/\.$/, "")}${badge}."`,
       ref.journal ? `${ref.journal}.` : "",
       ref.doi ? `doi:${ref.doi}` : "",
       url
@@ -684,7 +695,7 @@ export function formatReference(ref: AuditableRef, style: "vancouver" | "chicago
 
   // Vancouver style (NLM / ICMJE convention)
   const authors = ref.authors ? `${ref.authors.replace(/\s+,/g, ",").replace(/\s{2,}/g, " ").trim().replace(/\.+$/, "")}.` : "";
-  const title = ref.title ? `${ref.title.trim().replace(/\.+$/, "")}.` : "";
+  const title = ref.title ? `${ref.title.trim().replace(/\.+$/, "")}${badge}.` : "";
   const journal = ref.journal ? `${ref.journal.trim().replace(/\.+$/, "")}.` : "";
   const year = ref.year ? `${String(ref.year).trim()}.` : "";
   const doi = ref.doi ? `doi:${ref.doi.replace(/^doi:\s*/i, "")}` : "";

@@ -254,6 +254,10 @@ function finalizeSentenceList(
     else if (!addressed.length) reason = "pico-not-addressed";
     else if (!onTopic.length) reason = "outcome-not-reported";
     else if (!consistent.length) reason = "direction-contradicted";
+    // Preprints must not be the sole support for an efficacy finding.
+    else if (!consistent.some(r => r.source !== "preprint" && !String(r.pmid || "").startsWith("pre:"))) {
+      reason = "pico-not-addressed";
+    }
     else reason = undefined;
 
     if (!reason) {

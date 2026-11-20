@@ -156,3 +156,104 @@ test("PB2. Multi-section deliverable renders exactly 2 pages with no blank pages
     );
   }
 });
+
+test("PB3. 350-word paragraph renders flowing prose without line fragmentation and footer segments do not overlap", async () => {
+  const words = [
+    "Endometriosis", "is", "a", "chronic", "inflammatory", "disorder", "characterized", "by", "the",
+    "presence", "of", "endometrial-like", "tissue", "outside", "the", "uterine", "cavity,", "primarily",
+    "on", "the", "pelvic", "peritoneum,", "ovaries,", "and", "rectovaginal", "septum.", "The", "condition",
+    "affects", "approximately", "ten", "percent", "of", "reproductive-age", "women", "globally", "and",
+    "is", "associated", "with", "significant", "pelvic", "pain,", "dysmenorrhea,", "dyspareunia,", "and",
+    "subfertility.", "Surgical", "management", "via", "laparoscopic", "excision", "aims", "to", "remove",
+    "all", "visible", "endometriotic", "implants", "while", "preserving", "normal", "pelvic", "anatomy",
+    "and", "ovarian", "reserve.", "Numerous", "randomized", "controlled", "trials", "and", "prospective",
+    "cohort", "studies", "have", "demonstrated", "that", "meticulous", "laparoscopic", "excision",
+    "significantly", "alleviates", "pain", "symptoms", "and", "improves", "quality", "of", "life",
+    "compared", "with", "diagnostic", "laparoscopy", "or", "medical", "suppression", "alone.",
+    "However,", "recurrence", "rates", "remain", "a", "substantial", "clinical", "challenge,", "with",
+    "up", "to", "twenty", "percent", "of", "patients", "requiring", "subsequent", "intervention",
+    "within", "two", "years", "postoperatively.", "Postoperative", "medical", "therapy", "such", "as",
+    "oral", "progestins,", "combined", "oral", "contraceptives,", "or", "gonadotropin-releasing",
+    "hormone", "agonists", "with", "add-back", "therapy", "is", "frequently", "recommended", "to",
+    "suppress", "residual", "microscopic", "disease", "and", "extend", "the", "symptom-free", "interval.",
+    "In", "patients", "desiring", "immediate", "fertility,", "laparoscopic", "excision", "of", "mild-to-moderate",
+    "endometriosis", "modestly", "enhances", "spontaneous", "conception", "rates,", "whereas", "in",
+    "severe", "disease", "involving", "bilateral", "endometriomas", "or", "deep", "infiltrating", "nodules,",
+    "assisted", "reproductive", "technology", "remains", "the", "primary", "modality", "for", "achieving",
+    "pregnancy.", "Ovarian", "cystectomy", "for", "endometriomas", "must", "be", "performed", "with",
+    "careful", "hemostasis", "to", "minimize", "inadvertent", "damage", "to", "adjacent", "healthy",
+    "ovarian", "cortex", "and", "preserve", "antral", "follicle", "count.", "Clinical", "guidelines",
+    "consistently", "emphasize", "multidisciplinary", "care,", "incorporating", "pain", "specialists,",
+    "reproductive", "endocrinologists,", "and", "specialized", "pelvic", "surgeons", "to", "optimize",
+    "long-term", "outcomes", "for", "affected", "individuals.", "Comprehensive", "patient", "counseling",
+    "regarding", "realistic", "expectations,", "surgical", "risks,", "and", "individualized", "postoperative",
+    "surveillance", "is", "vital", "for", "informed", "shared", "decision-making.", "Future", "investigations",
+    "continue", "to", "explore", "molecular", "biomarkers", "and", "targeted", "anti-inflammatory",
+    "agents", "to", "improve", "diagnostic", "precision", "and", "therapeutic", "durability."
+  ];
+
+  // Repeat to yield >= 350 words
+  const full350Words = words.concat(words.slice(0, 150)).join(" ");
+  assert.ok(full350Words.split(/\s+/).length >= 350, "Test payload must have at least 350 words");
+
+  const payload = {
+    title: "Laparoscopic Excision in Endometriosis",
+    docType: "Clinical Commentary",
+    citationStyle: "vancouver" as const,
+    sections: [
+      {
+        heading: "Clinical Evidence and Narrative Synthesis",
+        blocks: [full350Words]
+      }
+    ],
+    references: [
+      "1. Practice Committee of ASRM. Treatment of pelvic pain associated with endometriosis. Fertil Steril. 2020;114(4):769-777."
+    ],
+    retainedReferences: [
+      { pmid: "32977987", title: "Treatment of pelvic pain associated with endometriosis", year: "2020" }
+    ]
+  };
+
+  const buffer = await buildPdfBuffer(payload);
+  assert.ok(buffer.length > 0);
+
+  const parsed = await extractText(new Uint8Array(buffer));
+  // Standard commentary with 350 words must easily be <= 6 pages
+  assert.ok(parsed.totalPages <= 6, `Page count must be <= 6; got ${parsed.totalPages}`);
+
+  for (let p = 0; p < parsed.totalPages; p++) {
+    const text = parsed.text[p] || "";
+    // Footer check: verify copyright and page indicator exist
+    assert.ok(text.includes("AI PICO v3.1 — © Raouf Roshdy 2026"), `Page ${p + 1} must include footer copyright`);
+    assert.ok(text.includes(`Page ${p + 1} of ${parsed.totalPages}`), `Page ${p + 1} must include page indicator`);
+
+    // Verify flowing lines (no isolated 1-word lines from manual wrap fragmentation)
+    const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+    const bodyLines = lines.filter(l =>
+      !l.startsWith("AI PICO") &&
+      !l.startsWith("Page ") &&
+      !l.startsWith("Clinical") &&
+      !l.startsWith("Laparoscopic") &&
+      !l.startsWith("DOCUMENT") &&
+      !l.startsWith("CLINICAL") &&
+      !l.startsWith("EDUCATIONAL") &&
+      !l.startsWith("· Citation Style") &&
+      !l.startsWith("References") &&
+      !l.startsWith("1.") &&
+      !l.includes("disclaimer") &&
+      !l.includes("independent clinical verification") &&
+      !l.includes("pubmed.ncbi.nlm.nih.gov") &&
+      !l.includes("doi.org") &&
+      !l.startsWith("http") &&
+      l !== "literature."
+    );
+
+    for (const line of bodyLines) {
+      const lineWords = line.split(/\s+/);
+      // In PDFKit native wrapping, body lines in justified text contain multiple words
+      if (lineWords.length === 1 && line.length > 3) {
+        assert.fail(`Detected fragmented single-word line: "${line}" on page ${p + 1}`);
+      }
+    }
+  }
+});

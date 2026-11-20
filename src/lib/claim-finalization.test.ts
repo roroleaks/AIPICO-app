@@ -290,3 +290,29 @@ test("P1-2: study descriptions are treated as cohesive units without leaving orp
   );
 });
 
+test("P1-3: a preprint record cannot be the sole support for an efficacy assertion", async () => {
+  const PREPRINT_REF: AuditableRef = {
+    pmid: "pre:10.1101/2023.01.01.123456",
+    title: "Progesterone versus expectant management for preterm birth: a preliminary preprint",
+    authors: "MedRxiv Author",
+    year: "2023",
+    journal: "medRxiv",
+    doi: "10.1101/2023.01.01.123456",
+    source: "preprint",
+    context: "In pregnant women with short cervix, progesterone significantly reduced preterm birth."
+  };
+
+  const es = await buildEvidenceSet([PREPRINT_REF]);
+  const res = finalizeClaims({
+    fields: {
+      discussion: "Progesterone significantly reduced preterm birth before 37 weeks (MedRxiv 2023)."
+    },
+    evidenceSet: es,
+    elements: PICO
+  });
+
+  assert.equal(res.claims[0].supported, false, "Preprint-only support must not be marked supported for efficacy claim");
+  assert.equal(res.claims[0].reason, "pico-not-addressed");
+  assert.ok(res.fields.discussion.includes("Direct evidence supporting this statement was not identified"));
+});
+

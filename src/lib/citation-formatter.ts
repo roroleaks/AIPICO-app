@@ -89,9 +89,13 @@ export function formatInTextAuthors(
  * Sequential number, no quotes, year follows journal.
  */
 export function formatVancouver(ref: AuditableRef, index?: number): string {
+  const isPreprint = ref.source === "preprint" || String(ref.pmid || "").startsWith("pre:");
+  const isTrial = ref.source === "clinicaltrials" || String(ref.pmid || "").startsWith("ctg:");
+  const badge = isPreprint ? " [preprint — not peer reviewed]" : isTrial ? " [trial registration — not evidence of effect]" : "";
+
   const prefix = typeof index === "number" && index > 0 ? `${index}. ` : "";
   const authors = ref.authors ? `${ref.authors.trim().replace(/\.$/, "")}.` : "";
-  const title = ref.title ? `${ref.title.trim().replace(/\.$/, "")}.` : "";
+  const title = ref.title ? `${ref.title.trim().replace(/\.$/, "")}${badge}.` : "";
   const journal = ref.journal ? `${ref.journal.trim().replace(/\.$/, "")}.` : "";
   const year = ref.year ? `${String(ref.year).trim()}.` : "";
   const doi = ref.doi ? `doi:${ref.doi.replace(/^doi:\s*/i, "")}` : "";
@@ -107,6 +111,10 @@ export function formatVancouver(ref: AuditableRef, index?: number): string {
  * Author, A. A., & Author, B. B. (Year). Title of article in sentence case. Journal Name, Volume(Issue), pages. https://doi.org/...
  */
 export function formatApa(ref: AuditableRef): string {
+  const isPreprint = ref.source === "preprint" || String(ref.pmid || "").startsWith("pre:");
+  const isTrial = ref.source === "clinicaltrials" || String(ref.pmid || "").startsWith("ctg:");
+  const badge = isPreprint ? " [preprint — not peer reviewed]" : isTrial ? " [trial registration — not evidence of effect]" : "";
+
   const parsed = parseAuthors(ref.authors);
   let authorsFormatted = "";
 
@@ -133,7 +141,7 @@ export function formatApa(ref: AuditableRef): string {
   if (authorsFormatted && !authorsFormatted.endsWith(".")) authorsFormatted += ".";
 
   const year = ref.year ? `(${String(ref.year).trim()}).` : "(n.d.).";
-  const title = ref.title ? `${ref.title.trim().replace(/\.$/, "")}.` : "";
+  const title = ref.title ? `${ref.title.trim().replace(/\.$/, "")}${badge}.` : "";
   const journal = ref.journal ? `${ref.journal.trim().replace(/\.$/, "")}.` : "";
   const doiUrl = ref.doi
     ? `https://doi.org/${ref.doi.replace(/^https?:\/\/doi\.org\//i, "").replace(/^doi:\s*/i, "")}`
@@ -147,6 +155,10 @@ export function formatApa(ref: AuditableRef): string {
  * Author, A.A. and Author, B.B., Year. Title of article in sentence case. Journal Name, Volume(Issue), pp.pages.
  */
 export function formatHarvard(ref: AuditableRef): string {
+  const isPreprint = ref.source === "preprint" || String(ref.pmid || "").startsWith("pre:");
+  const isTrial = ref.source === "clinicaltrials" || String(ref.pmid || "").startsWith("ctg:");
+  const badge = isPreprint ? " [preprint — not peer reviewed]" : isTrial ? " [trial registration — not evidence of effect]" : "";
+
   const parsed = parseAuthors(ref.authors);
   let authorsFormatted = "";
 
@@ -163,7 +175,7 @@ export function formatHarvard(ref: AuditableRef): string {
   }
 
   const year = ref.year ? `${String(ref.year).trim()}.` : "n.d.";
-  const title = ref.title ? `${ref.title.trim().replace(/\.$/, "")}.` : "";
+  const title = ref.title ? `${ref.title.trim().replace(/\.$/, "")}${badge}.` : "";
   const journal = ref.journal ? `${ref.journal.trim().replace(/\.$/, "")}.` : "";
   const url = ref.doi
     ? `doi:${ref.doi.replace(/^doi:\s*/i, "")}`

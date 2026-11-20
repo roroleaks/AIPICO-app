@@ -155,10 +155,18 @@ export function ruleClarify(analysis: Analysis, answered: Record<string, string>
   };
 }
 
+export function normalizeCondition(cond: string): string {
+  return cond
+    .trim()
+    .replace(/^(?:(?:pregnant\s+)?women\s+with|(?:pregnant\s+)?woman\s+with|patients?\s+with)\s+/i, "")
+    .trim();
+}
+
 export function ruleFormulate(analysis: Analysis, answered: Record<string, string>): Formulation {
   const a = (analysis || {}) as Partial<Analysis>;
   const ans = (answered || {}) as Record<string, string>;
   const cond = ans.condition || a.condition || "";
+  const cleanCond = normalizeCondition(cond);
   const iv = ans.intervention || a.intervention || "";
   const comp = ans.comparator || a.comparator || "no treatment";
   const out = ans.outcome || "a clinically meaningful outcome";
@@ -197,27 +205,27 @@ export function ruleFormulate(analysis: Analysis, answered: Record<string, strin
   const spec = specKey ? KB[specKey] : null;
   switch (a.framework) {
     case "PICO":
-      finalQuestion = `In women with ${toInlineCase(cond)}, does ${toInlineCase(iv)} compared with ${toInlineCase(comp)} ${formulateOutcomeVerbPhrase("primary", out)}?`;
+      finalQuestion = `In women with ${toInlineCase(cleanCond)}, does ${toInlineCase(iv)} compared with ${toInlineCase(comp)} ${formulateOutcomeVerbPhrase("primary", out)}?`;
       elements = [
-        { label: "P — Population", value: `Women with ${cond}` },
+        { label: "P — Population", value: `Women with ${cleanCond}` },
         { label: "I — Intervention", value: iv },
         { label: "C — Comparator", value: comp },
         { label: "O — Outcome", value: out }
       ];
       break;
     case "Diagnostic accuracy (PIRD)":
-      finalQuestion = `In patients with suspected ${cond}, what is the diagnostic accuracy of ${iv} compared with the reference standard?`;
+      finalQuestion = `In patients with suspected ${toInlineCase(cleanCond)}, what is the diagnostic accuracy of ${iv} compared with the reference standard?`;
       elements = [
-        { label: "P — Population", value: `Patients with suspected ${cond}` },
+        { label: "P — Population", value: `Patients with suspected ${cleanCond}` },
         { label: "I — Index test", value: iv },
         { label: "R — Reference standard", value: "Standard reference test" },
         { label: "D — Accuracy outcomes", value: "Sensitivity and specificity" }
       ];
       break;
     default:
-      finalQuestion = `In women with ${cond}, is exposure to ${iv} associated with ${out} compared with unexposed women?`;
+      finalQuestion = `In women with ${toInlineCase(cleanCond)}, is exposure to ${iv} associated with ${out} compared with unexposed women?`;
       elements = [
-        { label: "P — Population", value: `Women with ${cond}` },
+        { label: "P — Population", value: `Women with ${cleanCond}` },
         { label: "E — Exposure", value: iv },
         { label: "C — Comparator", value: comp },
         { label: "O — Outcome", value: out }
@@ -274,7 +282,7 @@ export function ruleFormulate(analysis: Analysis, answered: Record<string, strin
       const verbType = idx === 0 ? "secondary" : "subgroup";
       let vQuestion: string;
       if (a.framework === "PICO") {
-        vQuestion = `In women with ${toInlineCase(cond)}, does ${toInlineCase(iv)} compared with ${toInlineCase(comp)} ${formulateOutcomeVerbPhrase(verbType, o)}?`;
+        vQuestion = `In women with ${toInlineCase(cleanCond)}, does ${toInlineCase(iv)} compared with ${toInlineCase(comp)} ${formulateOutcomeVerbPhrase(verbType, o)}?`;
       } else {
         vQuestion = finalQuestion.replace(new RegExp(out.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), o);
       }

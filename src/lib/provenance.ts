@@ -4,6 +4,8 @@ export interface ProvenanceMetadata {
   retrievedAt?: string | null;
   queryStrings?: string[] | string | null;
   sources?: string[] | string | null;
+  enginesQueried?: string[] | string | null;
+  googleScholarNotice?: string | null;
   engine?: string | null;
   promptVersion?: string | null;
   buildCommit?: string | null;
@@ -13,6 +15,8 @@ export const provenanceSchema = z.object({
   retrievedAt: z.string().max(100).optional().nullable(),
   queryStrings: z.union([z.string().max(2000), z.array(z.string().max(2000))]).optional().nullable(),
   sources: z.union([z.string().max(500), z.array(z.string().max(500))]).optional().nullable(),
+  enginesQueried: z.union([z.string().max(1000), z.array(z.string().max(200))]).optional().nullable(),
+  googleScholarNotice: z.string().max(500).optional().nullable(),
   engine: z.string().max(200).optional().nullable(),
   promptVersion: z.string().max(100).optional().nullable(),
   buildCommit: z.string().max(100).optional().nullable()
@@ -41,10 +45,24 @@ export function resolveProvenance(input?: Partial<ProvenanceMetadata> | null): P
     "Local Clinical Knowledge Base (KB)"
   ];
 
+  const defaultEngines = [
+    "PubMed",
+    "Cochrane CENTRAL",
+    "ClinicalTrials.gov",
+    "Semantic Scholar",
+    "Preprints",
+    "Europe PMC",
+    "OpenAlex",
+    "Crossref",
+    "Google Scholar (proxied via OpenAlex/Semantic Scholar)"
+  ];
+
   return {
     retrievedAt: input?.retrievedAt || new Date().toISOString(),
     queryStrings: input?.queryStrings || [],
     sources,
+    enginesQueried: input?.enginesQueried || defaultEngines,
+    googleScholarNotice: input?.googleScholarNotice || "Google Scholar has no public API; covered via OpenAlex/Semantic Scholar scholarly index",
     engine,
     promptVersion: promptVer,
     buildCommit: commit

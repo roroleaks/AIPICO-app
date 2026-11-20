@@ -78,23 +78,8 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
   const teal = "#0f6b6b";
   const ink = "#1c2430";
   const muted = "#8a95a0";
-  const lineGap = 13;
 
-  const wrap = (text: string, width: number): string[] => {
-    const out: string[] = [];
-    for (const hard of text.split("\n")) {
-      let line = "";
-      for (const word of hard.split(/\s+/).filter(Boolean)) {
-        const cand = line ? `${line} ${word}` : word;
-        if (!line || doc.widthOfString(cand, { font: FONT, size: 10.5 } as never) <= width) line = cand;
-        else { out.push(line); line = word; }
-      }
-      if (line) out.push(line);
-    }
-    return out;
-  };
-
-  const ensure = (needed: number) => {
+  const reserveSpace = (needed: number) => {
     if (doc.y + needed > doc.page.height - doc.page.margins.bottom - 20) doc.addPage();
   };
 
@@ -117,17 +102,26 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
     const fRight: number = doc.page.width - PAGE_MARGIN;
     const bottomY = doc.page.height - PAGE_MARGIN + 8;
     doc.moveTo(fLeft, bottomY - 6).lineTo(fRight, bottomY - 6).strokeColor("#cbd5e1").lineWidth(0.5).stroke();
-    doc.text("AI PICO v3.1 — Copyright©RaoufRoshdy2026", fLeft, bottomY, {
-      width: 220,
+
+    const leftWidth = 180;
+    const rightWidth = 100;
+    const clearance = 8;
+    const centerLeft = fLeft + leftWidth + clearance;
+    const centerRight = fRight - rightWidth - clearance;
+    const centerWidth = centerRight - centerLeft;
+
+    doc.text("AI PICO v3.1 — © Raouf Roshdy 2026", fLeft, bottomY, {
+      width: leftWidth,
+      align: "left",
       lineBreak: false
     });
-    doc.text(`Page ${pageNum + 1} of ${totalPages}`, fLeft, bottomY, {
-      width: fRight - fLeft,
+    doc.text(`Page ${pageNum + 1} of ${totalPages}`, centerLeft, bottomY, {
+      width: centerWidth,
       align: "center",
       lineBreak: false
     });
-    doc.text(new Date().toLocaleDateString(), fRight - 100, bottomY, {
-      width: 100,
+    doc.text(new Date().toLocaleDateString(), fRight - rightWidth, bottomY, {
+      width: rightWidth,
       align: "right",
       lineBreak: false
     });
@@ -145,7 +139,7 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
   doc.moveDown(0.8);
 
   // Educational Disclaimer Callout Banner
-  ensure(46);
+  reserveSpace(46);
   const discTop = doc.y;
   const discWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
   doc.rect(doc.page.margins.left, discTop, discWidth, 38).fillColor("#f1f5f9").strokeColor("#cbd5e1").lineWidth(0.75).fillAndStroke();
@@ -160,13 +154,13 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
 
   // PICO grid
   if (Array.isArray(body.pico) && body.pico.length) {
-    ensure(36);
+    reserveSpace(36);
     doc.font(FONT_B).fontSize(12.5).fillColor(teal).text("Clinical Question (PICO)");
     doc.moveDown(0.12);
     doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).strokeColor(teal).lineWidth(1.2).stroke();
     doc.moveDown(0.35);
     for (const row of body.pico) {
-      ensure(22);
+      reserveSpace(22);
       const top = doc.y;
       const label = `${row.label}:`;
       const labelW = doc.widthOfString(label, { font: FONT_B, size: 9.5 } as never) + 12;
@@ -175,8 +169,8 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
       doc.rect(doc.page.margins.left, top, doc.page.width - doc.page.margins.left - doc.page.margins.right, 18).strokeColor("#e1ecec").lineWidth(0.5).stroke();
       doc.font(FONT_B).fontSize(9.5).fillColor(teal).text(label, doc.page.margins.left + 6, top + 3);
       doc.fillColor(ink).font(FONT).fontSize(10);
-      const valLines = wrap(String(row.value || "").trim(), valW);
-      doc.text(valLines.join(" "), doc.page.margins.left + labelW + 6, top + 3, { width: valW });
+      const valStr = String(row.value || "").trim();
+      doc.text(valStr, doc.page.margins.left + labelW + 6, top + 3, { width: valW });
       doc.moveDown(0.35);
     }
     doc.moveDown(0.4);
@@ -184,19 +178,19 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
 
   // Selected Outcomes
   if (Array.isArray(body.outcomes) && body.outcomes.length) {
-    ensure(30);
+    reserveSpace(30);
     doc.font(FONT_B).fontSize(12).fillColor(teal).text("Selected Outcomes");
     doc.moveDown(0.1);
     doc.font(FONT).fontSize(10).fillColor(ink);
     const text = body.outcomes.map(o => `•  ${o}`).join("   ·   ");
-    const lines = wrap(text, doc.page.width - doc.page.margins.left - doc.page.margins.right);
-    doc.text(lines.join("\n"), { lineGap: 3 });
+    const outWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    doc.text(text, { width: outWidth, lineGap: 3 });
     doc.moveDown(0.4);
   }
 
   // Keywords
   if (Array.isArray(body.keywords) && body.keywords.length) {
-    ensure(20);
+    reserveSpace(20);
     doc.font(FONT_O).fontSize(9.5).fillColor("#444d58").text(`Keywords: ${body.keywords.join("; ")}`, { width: doc.page.width - doc.page.margins.left - doc.page.margins.right, lineGap: 3 });
     doc.moveDown(0.4);
   }
@@ -206,7 +200,7 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
     for (const section of body.sections) {
       if (!section || !Array.isArray(section.blocks)) continue;
       if (section.heading) {
-        ensure(36);
+        reserveSpace(36);
         doc.font(FONT_B).fontSize(12.5).fillColor(teal).text(String(section.heading));
         doc.moveDown(0.12);
         doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).strokeColor(teal).lineWidth(1.2).stroke();
@@ -218,7 +212,7 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
 
         const isSubhead = rawText.startsWith("#### ") || (rawText.length < 75 && !/[.!?]\s*$/.test(rawText));
         if (isSubhead) {
-          ensure(24);
+          reserveSpace(24);
           const cleanSub = rawText.replace(/^####\s+/, "");
           doc.font(FONT_B).fontSize(10.5).fillColor("#14535a").text(cleanSub, { width: doc.page.width - doc.page.margins.left - doc.page.margins.right, lineGap: 3 });
           doc.moveDown(0.25);
@@ -228,21 +222,21 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
         // Bullet points
         if (rawText.startsWith("- ")) {
           const items = rawText.split(/\n-\s+/).map(it => it.replace(/^- /, "").trim()).filter(Boolean);
+          const colWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right - 14;
           for (const item of items) {
-            ensure(20);
             const textWithCites = style === "vancouver"
               ? formatVancouverSuperscript(item)
               : transformCitationsInText(item, records, style);
             doc.font(FONT).fontSize(10.5).fillColor(ink);
-            const lines = wrap(`•  ${textWithCites}`, doc.page.width - doc.page.margins.left - doc.page.margins.right - 14);
-            doc.text(lines.join("\n"), doc.page.margins.left + 10, doc.y, { width: doc.page.width - doc.page.margins.left - doc.page.margins.right - 14, lineGap: 3 });
+            const needed = Math.min(doc.heightOfString(`•  ${textWithCites}`, { width: colWidth, lineGap: 3 }), 36);
+            reserveSpace(needed);
+            doc.text(`•  ${textWithCites}`, doc.page.margins.left + 10, doc.y, { width: colWidth, lineGap: 3 });
             doc.moveDown(0.3);
           }
           continue;
         }
 
         // Standard narrative paragraph
-        ensure(24);
         doc.font(FONT).fontSize(10.5).fillColor(ink);
 
         // For Vancouver: uppercase superscript with NO brackets
@@ -250,8 +244,10 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
           ? formatVancouverSuperscript(rawText)
           : transformCitationsInText(rawText, records, style);
 
-        const lines = wrap(textWithCites, doc.page.width - doc.page.margins.left - doc.page.margins.right);
-        doc.text(lines.join("\n"), { align: "justify", lineGap });
+        const colWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+        const estHeight = doc.heightOfString(textWithCites, { width: colWidth, lineGap: 3 });
+        reserveSpace(Math.min(estHeight, 36));
+        doc.text(textWithCites, { width: colWidth, align: "justify", lineGap: 3 });
         doc.moveDown(0.4);
       }
     }
@@ -260,7 +256,7 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
   // Methods & Provenance section
   if (body.provenance) {
     const prov = body.provenance;
-    ensure(46);
+    reserveSpace(46);
     doc.font(FONT_B).fontSize(12.5).fillColor(teal).text("Methods and Provenance");
     doc.moveDown(0.12);
     doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).strokeColor(teal).lineWidth(1.2).stroke();
@@ -276,13 +272,20 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
       const q = Array.isArray(prov.queryStrings) ? prov.queryStrings.join(" | ") : String(prov.queryStrings);
       if (q) items.push(["Search Queries", q]);
     }
+    if (prov.enginesQueried) {
+      const eq = Array.isArray(prov.enginesQueried) ? prov.enginesQueried.join(", ") : String(prov.enginesQueried);
+      items.push(["Engines Queried", eq]);
+    }
+    if (prov.googleScholarNotice) {
+      items.push(["Google Scholar Proxy", String(prov.googleScholarNotice)]);
+    }
     if (prov.engine) items.push(["Engine Path", String(prov.engine)]);
     if (prov.promptVersion) items.push(["Prompt Version", String(prov.promptVersion)]);
     if (prov.buildCommit) items.push(["App Build Commit", String(prov.buildCommit)]);
 
     const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
     for (const [lbl, val] of items) {
-      ensure(18);
+      reserveSpace(18);
       doc.font(FONT_B).fontSize(9).fillColor(teal).text(`${lbl}: `, doc.page.margins.left, doc.y, { continued: true });
       doc.font(FONT).fontSize(9).fillColor(ink).text(val, { width, lineGap: 2 });
       doc.moveDown(0.25);
@@ -297,7 +300,7 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
     : (body.references || []);
 
   if (refsToRender.length) {
-    ensure(46);
+    reserveSpace(46);
     doc.font(FONT_B).fontSize(12.5).fillColor(teal).text(
       `References (${style === "vancouver" ? "Vancouver Style — Sequential" : style === "apa" ? "APA 7th Edition — Alphabetical" : "Harvard Style — Alphabetical"})`
     );
@@ -309,10 +312,11 @@ export async function buildPdfBuffer(body: PdfPayload): Promise<Buffer> {
     refsToRender.forEach((r, i) => {
       const text = String(r || "").replace(/^\[?\d+\]?[\.\)]?\s*/, "");
       const prefix = style === "vancouver" ? `${i + 1}.  ` : "";
-      const lines = wrap(`${prefix}${text}`, width - 10);
-      ensure(lines.length * 14 + 6);
-      doc.text(lines.join("\n"), doc.page.margins.left, doc.y, { width: width - 10, lineGap: 3 });
-      doc.moveDown(lines.length * 0.5 + 0.35);
+      const fullRef = `${prefix}${text}`;
+      const neededHeight = Math.min(doc.heightOfString(fullRef, { width: width - 10, lineGap: 3 }), 36);
+      reserveSpace(neededHeight);
+      doc.text(fullRef, doc.page.margins.left, doc.y, { width: width - 10, lineGap: 3 });
+      doc.moveDown(0.35);
     });
   }
 

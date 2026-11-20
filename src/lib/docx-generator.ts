@@ -504,6 +504,13 @@ export async function buildDocxBuffer(body: DocxPayload): Promise<Buffer> {
       const q = Array.isArray(prov.queryStrings) ? prov.queryStrings.join(" | ") : String(prov.queryStrings);
       if (q) items.push(["Search Queries", q]);
     }
+    if (prov.enginesQueried) {
+      const eq = Array.isArray(prov.enginesQueried) ? prov.enginesQueried.join(", ") : String(prov.enginesQueried);
+      items.push(["Engines Queried", eq]);
+    }
+    if (prov.googleScholarNotice) {
+      items.push(["Google Scholar Proxy", String(prov.googleScholarNotice)]);
+    }
     if (prov.engine) items.push(["Engine Path", String(prov.engine)]);
     if (prov.promptVersion) items.push(["Prompt Version", String(prov.promptVersion)]);
     if (prov.buildCommit) items.push(["App Build Commit", String(prov.buildCommit)]);
@@ -636,7 +643,7 @@ export async function buildDocxBuffer(body: DocxPayload): Promise<Buffer> {
                     color: "64748B"
                   }),
                   new TextRun({
-                    text: "    |    copyrights@Raouf Roshdy2026",
+                    text: "    |    © Raouf Roshdy 2026",
                     font: "Arial",
                     size: 18,
                     color: "64748B"

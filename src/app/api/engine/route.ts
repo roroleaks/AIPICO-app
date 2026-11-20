@@ -31,6 +31,7 @@ import { extractPicoFromQuestion } from "@/lib/pico-parser";
 import { parseClinicalScenario } from "@/lib/clinical-semantics";
 import { isAllowedOrigin, corsHeaders } from "@/lib/security-headers";
 import { checkRateLimit } from "@/lib/rate-limiter";
+import { resolveProvenance } from "@/lib/provenance";
 
 export const maxDuration = 60;
 
@@ -293,6 +294,42 @@ async function esummaryForIds(ids: string[]): Promise<Record<string, ESummaryDoc
   return (data?.result as Record<string, ESummaryDoc>) || {};
 }
 
+async function efetchAbstractsForIds(ids: string[]): Promise<Record<string, string>> {
+  if (!ids.length) return {};
+  try {
+    if (!NCBI_API_KEY) await new Promise(r => setTimeout(r, 400));
+    const apiKeyParam = NCBI_API_KEY ? `&api_key=${encodeURIComponent(NCBI_API_KEY)}` : "";
+    const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&retmode=xml&rettype=abstract&id=${ids.join(",")}${apiKeyParam}`;
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+      headers: { "User-Agent": "aipico/1.0 (mailto:support@aipico.app)" }
+    });
+    if (!res.ok) return {};
+    const xml = await res.text();
+    const map: Record<string, string> = {};
+    const articleRegex = /<PubmedArticle>([\s\S]*?)<\/PubmedArticle>/g;
+    let match: RegExpExecArray | null;
+    while ((match = articleRegex.exec(xml)) !== null) {
+      const article = match[1];
+      const pmidMatch = /<PMID[^>]*>(\d+)<\/PMID>/.exec(article);
+      if (!pmidMatch) continue;
+      const pmid = pmidMatch[1];
+      const abstractMatches = article.matchAll(/<AbstractText[^>]*>([\s\S]*?)<\/AbstractText>/g);
+      const parts: string[] = [];
+      for (const m of abstractMatches) {
+        const clean = m[1].replace(/<[^>]+>/g, "").trim();
+        if (clean) parts.push(clean);
+      }
+      if (parts.length) {
+        map[pmid] = parts.join(" ");
+      }
+    }
+    return map;
+  } catch {
+    return {};
+  }
+}
+
 async function fetchPubMedReferences(query: string, maxResults = 3, excluded: Set<string> = EMPTY_REF_SET): Promise<PubMedRef[]> {
   const term = `${query} NOT "study protocol"[Publication Type] NOT "clinical trial protocol"[Publication Type]`;
   const extra = Math.min(excluded.size, 25);
@@ -300,14 +337,24 @@ async function fetchPubMedReferences(query: string, maxResults = 3, excluded: Se
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const reviewIds = await esearchIds(term, want + extra, "&filter=pubt.review");
+      let ids: string[];
+      // Break the review+general ladder early as soon as sufficient review IDs exist
+      if (reviewIds.length >= Math.max(maxResults, 3)) {
+        ids = reviewIds.filter(id => !excluded.has(id)).slice(0, maxResults);
+      } else {
+        if (!NCBI_API_KEY) await new Promise(r => setTimeout(r, 120));
+        const generalIds = await esearchIds(term, want + extra);
+        if (!reviewIds.length && !generalIds.length) return [];
+        ids = Array.from(new Set([...reviewIds, ...generalIds]))
+          .filter(id => !excluded.has(id))
+          .slice(0, maxResults);
+      }
+      if (!ids.length) return [];
       if (!NCBI_API_KEY) await new Promise(r => setTimeout(r, 120));
-      const generalIds = await esearchIds(term, want + extra);
-      if (!reviewIds.length && !generalIds.length) return [];
-      const ids = Array.from(new Set([...reviewIds, ...generalIds]))
-        .filter(id => !excluded.has(id))
-        .slice(0, maxResults);
-      if (!NCBI_API_KEY) await new Promise(r => setTimeout(r, 120));
-      const result = await esummaryForIds(ids);
+      const [result, abstracts] = await Promise.all([
+        esummaryForIds(ids),
+        efetchAbstractsForIds(ids)
+      ]);
       const refs = ids
         .map((id) => {
           const doc = result?.[id];
@@ -319,7 +366,8 @@ async function fetchPubMedReferences(query: string, maxResults = 3, excluded: Se
             journal: doc?.fulljournalname || doc?.source || "",
             doi: doc?.elocationid?.replace("doi: ", "") || "",
             source: "pubmed",
-            url: `https://pubmed.ncbi.nlm.nih.gov/${id}/`
+            url: `https://pubmed.ncbi.nlm.nih.gov/${id}/`,
+            context: abstracts[id] || undefined
           };
         })
         // Some ESummary records carry no title at all; never emit a placeholder reference.
@@ -447,6 +495,202 @@ async function fetchOpenAlex(query: string, maxResults = 4): Promise<PubMedRef[]
   }
 }
 
+async function fetchCochraneCentral(query: string, maxResults = 4): Promise<PubMedRef[]> {
+  try {
+    const terms = sanitizeQuery(query).split(" ").filter(Boolean).slice(0, 5).map(t => `"${t}"`).join(" AND ");
+    if (!terms) return [];
+    const typeFilter = ` AND (SRC:CTR) AND NOT (PUB_TYPE:"Letter" OR PUB_TYPE:"Editorial" OR PUB_TYPE:"Erratum" OR PUB_TYPE:"Case Reports")`;
+    const url =
+      `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(terms + typeFilter)}` +
+      `&resultType=core&format=json&pageSize=${Math.max(maxResults + 4, 8)}`;
+    const res = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(API_TIMEOUT_MS)
+    });
+    if (!res.ok) throw new Error(`central ${res.status}`);
+    const data = await res.json();
+    const hits = (data?.resultList?.result || []) as EuropePMCBase[];
+    const refs: PubMedRef[] = [];
+    for (const h of hits) {
+      const types = [h.pubTypeList?.pubType].flat().join(" ").toLowerCase();
+      if (EXCLUDED_PUB_TYPES.test(types)) continue;
+      const title = (h.title || "").trim();
+      if (!title) continue;
+      const pmid = h.pmid ? h.pmid : `cen:${h.id}`;
+      refs.push({
+        pmid,
+        title,
+        authors: h.authorString || "",
+        year: (h.firstPublicationDate || "").slice(0, 4),
+        journal: h.journalTitle || h.journalInfo?.journal?.title || "Cochrane Central Register of Controlled Trials",
+        doi: h.doi || "",
+        source: "central",
+        url: h.pmid
+          ? `https://pubmed.ncbi.nlm.nih.gov/${h.pmid}/`
+          : h.doi
+            ? `https://doi.org/${h.doi}`
+            : `https://europepmc.org/abstract/CTR/${encodeURIComponent(h.id)}`,
+        context: h.abstractText || ""
+      });
+    }
+    return dedupeRefs(refs).slice(0, maxResults);
+  } catch {
+    return [];
+  }
+}
+
+interface CTGStudy {
+  protocolSection?: {
+    identificationModule?: { nctId?: string; briefTitle?: string };
+    statusModule?: { overallStatus?: string };
+    designModule?: { studyType?: string };
+    descriptionModule?: { briefSummary?: string };
+    sponsorCollaboratorsModule?: { leadSponsor?: { name?: string } };
+    startDateStruct?: { date?: string };
+  };
+}
+
+async function fetchClinicalTrials(query: string, maxResults = 4): Promise<PubMedRef[]> {
+  try {
+    const terms = sanitizeQuery(query).split(" ").filter(Boolean).slice(0, 6).join(" ");
+    if (!terms) return [];
+    const url =
+      `https://clinicaltrials.gov/api/v2/studies?query.term=${encodeURIComponent(terms)}` +
+      `&filter.overallStatus=RECRUITING|COMPLETED|ENROLLING_BY_INVITATION&pageSize=${Math.max(maxResults + 4, 8)}`;
+    const res = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(API_TIMEOUT_MS)
+    });
+    if (!res.ok) throw new Error(`clinicaltrials ${res.status}`);
+    const data = await res.json();
+    const studies = (data?.studies || []) as CTGStudy[];
+    const refs: PubMedRef[] = [];
+    for (const st of studies) {
+      const proto = st.protocolSection;
+      const studyType = proto?.designModule?.studyType?.toUpperCase();
+      if (studyType && studyType !== "INTERVENTIONAL") continue;
+      const nctId = proto?.identificationModule?.nctId;
+      const title = proto?.identificationModule?.briefTitle?.trim();
+      if (!nctId || !title) continue;
+      const sponsor = proto?.sponsorCollaboratorsModule?.leadSponsor?.name || "";
+      const year = (proto?.startDateStruct?.date || "").slice(0, 4);
+      refs.push({
+        pmid: `ctg:${nctId}`,
+        title,
+        authors: sponsor,
+        year,
+        journal: "ClinicalTrials.gov",
+        doi: undefined,
+        source: "clinicaltrials",
+        url: `https://clinicaltrials.gov/study/${nctId}`,
+        context: proto?.descriptionModule?.briefSummary || ""
+      });
+    }
+    return dedupeRefs(refs).slice(0, maxResults);
+  } catch {
+    return [];
+  }
+}
+
+interface S2Paper {
+  paperId?: string;
+  title?: string;
+  year?: number;
+  authors?: Array<{ name?: string }>;
+  venue?: string;
+  abstract?: string;
+  externalIds?: { DOI?: string; PubMed?: string };
+  openAccessPdf?: { url?: string };
+}
+
+async function fetchSemanticScholar(query: string, maxResults = 4): Promise<PubMedRef[]> {
+  try {
+    const terms = sanitizeQuery(query).split(" ").filter(Boolean).slice(0, 6).join(" ");
+    if (!terms) return [];
+    const fields = "title,year,authors,externalIds,venue,abstract,openAccessPdf";
+    const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(terms)}&fields=${fields}&limit=${Math.min(Math.max(maxResults + 4, 8), 20)}`;
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (process.env.S2_API_KEY) {
+      headers["x-api-key"] = process.env.S2_API_KEY;
+    }
+    const res = await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(API_TIMEOUT_MS)
+    });
+    if (res.status === 429) return [];
+    if (!res.ok) throw new Error(`semantic-scholar ${res.status}`);
+    const data = await res.json();
+    const hits = (data?.data || []) as S2Paper[];
+    const refs: PubMedRef[] = [];
+    for (const p of hits) {
+      const title = (p.title || "").trim();
+      if (!title || /protocol/i.test(title)) continue;
+      const pmid = p.externalIds?.PubMed ? String(p.externalIds.PubMed) : p.paperId ? `s2:${p.paperId}` : "";
+      if (!pmid) continue;
+      const doi = (p.externalIds?.DOI || "").replace(/^https?:\/\/doi\.org\//i, "");
+      const authors = (p.authors || []).slice(0, 3).map(a => a.name).filter(Boolean).join(", ");
+      refs.push({
+        pmid,
+        title,
+        authors,
+        year: p.year ? String(p.year) : "",
+        journal: p.venue || "Semantic Scholar",
+        doi: doi || undefined,
+        source: "semantic-scholar",
+        url: doi
+          ? `https://doi.org/${doi}`
+          : p.openAccessPdf?.url || (p.paperId ? `https://www.semanticscholar.org/paper/${p.paperId}` : ""),
+        context: p.abstract || ""
+      });
+    }
+    return dedupeRefs(refs).slice(0, maxResults);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchPreprints(query: string, maxResults = 4): Promise<PubMedRef[]> {
+  try {
+    const terms = sanitizeQuery(query).split(" ").filter(Boolean).slice(0, 6).join(" ");
+    if (!terms) return [];
+    const select = "id,ids,doi,title,publication_year,authorships,primary_location";
+    const url =
+      `https://api.openalex.org/works?search=${encodeURIComponent(terms)}&filter=type:preprint` +
+      `&per_page=${Math.min(Math.max(maxResults + 4, 6), 15)}&select=${select}&mailto=support@aipico.app`;
+    const res = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(API_TIMEOUT_MS)
+    });
+    if (!res.ok) throw new Error(`preprints ${res.status}`);
+    const data = await res.json();
+    const hits = (data?.results || []) as OpenAlexWork[];
+    const refs: PubMedRef[] = [];
+    for (const w of hits) {
+      const title = (w.title || "").trim();
+      if (!title) continue;
+      const doi = (w.doi || w.ids?.doi || "").replace(/^https?:\/\/doi\.org\//i, "");
+      const oaId = (w.ids?.openalex || w.id || "").split("/").pop() || "";
+      const pmid = doi ? `pre:${doi}` : oaId ? `pre:${oaId}` : "";
+      if (!pmid) continue;
+      const urlResolved = doi ? `https://doi.org/${doi}` : (w.ids?.openalex || w.id || "");
+      if (!urlResolved) continue;
+      refs.push({
+        pmid,
+        title,
+        authors: (w.authorships || []).slice(0, 3).map(a => a.author?.display_name).filter(Boolean).join(", "),
+        year: w.publication_year ? String(w.publication_year) : "",
+        journal: w.primary_location?.source?.display_name || "Preprint Server",
+        doi: doi || undefined,
+        source: "preprint",
+        url: urlResolved
+      });
+    }
+    return dedupeRefs(refs).slice(0, maxResults);
+  } catch {
+    return [];
+  }
+}
+
 interface CrossrefItem {
   DOI?: string;
   title?: string[];
@@ -500,8 +744,12 @@ async function fetchCrossref(query: string, maxResults = 4): Promise<PubMedRef[]
 }
 
 async function fetchReferencesBroad(query: string, maxResults = 8, excluded: Set<string> = EMPTY_REF_SET): Promise<PubMedRef[]> {
-  const [pubmed, europe, openalex, crossref] = await Promise.all([
+  const [pubmed, central, clinicaltrials, semanticScholar, preprints, europe, openalex, crossref] = await Promise.all([
     fetchPubMedReferences(query, maxResults, excluded),
+    fetchCochraneCentral(query, Math.max(Math.floor(maxResults / 2), 3)),
+    fetchClinicalTrials(query, Math.max(Math.floor(maxResults / 2), 3)),
+    fetchSemanticScholar(query, Math.max(Math.floor(maxResults / 2), 3)),
+    fetchPreprints(query, Math.max(Math.floor(maxResults / 2), 3)),
     fetchEuropePMC(query, maxResults),
     fetchOpenAlex(query, maxResults),
     fetchCrossref(query, maxResults)
@@ -509,11 +757,30 @@ async function fetchReferencesBroad(query: string, maxResults = 8, excluded: Set
   const notExcluded = (r: PubMedRef): boolean => !excluded.has(r.pmid);
   const merged = dedupeRefs([
     ...pubmed,
+    ...central.filter(notExcluded),
+    ...clinicaltrials.filter(notExcluded),
+    ...semanticScholar.filter(notExcluded),
+    ...preprints.filter(notExcluded),
     ...europe.filter(notExcluded),
     ...openalex.filter(notExcluded),
     ...crossref.filter(notExcluded)
   ]);
-  const want = Math.max(maxResults, 6);
+
+  // Opportunistic abstract enrichment for non-PubMed records that carry a numeric PMID but no context
+  const pmidNeedAbstract = merged
+    .filter(r => /^\d+$/.test(r.pmid) && !r.context)
+    .map(r => r.pmid)
+    .slice(0, 8);
+  if (pmidNeedAbstract.length > 0) {
+    const enriched = await efetchAbstractsForIds(pmidNeedAbstract);
+    for (const r of merged) {
+      if (enriched[r.pmid] && !r.context) {
+        r.context = enriched[r.pmid];
+      }
+    }
+  }
+
+  const want = Math.max(maxResults, 12);
   const byScore = (r: PubMedRef): number => {
     let s = r.pmid && /^\d+$/.test(r.pmid) ? 2 : 0;
     s += r.doi ? 1 : 0;
@@ -523,13 +790,16 @@ async function fetchReferencesBroad(query: string, maxResults = 8, excluded: Set
   const bySource = (r: PubMedRef): string => {
     if (r.source) return r.source;
     if (/^\d+$/.test(r.pmid)) return "pubmed";
+    if (/^cen:/.test(r.pmid)) return "central";
+    if (/^ctg:/.test(r.pmid)) return "clinicaltrials";
+    if (/^s2:/.test(r.pmid)) return "semantic-scholar";
+    if (/^pre:/.test(r.pmid)) return "preprint";
     if (/^(pmc|epmc):/.test(r.pmid)) return "europepmc";
     if (/^oax:/.test(r.pmid)) return "openalex";
     if (/^cr:/.test(r.pmid)) return "crossref";
     return "other";
   };
-  // Score all, but guarantee the non-PubMed sources (EuropePMC/OpenAlex/Crossref) are
-  // represented in the final pool instead of being crowded out by PubMed records.
+  // Score all, while maintaining representation of non-PubMed sources in the final pool
   const scored = merged
     .map(r => ({ r, s: byScore(r), src: bySource(r) }))
     .sort((a, b) => b.s - a.s);
@@ -540,7 +810,8 @@ async function fetchReferencesBroad(query: string, maxResults = 8, excluded: Set
     if ((srcCount[it.src] || 0) >= 2 || picked.length >= want) continue;
     picked.push(it.r);
     srcCount[it.src] = (srcCount[it.src] || 0) + 1;
-  }  for (const it of scored) {
+  }
+  for (const it of scored) {
     if (picked.length >= want) break;
     if (picked.includes(it.r)) continue;
     picked.push(it.r);
@@ -605,8 +876,10 @@ async function fetchReferencesForPoints(
     refKeys(r).forEach(k => excluded.add(k));
   };
 
-  const results: Array<{ point: string; references: PubMedRef[] }> = [];
-  for (const p of points) {
+  const gapStartTime = Date.now();
+  const GAP_DEADLINE_MS = 25_000;
+
+  async function processPoint(p: { point: string; searchQuery?: string }) {
     const pointElements: PicoElement[] = [
       ...(scenarioElements || []),
       { label: "O — Outcome", value: p.point }
@@ -621,18 +894,28 @@ async function fetchReferencesForPoints(
 
     const query = p.searchQuery && p.searchQuery.length > 3 ? sanitizeQuery(p.searchQuery) : buildRefQuery(p.point, topic);
     let refs = (await fetchPubMedReferences(query, 5, excluded)).filter(eligible);
-    if (!refs.length) refs = (await fetchPubMedReferences(buildRefQuery(p.point, topic), 5, excluded)).filter(eligible);
-    if (!refs.length) refs = (await fetchPubMedReferences(sanitizeQuery(p.point), 5, excluded)).filter(eligible);
-    if (refs.length < 2) {
+
+    const timeRemaining = GAP_DEADLINE_MS - (Date.now() - gapStartTime);
+    if (!refs.length && timeRemaining > 8_000) {
+      refs = (await fetchPubMedReferences(buildRefQuery(p.point, topic), 5, excluded)).filter(eligible);
+    }
+    if (!refs.length && timeRemaining > 4_000) {
+      refs = (await fetchPubMedReferences(sanitizeQuery(p.point), 5, excluded)).filter(eligible);
+    }
+
+    if (refs.length < 2 && timeRemaining > 2_000) {
       const need = 4 - refs.length;
-      const [europe, openalex, crossref] = await Promise.all([
-        fetchEuropePMC(query, need + 2),
-        fetchOpenAlex(query, need + 2),
-        fetchCrossref(query, need + 2)
+      const [central, europe, openalex, crossref, semanticScholar] = await Promise.all([
+        fetchCochraneCentral(query, need + 1),
+        fetchEuropePMC(query, need + 1),
+        fetchOpenAlex(query, need + 1),
+        fetchCrossref(query, need + 1),
+        fetchSemanticScholar(query, need + 1)
       ]);
-      // Round-robin across the supplemental sources, filtering by relevance and deduplicating
-      const buckets = [europe, openalex, crossref].map(b =>
-        b.filter(r => eligible(r) && !refs.some(x => isExcluded(x)))
+      // Round-robin across the supplemental sources, filtering by relevance and deduplicating.
+      // Note: eligible(r) already checks topic relevance and verifies !isExcluded(r).
+      const buckets = [central, europe, openalex, crossref, semanticScholar].map(b =>
+        b.filter(r => eligible(r))
       );
       for (let i = 0; refs.length < 4; i++) {
         let added = false;
@@ -646,16 +929,33 @@ async function fetchReferencesForPoints(
         if (!added) break;
       }
     }
-    // Truncate BEFORE marking as used, otherwise references dropped by the slice
-    // are permanently excluded from every later point.
+
     const finalRefs = dedupeRefs(refs).filter(eligible).slice(0, 4);
     for (const r of finalRefs) {
       markExcluded(r);
     }
-    results.push({ point: p.point, references: finalRefs });
-    await new Promise(r => setTimeout(r, 50));
+    return { point: p.point, references: finalRefs };
   }
-  return results;
+
+  // Bounded concurrency (max 2 in flight, NCBI-friendly)
+  const CONCURRENCY_LIMIT = 2;
+  const pointResults = new Array<{ point: string; references: PubMedRef[] }>(points.length);
+  let currentIndex = 0;
+
+  async function worker() {
+    while (currentIndex < points.length) {
+      const idx = currentIndex++;
+      pointResults[idx] = await processPoint(points[idx]);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(CONCURRENCY_LIMIT, points.length) }, () => worker());
+  await Promise.all(workers);
+
+  const durationMs = Date.now() - gapStartTime;
+  console.info(`[AIPICO] gap stage reference retrieval completed in ${durationMs}ms for ${points.length} points`);
+
+  return pointResults;
 }
 
 function kbContext() {
@@ -1451,7 +1751,36 @@ droppedReferences: droppedRefs,
 refAudit: directPool.map(r => auditRef(r, elements)),
         paperRefAudit,
         citationChecks,
-        integrity
+        integrity,
+        provenance: resolveProvenance({
+          retrievedAt: new Date().toISOString(),
+          queryStrings: [cleanTopicQuery(String(topic || "")), selectedQuestion ? sanitizeQuery(String(selectedQuestion)) : ""].filter(Boolean),
+          sources: [
+            "PubMed / MEDLINE",
+            "Cochrane CENTRAL (CTR via Europe PMC)",
+            "ClinicalTrials.gov (API v2)",
+            "Semantic Scholar (Graph API)",
+            "Preprints (OpenAlex / Europe PMC)",
+            "Europe PMC",
+            "OpenAlex",
+            "Crossref",
+            "Google Scholar (proxied via OpenAlex/Semantic Scholar)"
+          ],
+          enginesQueried: [
+            "pubmed",
+            "central",
+            "clinicaltrials",
+            "semantic-scholar",
+            "preprint",
+            "europepmc",
+            "openalex",
+            "crossref",
+            "google-scholar (proxied via OpenAlex/S2)"
+          ],
+          googleScholarNotice: "Google Scholar has no public API; covered via OpenAlex/Semantic Scholar scholarly index",
+          engine: commentarySource === "ai" ? "ai" : "rules (deterministic-rules)",
+          promptVersion: "pico-commentary-v3.1"
+        })
       }, { headers: { "x-aipico-source": commentarySource } });
     }
 
