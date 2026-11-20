@@ -8,7 +8,7 @@ export interface PicoSlots {
   comparators: string[];       // 0..n canonical comparators (explicit or implied)
   outcomes: string[];          // 0..n canonical outcomes stated by the clinician
   unresolved: string[];        // phrases that could not be classified — never silently dropped, never silently slotted
-  cues: { comparative: string[]; directionVerbs: string[] };  // evidence for the assignment decisions
+  cues: { comparative: string[]; directionVerbs: string[]; population?: string[] };  // evidence for the assignment decisions
 }
 
 export interface ParsedClinicalScenario {
@@ -1040,6 +1040,7 @@ export function extractPicoSlots(rawInput: string): PicoSlots {
 
   const comparativeCues: string[] = [];
   const directionVerbs: string[] = [];
+  const populationCues: string[] = [];
 
   const compMatches = cleanInput.match(/\b(versus|vs\.?|compared with|compared to|against|instead of)\b/gi);
   if (compMatches) {
@@ -1054,6 +1055,14 @@ export function extractPicoSlots(rawInput: string): PicoSlots {
     for (const m of verbMatches) {
       const lower = m.toLowerCase();
       if (!directionVerbs.includes(lower)) directionVerbs.push(lower);
+    }
+  }
+
+  const popMatches = cleanInput.match(/\b(pregnant\s+(?:women|individuals|patients)(?:\s+(?:with|diagnosed\s+with))?|(?:women|patients|individuals)\s+(?:with|diagnosed\s+with)|aged\s+\d+|undergoing\s+(?:ivf|icsi|art))\b/gi);
+  if (popMatches) {
+    for (const m of popMatches) {
+      const lower = m.toLowerCase().trim();
+      if (!populationCues.includes(lower)) populationCues.push(lower);
     }
   }
 
@@ -1278,7 +1287,8 @@ export function extractPicoSlots(rawInput: string): PicoSlots {
     unresolved,
     cues: {
       comparative: comparativeCues,
-      directionVerbs
+      directionVerbs,
+      population: populationCues
     }
   };
 }

@@ -151,10 +151,12 @@ export function deriveOutcomes(
   let specialty: SpecialtyKey = preferredSpecialty || "obstetrics";
   if (!preferredSpecialty) {
     const combined = `${cleanCond} ${interventions.join(" ")} ${comparators.join(" ")}`.toLowerCase();
-    if (/ivf|icsi|infertility|poor responder|reserve|ovarian|dor|pcos|stimulation/i.test(combined)) {
+    if (/ivf|icsi|infertility|infertile|poor responder|reserve|ovari|dor|pcos|polycystic|stimulation|letrozole|clomiphene|clomifene|gonadotropin|menopur|follitropin|oocyte|ovulation|embryo|blastocyst|implantation|iui|art\b/i.test(combined)) {
       specialty = "infertility";
-    } else if (/fibroid|myoma|endometri|adenomyosis|bleeding|pelvic|hysterectomy/i.test(combined)) {
+    } else if (/fibroid|myoma|endometri|adenomyosis|bleeding|pelvic|hysterectomy|dysplasia|cin\b|prolapse|urogynecolog|menorrhagia/i.test(combined)) {
       specialty = "gynecology";
+    } else if (/pregnan|gestat|labor|birth|cervix|cerclage|preeclampsia|fetal|maternal|trimester|delivery|cesarean|caesarean|postpartum|chorioamnionitis|placenta/i.test(combined)) {
+      specialty = "obstetrics";
     }
   }
 
@@ -186,6 +188,11 @@ export function deriveOutcomes(
     const direction = resolveOutcomeDirection(candidate, tier);
 
     let score = 0;
+
+    // Specialty alignment weight
+    if (candidate.applicableSpecialties.includes(specialty)) {
+      score += 30;
+    }
 
     // Condition matching
     const matchesConditionDirectly = candidate.applicableConditions.some(
@@ -227,8 +234,8 @@ export function deriveOutcomes(
     // Subtract priority (priority 1 > priority 5)
     score -= (candidate.priority || 5);
 
-    // Only admit candidates with positive relevance or universal applicability
-    if (score > 10 || candidate.applicableSpecialties.length === 0) {
+    // Only admit candidates with positive relevance to the specialty, condition, or intervention
+    if (score > 25) {
       const rationale = buildOutcomeRationale(candidate, tier, cleanCond, interventions);
       scoredList.push({
         outcome: candidate.label,
@@ -269,8 +276,13 @@ export function deriveOutcomes(
     }
   }
 
-  // Sort: tier order first, then score descending within tier
+  // Sort: clinician stated outcomes first, then tier order, then score descending within tier
   scoredList.sort((a, b) => {
+    const aStated = statedOutcomes.some(so => so.toLowerCase() === a.outcome.toLowerCase() || so.toLowerCase() === a.canonical.toLowerCase());
+    const bStated = statedOutcomes.some(so => so.toLowerCase() === b.outcome.toLowerCase() || so.toLowerCase() === b.canonical.toLowerCase());
+    if (aStated && !bStated) return -1;
+    if (!aStated && bStated) return 1;
+
     const tierDiff = TIER_ORDER[a.tier] - TIER_ORDER[b.tier];
     if (tierDiff !== 0) return tierDiff;
     return b.score - a.score;

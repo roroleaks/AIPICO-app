@@ -162,3 +162,38 @@ test("Regression 10: formulate stage with complete gap analysis contains actual 
   assert.ok(!formulation.finalQuestion.includes("high-risk clinical population"), "Must not contain high-risk clinical population placeholder");
   assert.ok(!formulation.finalQuestion.includes("a clinically meaningful outcome"), "Must not contain clinically meaningful outcome placeholder");
 });
+
+test("Regression 11: Ovulation induction PCOS input derives reproductive outcomes with zero obstetric outcome bleed", () => {
+  const slots = extractPicoSlots("pcos letrozole versus clomifene citrate ovulation rate");
+  assert.deepEqual(slots.population, ["polycystic ovary syndrome"]);
+  assert.deepEqual(slots.interventions, ["letrozole"]);
+  assert.deepEqual(slots.comparators, ["clomiphene citrate"]);
+  assert.deepEqual(slots.outcomes, ["ovulation rate"]);
+
+  const res = deriveOutcomes(slots);
+  assert.equal(res.outcomes[0].outcome, "ovulation rate", "Stated outcome must rank first");
+
+  // Verify non-obstetric endpoints dominate and obstetric endpoints do not bleed into infertility
+  const canonicals = res.outcomes.map(o => o.canonical.toLowerCase());
+  assert.ok(
+    !canonicals.includes("spontaneous preterm birth before 37 completed weeks"),
+    "Obstetric preterm birth outcome must not appear in infertility ovulation induction"
+  );
+  assert.ok(
+    !canonicals.includes("gestational age at delivery"),
+    "Obstetric gestational age outcome must not appear in infertility ovulation induction"
+  );
+  assert.ok(
+    canonicals.includes("live birth rate"),
+    "Reproductive live birth endpoint must be present"
+  );
+});
+
+test("Regression 12: Demographic qualifiers in clinical scenario are captured in population cues", () => {
+  const slots = extractPicoSlots("pregnant women with short cervix vaginal progesterone versus cerclage preterm birth");
+  assert.deepEqual(slots.population, ["short cervix"]);
+  assert.ok(
+    slots.cues.population?.some(p => p.includes("pregnant women")),
+    "Demographic qualifier must be preserved in population cues"
+  );
+});
