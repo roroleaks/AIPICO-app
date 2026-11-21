@@ -28,8 +28,8 @@ test("OG5. getCanonicalUrl appends path correctly", () => {
   const env = { CANONICAL_URL: "https://aipico.vercel.app" };
   assert.equal(getCanonicalUrl("", env), "https://aipico.vercel.app");
   assert.equal(getCanonicalUrl("/", env), "https://aipico.vercel.app/");
-  assert.equal(getCanonicalUrl("/paper", env), "https://aipico.vercel.app/paper");
-  assert.equal(getCanonicalUrl("gap", env), "https://aipico.vercel.app/gap");
+  assert.equal(getCanonicalUrl("/summary", env), "https://aipico.vercel.app/summary");
+  assert.equal(getCanonicalUrl("screen", env), "https://aipico.vercel.app/screen");
 });
 
 test("OG6. buildCanonicalMetadata outputs consistent metadataBase, openGraph.url, and alternates.canonical", () => {

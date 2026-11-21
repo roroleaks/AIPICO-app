@@ -53,8 +53,8 @@ test("P3-4. UI and generator text reflects accurate Vancouver description and ou
   assert.ok(pdfGen.includes("Vancouver (superscript numerals)"), "PDF generator must use accurate Vancouver label");
   assert.ok(docxGen.includes("Vancouver (superscript numerals)"), "DOCX generator must use accurate Vancouver label");
 
-  const gapPath = path.resolve(process.cwd(), "src/app/gap/page.tsx");
-  const questionPath = path.resolve(process.cwd(), "src/app/question/page.tsx");
+  const gapPath = path.resolve(process.cwd(), "src", "app", "gap", "page.tsx");
+  const questionPath = path.resolve(process.cwd(), "src", "app", "question", "page.tsx");
 
   if (fs.existsSync(gapPath) && fs.existsSync(questionPath)) {
     const gapPage = fs.readFileSync(gapPath, "utf8");

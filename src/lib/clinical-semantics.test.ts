@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseClinicalScenario, getOutcomeDirection, toInlineCase } from "./clinical-semantics.ts";
 import { extractPicoFromQuestion } from "./pico-parser.ts";
-import { generateDeterministicGapAnalysis } from "./deterministic-gap.ts";
 
 test("parseClinicalScenario deeply classifies endometriosis example without mixing P, I, C", () => {
   const input = "endometriosis, laparoscopy, dienogest, pelvic pain, ovarian reserve";
@@ -130,22 +129,6 @@ test("parseClinicalScenario deeply classifies gestational diabetes scenario", ()
   assert.equal(scenario.population, "gestational diabetes mellitus");
   assert.equal(scenario.intervention, "metformin");
   assert.equal(scenario.comparator, "insulin therapy");
-});
-
-test("deterministic gap analysis integrates clinical scenario with clean PICO separation", () => {
-  const input = "endometriosis, laparoscopy, dienogest, pelvic pain, ovarian reserve";
-  const gap = generateDeterministicGapAnalysis(input);
-
-  assert.equal(gap.known.length, 4);
-  assert.equal(gap.uncertain.length, 4);
-  assert.equal(gap.gaps.length, 4);
-  assert.equal(gap.suggestedQuestions.length, 4);
-
-  // Suggested questions must strictly have clean PICO without comma-separated tags in (P)
-  for (const sq of gap.suggestedQuestions) {
-    assert.ok(!sq.question.includes(", laparoscopy"), "Population must not be comma-separated with intervention");
-    assert.ok(sq.question.includes("(P)") && sq.question.includes("(I)") && sq.question.includes("(C)") && sq.question.includes("(O)"));
-  }
 });
 
 test("outcome directionality correctly identifies adverse vs desirable endpoints", () => {

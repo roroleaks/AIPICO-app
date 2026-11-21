@@ -434,81 +434,6 @@ button.link {
   outline-color: #fff;
 }
 
-/* Outcome selection cards */
-.chips.outcome-chips {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 12px;
-}
-
-.outcome-chip {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  text-align: left;
-  padding: 12px 14px;
-  line-height: 1.4;
-  min-height: 90px;
-}
-
-.outcome-chip-label {
-  font-weight: 600;
-  font-size: 0.95rem;
-}
-
-.outcome-chip-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.outcome-badge {
-  background: var(--accent);
-  color: #fff;
-  border-radius: 999px;
-  padding: 1px 9px;
-  font-size: 0.68rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.outcome-category {
-  border: 1px solid var(--border);
-  color: var(--muted);
-  border-radius: 999px;
-  padding: 1px 9px;
-  font-size: 0.68rem;
-  text-transform: capitalize;
-}
-
-.outcome-why {
-  color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 400;
-}
-
-.chip.chip-recommended {
-  border-width: 2px;
-}
-
-.chip.chip-on.outcome-chip .outcome-badge,
-.chip.chip-on .outcome-category {
-  background: #fff;
-  color: var(--accent);
-  border-color: #fff;
-}
-
-.chip.chip-on .outcome-why {
-  color: #e8f4f4;
-}
-
-.outcome-error {
-  color: #b3261e;
-}
-
 /* Vancouver Citation Superscript ("Upper Case") Style */
 .vancouver-citation {
   font-size: 0.74em;
@@ -916,16 +841,6 @@ footer {
 
   .variant-card {
     padding: 12px;
-  }
-
-  .chips.outcome-chips {
-    grid-template-columns: 1fr;
-    gap: 10px;
-  }
-
-  .outcome-chip {
-    padding: 11px 12px;
-    min-height: auto;
   }
 
   table.pico td:first-child {

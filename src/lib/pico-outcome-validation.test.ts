@@ -7,10 +7,6 @@ import {
   resolveKnownOutcome,
   dedupeOutcomes
 } from "./clinical-semantics.ts";
-import { deriveOutcomes } from "./outcome-derivation.ts";
-import { generateDeterministicGapAnalysis } from "./deterministic-gap.ts";
-import { ruleFormulate } from "./rule-engine.ts";
-import type { Analysis } from "./kb.ts";
 
 test("Regression 1: parseClinicalScenario normalizes misspelled intervention and excludes it from outcome slots", () => {
   const scenario = parseClinicalScenario("poor ovarian response, growth hormone, co enzyem q 10");
@@ -60,35 +56,6 @@ test("Regression 3: Multi-adjuvant input recognizes both interventions and avoid
   assert.ok(!slots.comparators.includes("coenzyme Q10"), "Second adjuvant must not be auto head-to-head comparator");
 });
 
-test("Regression 4: Outcome derivation produces ranked tier suggestions with rationales and zero interventions in outcomes", () => {
-  const slots = extractPicoSlots("poor ovarian response, growth hormone, co enzyem q 10");
-  const derivation = deriveOutcomes(slots, "infertility");
-  assert.ok(derivation.outcomes.length > 0, "Must derive outcomes");
-  assert.ok(derivation.primaryOutcome, "Must have a primary outcome");
-  assert.equal(derivation.primaryOutcome.tier, "critical", "Primary outcome must be patient-centered critical tier");
-  assert.ok(
-    derivation.primaryOutcome.canonical.toLowerCase().includes("live birth"),
-    "Top suggestion must be live birth endpoint"
-  );
-  assert.ok(derivation.primaryOutcome.rationale.length > 0, "Must contain dynamic rationale");
-  assert.ok(
-    derivation.primaryOutcome.rationale.includes("growth hormone") || derivation.primaryOutcome.rationale.includes("poor ovarian response"),
-    "Rationale must connect P and I"
-  );
-  assert.ok(
-    derivation.safetyOutcome !== null || derivation.outcomes.some(o => o.tier === "safety"),
-    "Safety tier outcome must be present"
-  );
-
-  for (const outcome of derivation.outcomes) {
-    assert.ok(
-      !outcome.canonical.toLowerCase().includes("growth hormone") &&
-      !outcome.canonical.toLowerCase().includes("coenzyme"),
-      `Outcome cannot be an intervention: ${outcome.canonical}`
-    );
-  }
-});
-
 test("Regression 5: Unresolvable input lands in unresolved without being slotted and raises clarification", () => {
   const slots = extractPicoSlots("poor ovarian response, growth hormone, xyzzy foo");
   assert.ok(slots.unresolved.includes("xyzzy foo"), "Unresolvable phrase must be in unresolved slot");
@@ -123,17 +90,6 @@ test("Regression 7: Outcome deduplication removes near-duplicate outcomes with J
   assert.ok(deduped.length < rawList.length, "Deduped list must have fewer items than raw list");
 });
 
-test("Regression 8: Gap analysis search queries directly parameterize derived outcome phrases", () => {
-  const gap = generateDeterministicGapAnalysis("poor ovarian response, growth hormone, co enzyem q 10");
-  assert.ok(gap.picoSlots, "Gap must expose picoSlots");
-  assert.ok(gap.derivedOutcomes && gap.derivedOutcomes.length > 0, "Gap must expose derivedOutcomes");
-  const allQueries = [...gap.known.map(k => k.searchQuery), ...gap.uncertain.map(u => u.searchQuery)].join(" ");
-  assert.ok(
-    allQueries.includes("Live birth rate") || allQueries.includes("live birth rate"),
-    "Search queries must include derived primary outcome phrase"
-  );
-});
-
 test("Regression 9: formulateOutcomeVerbPhrase rejects non-outcomes and validates directionality", () => {
   const invalidResult = formulateOutcomeVerbPhrase("secondary", "co enzyem q 10");
   assert.equal(invalidResult, null, "Must return null for unresolvable or intervention token");
@@ -148,47 +104,6 @@ test("Regression 9: formulateOutcomeVerbPhrase rejects non-outcomes and validate
   );
 });
 
-test("Regression 10: formulate stage with complete gap analysis contains actual condition and intervention without placeholders", () => {
-  const analysis: Partial<Analysis> = {
-    condition: "poor ovarian response",
-    intervention: "growth hormone",
-    specialty: "infertility",
-    framework: "PICO"
-  };
-  const formulation = ruleFormulate(analysis as Analysis, {});
-  assert.equal(formulation.complete, true);
-  assert.ok(formulation.finalQuestion.includes("poor ovarian response"));
-  assert.ok(formulation.finalQuestion.includes("growth hormone"));
-  assert.ok(!formulation.finalQuestion.includes("high-risk clinical population"), "Must not contain high-risk clinical population placeholder");
-  assert.ok(!formulation.finalQuestion.includes("a clinically meaningful outcome"), "Must not contain clinically meaningful outcome placeholder");
-});
-
-test("Regression 11: Ovulation induction PCOS input derives reproductive outcomes with zero obstetric outcome bleed", () => {
-  const slots = extractPicoSlots("pcos letrozole versus clomifene citrate ovulation rate");
-  assert.deepEqual(slots.population, ["polycystic ovary syndrome"]);
-  assert.deepEqual(slots.interventions, ["letrozole"]);
-  assert.deepEqual(slots.comparators, ["clomiphene citrate"]);
-  assert.deepEqual(slots.outcomes, ["ovulation rate"]);
-
-  const res = deriveOutcomes(slots);
-  assert.equal(res.outcomes[0].outcome, "ovulation rate", "Stated outcome must rank first");
-
-  // Verify non-obstetric endpoints dominate and obstetric endpoints do not bleed into infertility
-  const canonicals = res.outcomes.map(o => o.canonical.toLowerCase());
-  assert.ok(
-    !canonicals.includes("spontaneous preterm birth before 37 completed weeks"),
-    "Obstetric preterm birth outcome must not appear in infertility ovulation induction"
-  );
-  assert.ok(
-    !canonicals.includes("gestational age at delivery"),
-    "Obstetric gestational age outcome must not appear in infertility ovulation induction"
-  );
-  assert.ok(
-    canonicals.includes("live birth rate"),
-    "Reproductive live birth endpoint must be present"
-  );
-});
-
 test("Regression 12: Demographic qualifiers in clinical scenario are captured in population cues", () => {
   const slots = extractPicoSlots("pregnant women with short cervix vaginal progesterone versus cerclage preterm birth");
   assert.deepEqual(slots.population, ["short cervix"]);
@@ -196,25 +111,4 @@ test("Regression 12: Demographic qualifiers in clinical scenario are captured in
     slots.cues.population?.some(p => p.includes("pregnant women")),
     "Demographic qualifier must be preserved in population cues"
   );
-});
-
-test("Regression 13: Tier-balanced selection includes safety tier while preserving top-3 live-birth endpoints", () => {
-  const slots = extractPicoSlots("poor ovarian response, growth hormone, co enzyem q 10");
-  const derivation = deriveOutcomes(slots);
-
-  assert.ok(derivation.outcomes.length <= 8, "Total list length must stay <= 8");
-  assert.ok(
-    derivation.outcomes.some(o => o.tier === "safety"),
-    "Must contain at least one outcome with tier === 'safety'"
-  );
-  assert.ok(
-    derivation.outcomes.some(o => /cycle cancellation|miscarriage/i.test(o.canonical)),
-    "Safety candidate should be cycle cancellation or miscarriage"
-  );
-
-  const top3 = derivation.outcomes.slice(0, 3);
-  for (const item of top3) {
-    assert.equal(item.tier, "critical", "Top-3 outcome must be critical tier");
-    assert.ok(/live birth/i.test(item.canonical), `Top-3 outcome must be live-birth-centered: ${item.canonical}`);
-  }
 });

@@ -1,46 +1,34 @@
 ﻿import test from "node:test";
 import assert from "node:assert/strict";
-import { buildEvidenceSet, normalizeCitationKey } from "./evidence-set.ts";
+import { normalizeDoi } from "./deliverable-integrity.ts";
+import { refCanonicalKeys } from "./explore-scoring.ts";
 
-test("a Crossref cr: identifier with a DOI normalizes to the DOI", () => {
-  const k = normalizeCitationKey({ crossrefId: "cr:123", doi: "10.1000/abc", title: "T", authors: "A B", year: "2020" });
-  assert.ok(k.startsWith("doi:"), k);
-  assert.ok(!k.includes("cr:"), k);
+test("normalizeDoi normalizes URL prefix, doi: prefix, and bare form to canonical DOI", () => {
+  const urlForm = normalizeDoi("https://doi.org/10.1000/x");
+  const prefixForm = normalizeDoi("doi:10.1000/x");
+  const bareForm = normalizeDoi("10.1000/x");
+  assert.equal(urlForm, "10.1000/x");
+  assert.equal(prefixForm, "10.1000/x");
+  assert.equal(bareForm, "10.1000/x");
 });
 
-test("a Crossref cr: identifier without a DOI normalizes to crossref provenance", () => {
-  const k = normalizeCitationKey({ crossrefId: "cr:123", title: "T", authors: "A B", year: "2020" });
-  assert.equal(k, "crossref:123");
+test("refCanonicalKeys produces matching canonical DOI key across providers", () => {
+  const recA = { title: "Clinical trial of therapy", doi: "10.1000/same", authors: "A B", year: "2020" };
+  const recB = { title: "Clinical trial of therapy", doi: "https://doi.org/10.1000/same", authors: "A B", year: "2020" };
+  const keysA = refCanonicalKeys(recA);
+  const keysB = refCanonicalKeys(recB);
+
+  assert.ok(keysA.includes("d:10.1000/same"));
+  assert.ok(keysB.includes("d:10.1000/same"));
 });
 
-test("the same DOI from Crossref and OpenAlex is one retained record", async () => {
-  const es = await buildEvidenceSet([
-    { crossrefId: "cr:555", doi: "10.1000/same", title: "T", authors: "A B", year: "2020" },
-    { openAlexId: "W123", doi: "10.1000/same", title: "T", authors: "A B", year: "2020" }
-  ]);
-  assert.equal(es.retainedCount, 1);
-  assert.equal(es.warnings.length, 1);
-});
+test("refCanonicalKeys differentiates records with distinct DOIs", () => {
+  const rec1 = { title: "Trial one result", doi: "10.1000/d1", authors: "Smith J", year: "2020" };
+  const rec2 = { title: "Trial two result", doi: "10.1000/d2", authors: "Smith J", year: "2020" };
+  const keys1 = refCanonicalKeys(rec1);
+  const keys2 = refCanonicalKeys(rec2);
 
-test("the same DOI from PubMed and Crossref is one retained record", async () => {
-  const es = await buildEvidenceSet([
-    { pmid: "1", doi: "10.1000/same2", title: "T", authors: "A B", year: "2020" },
-    { crossrefId: "cr:999", doi: "10.1000/same2", title: "T", authors: "A B", year: "2020" }
-  ]);
-  assert.equal(es.retainedCount, 1);
-  assert.deepEqual(Array.from(es.allowedCitationKeys), ["doi:10.1000/same2"]);
-});
-
-test("similar title, author and year with different DOIs stay separate", async () => {
-  const es = await buildEvidenceSet([
-    { doi: "10.1000/d1", title: "Same Title", authors: "Smith J", year: "2020" },
-    { doi: "10.1000/d2", title: "Same Title", authors: "Smith J", year: "2020" }
-  ]);
-  assert.equal(es.retainedCount, 2);
-});
-
-test("a DOI URL and its bare DOI form are the same key", () => {
-  const a = normalizeCitationKey({ doi: "https://doi.org/10.1000/x", title: "T", authors: "A B", year: "2020" });
-  const b = normalizeCitationKey({ doi: "doi:10.1000/x", title: "T", authors: "A B", year: "2020" });
-  assert.equal(a, b, `${a} vs ${b}`);
+  assert.ok(keys1.includes("d:10.1000/d1"));
+  assert.ok(keys2.includes("d:10.1000/d2"));
+  assert.equal(keys1.includes("d:10.1000/d2"), false);
 });

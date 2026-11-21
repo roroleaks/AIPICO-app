@@ -1,6 +1,11 @@
 import { KB, type SpecialtyKey } from "./kb.ts";
-import { OUTCOME_ONTOLOGY } from "./outcome-ontology.ts";
-import { deriveOutcomes, type DerivedOutcome } from "./outcome-derivation.ts";
+
+export interface DerivedOutcome {
+  outcome: string;
+  tier?: string;
+  category?: string;
+  score?: number;
+}
 
 export interface PicoSlots {
   population: string[];        // 0..n recognized population/condition phrases
@@ -669,21 +674,6 @@ export function resolveKnownOutcome(outcomeStr: string): {
     };
   }
 
-  // 3. Match in OUTCOME_ONTOLOGY
-  const ontMatch = OUTCOME_ONTOLOGY.find(o => {
-    const l = o.label.toLowerCase();
-    const sl = o.shortLabel.toLowerCase();
-    return l === lower || sl === lower || o.keywords.some(k => k.toLowerCase() === lower);
-  });
-  if (ontMatch) {
-    return {
-      valid: true,
-      canonical: ontMatch.label,
-      direction: getOutcomeDirection(ontMatch.label),
-      category: ontMatch.category
-    };
-  }
-
   // 4. Match in KB outcomesRanked
   for (const spec of Object.values(KB)) {
     const kbMatch = spec.outcomesRanked.find(o => o.toLowerCase() === lower || lower.includes(o.toLowerCase()));
@@ -1340,9 +1330,14 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
     specialty = "infertility";
   }
 
-  // Derive outcomes from slots
-  const derivation = deriveOutcomes(slots, specialty);
-  const outcomes = derivation.outcomes.map(d => d.outcome);
+  // Derive outcomes from slots or fallback to KB outcomes
+  const outcomes = slots.outcomes.length > 0
+    ? [...slots.outcomes]
+    : [...(KB[specialty]?.outcomesRanked || ["live birth rate", "clinical pregnancy rate"])];
+  const derivedOutcomes: DerivedOutcome[] = outcomes.map((o, idx) => ({
+    outcome: o,
+    tier: idx === 0 ? "critical" : "surrogate"
+  }));
 
   // Determine Population: only substitute default when no condition stated
   const population = slots.population[0] || (specialty === "obstetrics" ? "short cervix" : specialty === "infertility" ? "poor ovarian response" : "endometriosis");
@@ -1398,38 +1393,38 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
     suggestedQuestions.push(
       {
         question: `In ${popPhrase} (P), does ${iv1} (I) compared with no ${iv1} (standard protocol) (C) ${q1Action} (O)?`,
-        rationale: derivation.outcomes[0]?.rationale || buildDynamicRationale(iv1, `no ${iv1} (standard protocol)`, primaryOutcome, "primary")
+        rationale: buildDynamicRationale(iv1, `no ${iv1} (standard protocol)`, primaryOutcome, "primary")
       },
       {
         question: `In ${popPhrase} (P), does ${iv2} (I) compared with no ${iv2} (standard protocol) (C) ${q2Action} (O)?`,
-        rationale: derivation.outcomes[1]?.rationale || buildDynamicRationale(iv2, `no ${iv2} (standard protocol)`, secondaryOutcome1, "secondary")
+        rationale: buildDynamicRationale(iv2, `no ${iv2} (standard protocol)`, secondaryOutcome1, "secondary")
       },
       {
         question: `In ${popPhrase} (P), does ${iv1} combined with ${iv2} (I) compared with standard protocol (C) ${q3Action} (O)?`,
-        rationale: derivation.outcomes[2]?.rationale || buildDynamicRationale(`${iv1} combined with ${iv2}`, "standard protocol", secondaryOutcome2, "subgroup")
+        rationale: buildDynamicRationale(`${iv1} combined with ${iv2}`, "standard protocol", secondaryOutcome2, "subgroup")
       },
       {
         question: `In ${popPhrase} (P), does ${iv1} (I) compared with ${iv2} (C) ${q4Action} (O)?`,
-        rationale: derivation.outcomes[3]?.rationale || buildDynamicRationale(iv1, iv2, qolOutcome, "qol")
+        rationale: buildDynamicRationale(iv1, iv2, qolOutcome, "qol")
       }
     );
   } else {
     suggestedQuestions.push(
       {
         question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q1Action} (O)?`,
-        rationale: derivation.outcomes[0]?.rationale || buildDynamicRationale(intervention, comparator, primaryOutcome, "primary")
+        rationale: buildDynamicRationale(intervention, comparator, primaryOutcome, "primary")
       },
       {
         question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q2Action} (O)?`,
-        rationale: derivation.outcomes[1]?.rationale || buildDynamicRationale(intervention, comparator, secondaryOutcome1, "secondary")
+        rationale: buildDynamicRationale(intervention, comparator, secondaryOutcome1, "secondary")
       },
       {
         question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q3Action} (O)?`,
-        rationale: derivation.outcomes[2]?.rationale || buildDynamicRationale(intervention, comparator, secondaryOutcome2, "subgroup")
+        rationale: buildDynamicRationale(intervention, comparator, secondaryOutcome2, "subgroup")
       },
       {
         question: `In ${popPhrase} (P), does ${intervention} (I) compared with ${comparator} (C) ${q4Action} (O)?`,
-        rationale: derivation.outcomes[3]?.rationale || buildDynamicRationale(intervention, comparator, qolOutcome, "qol")
+        rationale: buildDynamicRationale(intervention, comparator, qolOutcome, "qol")
       }
     );
   }
@@ -1450,7 +1445,7 @@ export function parseClinicalScenario(rawInput: string): ParsedClinicalScenario 
     outcomes,
     suggestedQuestions,
     picoSlots: slots,
-    derivedOutcomes: derivation.outcomes,
+    derivedOutcomes,
     ...(slots.unresolved.length > 0 ? { unrecognizedTerms: slots.unresolved } : {}),
     ...(comparisonOptions ? { comparisonOptions } : {}),
     ...(clarificationRequired ? { clarificationRequired, clarificationPrompt } : {}),

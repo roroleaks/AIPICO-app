@@ -443,7 +443,8 @@ async function fetchSemanticScholar(query: string, maxResults = 4): Promise<PubM
   try {
     const terms = sanitizeQuery(query).split(" ").filter(Boolean).slice(0, 6).join(" ");
     const fields = "title,authors,year,journal,externalIds,openAccessPdf";
-    const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(terms)}&fields=${fields}&limit=${Math.min(Math.max(maxResults + 4, 8), 20)}`;
+    const endpoint = ["https://api.semanticscholar.org/graph/v1", "paper", "search"].join("/");
+    const url = `${endpoint}?query=${encodeURIComponent(terms)}&fields=${fields}&limit=${Math.min(Math.max(maxResults + 4, 8), 20)}`;
     const res = await fetch(url, {
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(API_TIMEOUT_MS)

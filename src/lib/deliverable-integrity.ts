@@ -1,6 +1,20 @@
 import type { AuditableRef } from "./relevance.ts";
 import { checkCitations, extractInTextCites, extractNumericCites, formatReference, foldName } from "./relevance.ts";
-import { normalizeDoi, type EvidenceWarning } from "./evidence-set.ts";
+
+export interface EvidenceWarning {
+  type: "duplicate";
+  key: string;
+  kept: AuditableRef;
+  dropped: AuditableRef;
+}
+
+export function normalizeDoi(raw: unknown): string {
+  let doi = String(raw ?? "").trim();
+  if (!doi) return "";
+  doi = doi.replace(/^(?:https?:\/\/)?(?:dx\.)?doi\.org\//i, "").replace(/^info:doi\//i, "");
+  doi = doi.replace(/^doi:\s*/i, "");
+  return doi.replace(/[\s.,;:)\]}]+$/, "");
+}
 
 /**
  * Narrative fields the reader can see. Citation integrity has to hold across all of them: a

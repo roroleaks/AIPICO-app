@@ -1,7 +1,3 @@
-// `outcome-selection` imports `SpecialtyKey` as a type only, so this runtime import does not
-// create a cycle: the ontology is the single source of truth and kb.ts is a consumer of it.
-import { buildOutcomeContext, selectOutcomes, type OutcomeSelectionResponse } from "./outcome-selection.ts";
-
 export type SpecialtyKey = "infertility" | "gynecology" | "obstetrics";
 
 export interface OutcomeRule {
@@ -255,43 +251,6 @@ export const QUESTION_TYPES = [
   { type: "Harm", framework: "PECO harm" }
 ];
 
-/**
- * Deterministic outcome logic for a condition.
- *
- * Delegates to the shared selector rather than keeping a second ranking here, so the deterministic
- * fallback, the API response and the browser all produce the same recommendation. The
- * `OutcomeRule` shape is preserved because callers still read `primary`/`alternatives`.
- */
-export function rationalOutcomes(condition: string, specialty: SpecialtyKey | null): OutcomeRule {
-  return toOutcomeRule(selectOutcomes(buildOutcomeContext({ specialty, condition }, {}, {})));
-}
-
-function toOutcomeRule(selection: OutcomeSelectionResponse): OutcomeRule {
-  const primary = selection.recommendedOutcome;
-  const keywords = [...new Set(selection.options.flatMap(o => o.keywords))].slice(0, 12);
-  return {
-    keywords,
-    primary: primary.label,
-    alternatives: selection.options.filter(o => o.id !== primary.id).map(o => o.label),
-    rationale: primary.rationale
-  };
-}
-
-/**
- * Deterministic outcome logic for a full PICO question.
- *
- * The question text used to be routed into three hardcoded canonical lists here, which is the same
- * ranking the ontology already performs with declared conditions, interventions and keywords. The
- * question is now passed through as context so one implementation serves every caller.
- */
-export function picoOutcomes(question: string, condition: string, specialty: SpecialtyKey | null): OutcomeRule {
-  return toOutcomeRule(selectOutcomes(buildOutcomeContext(
-    { specialty, condition },
-    {},
-    { originalInput: question, population: condition }
-  )));
-}
-
 export interface Analysis {
   specialty: SpecialtyKey | null;
   specialtyLabel: string;
@@ -313,14 +272,6 @@ export interface Clarification {
   allowFreeText: boolean;
   source: "ai" | "rules" | "hybrid";
   rationale?: string;
-  /**
-   * Present when `field` is "outcome": the ranked, schema-validated selection payload.
-   *
-   * `options` stays the flat label list so existing consumers keep working, but the UI reads this
-   * field for categories, per-option rationales and the recommended primary. It is produced by the
-   * shared selector rather than assembled per caller, so the two cannot drift.
-   */
-  outcomeSelection?: OutcomeSelectionResponse;
 }
 
 export interface Formulation {

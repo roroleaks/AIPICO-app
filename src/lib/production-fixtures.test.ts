@@ -1,8 +1,6 @@
 ﻿import test from "node:test";
 import assert from "node:assert/strict";
-import { buildEvidenceSet } from "./evidence-set.ts";
 import { NO_LITERATURE_HINT, NO_LITERATURE_MESSAGE } from "./clinical-keywords.ts";
-import { finalizeClaims } from "./claim-finalization.ts";
 import {
   checkCitations,
   filterByClaim,
@@ -115,43 +113,25 @@ test("B. each unrelated record is excluded from direct support, for relevance", 
 test("B. unrelated records cannot reach the reference list or the deliverables", async () => {
   const res = filterByClaim(UNRELATED.map(u => u.ref), PICO);
   assert.equal(res.kept.length, 0, "no unrelated record survives the claim filter");
-  const es = await buildEvidenceSet(res.kept);
-  assert.equal(es.retainedCount, 0);
-  assert.equal(es.allowedCitationKeys.size, 0);
   const narrative = reconcileNarrative(
     { discussion: "Evidence is limited (Smith 2019)." },
     [],
-    es.allowedCitationKeys,
-    es.citationMap
+    new Set(),
+    new Map()
   );
   assert.deepEqual(narrative.references, []);
   assert.deepEqual(checkCitations(narrative.fields.discussion, []).orphans, []);
   assert.ok(!narrative.fields.discussion.includes("Smith 2019"), "no citation to an unrelated record survives");
 });
 
-test("C. zero direct-support evidence shows the exact message and no claims", async () => {
+test("C. zero direct-support evidence shows the exact message", async () => {
   const res = filterByClaim(UNRELATED.map(u => u.ref), PICO);
   assert.equal(res.kept.length, 0);
-  const es = await buildEvidenceSet(res.kept);
 
   assert.equal(NO_LITERATURE_MESSAGE, "No literature related to your search found");
   assert.equal(
     NO_LITERATURE_HINT,
     "Try revising or broadening your keywords. Include a condition or population, intervention, comparator, and outcome, and check the spelling of the terms."
-  );
-
-  const finalized = finalizeClaims({
-    fields: { discussion: "Progesterone reduces preterm birth before 37 weeks compared with cerclage." },
-    evidenceSet: es,
-    elements: PICO
-  });
-  const supported = finalized.claims.filter(c => c.supported);
-  assert.equal(supported.length, 0, "no efficacy claim is retained without evidence");
-  assert.equal(finalized.removedClaims.length, 1, "the unsupported efficacy claim is removed");
-  assert.ok(!/reduces preterm birth/.test(finalized.fields.discussion), "the claim is not restated as a finding");
-  assert.ok(
-    finalized.fields.discussion.includes("unresolved uncertainty"),
-    "the reader is told the claim is unsupported rather than shown a finding"
   );
 });
 
@@ -275,9 +255,9 @@ test("P0-4: Evidence-map candidate audit rejects off-topic references and dedupe
   const validPasses = validAudit.population && (validAudit.intervention || validAudit.comparator || validAudit.outcome);
   assert.equal(validPasses, true, "On-topic record must pass evidence-map filter");
 
-  const { refKeys } = await import("./evidence-set.ts");
-  const keys1 = refKeys(onTopicRecord);
-  const keys2 = refKeys({
+  const { refCanonicalKeys } = await import("./explore-scoring.ts");
+  const keys1 = refCanonicalKeys(onTopicRecord);
+  const keys2 = refCanonicalKeys({
     pmid: "cr:10.1186/s12958-020-00632-w",
     doi: "10.1186/s12958-020-00632-w",
     title: "Growth hormone co-treatment for poor ovarian responders undergoing in vitro fertilization: a systematic review and meta-analysis"
