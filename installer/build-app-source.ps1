@@ -110,16 +110,17 @@ try {
   $required = @(
     "src\app\api\engine\route.ts",
     "src\app\api\pdf\route.ts",
-    "src\app\api\pubmed\route.ts",
-    "src\lib\evidence-set.ts",
+    "src\app\api\docx\route.ts",
     "src\lib\relevance.ts",
-    "src\lib\claim-finalization.ts",
-    "src\lib\deliverable-integrity.ts",
     "src\lib\clinical-keywords.ts",
     "src\lib\clinical-input.ts",
-    "src\app\paper\page.tsx",
-    "src\app\question\page.tsx",
-    "src\app\gap\page.tsx"
+    "src\lib\deterministic-screen.ts",
+    "src\lib\explore-scoring.ts",
+    "src\lib\pico-roles.ts",
+    "src\lib\summary-payload.ts",
+    "src\app\screen\page.tsx",
+    "src\app\explore\page.tsx",
+    "src\app\summary\page.tsx"
   )
   $missing = @($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $Stage $_)) })
   if ($missing.Count -gt 0) {

@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { validateDeliverableIntegrity } from "@/lib/deliverable-integrity.ts";
 import { provenanceSchema } from "@/lib/provenance.ts";
-import { buildDocxBuffer } from "@/lib/docx-generator.ts";
+import { buildDocxBuffer, buildWorkflowDocx } from "@/lib/docx-generator.ts";
 import type { CitationStyle } from "@/lib/citation-formatter.ts";
 import type { AuditableRef } from "@/lib/relevance.ts";
 import { isAllowedOrigin, corsHeaders } from "@/lib/security-headers";
@@ -34,8 +34,39 @@ const auditableRefSchema = z.object({
   source: z.string().max(100).optional().nullable()
 });
 
+const workflowWordSchema = z.object({
+  word: z.string().min(1).max(80),
+  role: z.enum(["population", "intervention", "comparator", "outcome"])
+});
+
+const workflowScreeningStatsSchema = z.object({
+  retrieved: z.number().int().nonnegative(),
+  screened: z.number().int().nonnegative(),
+  relaxationLevel: z.number().int().min(0).max(2),
+  excludedCount: z.number().int().nonnegative()
+});
+
+const workflowPaperSchema = z.object({
+  rank: z.number().int().positive(),
+  relevancePct: z.number().int().min(0).max(100),
+  title: z.string(),
+  authors: z.string(),
+  journal: z.string(),
+  year: z.string(),
+  design: z.string(),
+  matchedElements: z.array(z.string())
+});
+
+const workflowSchema = z.object({
+  words: z.array(workflowWordSchema).min(3).max(5),
+  category: z.enum(["established", "conflicting", "gap"]),
+  phrase: z.string().min(1).max(240),
+  screeningStats: workflowScreeningStatsSchema,
+  papers: z.array(workflowPaperSchema).max(50)
+});
+
 const docxPayloadSchema = z.object({
-  title: z.string().min(1).max(500),
+  title: z.string().min(1).max(500).optional().nullable(),
   meta: z.string().max(500).optional().nullable(),
   citationStyle: z.enum(["vancouver", "apa", "harvard"]).default("vancouver"),
   pico: z.array(picoRowSchema).optional().nullable(),
@@ -44,7 +75,8 @@ const docxPayloadSchema = z.object({
   sections: z.array(docxSectionSchema).optional().nullable(),
   references: z.array(z.string().max(2000)).optional().nullable(),
   retainedReferences: z.array(auditableRefSchema).optional().nullable(),
-  provenance: provenanceSchema.optional().nullable()
+  provenance: provenanceSchema.optional().nullable(),
+  workflow: workflowSchema.optional().nullable()
 });
 
 /** Handle CORS preflight for /api/docx */
@@ -97,6 +129,29 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
 
     const body = parseResult.data;
+
+    if (body.workflow) {
+      const buffer = await buildWorkflowDocx(body.workflow);
+      const safeTitle = body.workflow.phrase
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80) || "workflow-summary";
+
+      return new NextResponse(new Uint8Array(buffer), {
+        headers: {
+          ...cors,
+          "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "Content-Disposition": `attachment; filename="${safeTitle}.docx"`,
+          "Cache-Control": "no-store"
+        }
+      });
+    }
+
+    if (!body.title) {
+      return NextResponse.json({ error: "Document title is required." }, { status: 400, headers: cors });
+    }
+
     const style: CitationStyle = body.citationStyle || "vancouver";
     const records = (body.retainedReferences || []) as AuditableRef[];
 

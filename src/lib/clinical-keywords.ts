@@ -48,8 +48,8 @@ export function correctionKey(c: { from: string; to: string }): string {
   return `${c.from}→${c.to}`;
 }
 
-export const MIN_KEYWORDS = 4;
-export const MAX_KEYWORDS = 6;
+export const MIN_KEYWORDS = 3;
+export const MAX_KEYWORDS = 5;
 
 /**
  * Multi-word clinical expressions that must never be split into separate keywords.
@@ -268,7 +268,7 @@ export function suggestCorrection(word: string, dictionary: string[]): string | 
 }
 
 /**
- * Parse free-text clinical input into 4–6 logical keyword units.
+ * Parse free-text clinical input into 3–5 logical keyword units.
  *
  * `extraVocab` lets the app fold in the live knowledge base so new clinical terms are
  * recognised as single units without editing this file.

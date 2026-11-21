@@ -17,7 +17,9 @@ import {
 import type { KeywordCorrection, CorrectionRecord } from "@/lib/clinical-input";
 import type { ClinicalInput } from "@/lib/clinical-input";
 import { parseClinicalScenario } from "@/lib/clinical-semantics";
+import { classifyWordRole, type PicoRole, type PicoWord } from "@/lib/pico-roles";
 import { PhiNotice } from "@/components/PhiNotice";
+import { WorkflowStepper } from "@/components/WorkflowStepper";
 
 // sessionStorage is browser-only, so it cannot be read while rendering on the server.
 let cachedRaw: string | null = null;
@@ -41,39 +43,55 @@ function sessionInputSnapshot(): ClinicalInput | null {
   return cachedValue;
 }
 const serverSnapshot = (): null => null;
-const serverModeSnapshot = (): "formulate" => "formulate";
 const subscribeToNothing = () => () => {};
 const EMPTY_DECISIONS: CorrectionRecord[] = [];
 
-let cachedModeRaw: string | null = null;
-let cachedModeValue: "formulate" | "gap" = "formulate";
-function sessionModeSnapshot(): "formulate" | "gap" {
-  if (typeof window === "undefined") return "formulate";
-  let raw: string | null = null;
-  try {
-    raw = window.sessionStorage.getItem(KEYS.mode);
-  } catch {
-    raw = null;
+const ROLE_CONFIG: Record<PicoRole, { label: string; badge: string; bg: string; border: string; text: string; badgeBg: string }> = {
+  population: {
+    label: "Population (P)",
+    badge: "P",
+    bg: "#eff6ff",
+    border: "#bfdbfe",
+    text: "#1e40af",
+    badgeBg: "#3b82f6"
+  },
+  intervention: {
+    label: "Intervention (I)",
+    badge: "I",
+    bg: "#f0fdf4",
+    border: "#bbf7d0",
+    text: "#166534",
+    badgeBg: "#22c55e"
+  },
+  comparator: {
+    label: "Comparator (C)",
+    badge: "C",
+    bg: "#fffbeb",
+    border: "#fde68a",
+    text: "#92400e",
+    badgeBg: "#f59e0b"
+  },
+  outcome: {
+    label: "Outcome (O)",
+    badge: "O",
+    bg: "#faf5ff",
+    border: "#e9d5ff",
+    text: "#6b21a8",
+    badgeBg: "#a855f7"
   }
-  if (raw !== cachedModeRaw) {
-    cachedModeRaw = raw;
-    cachedModeValue = raw === "gap" ? "gap" : "formulate";
-  }
-  return cachedModeValue;
-}
+};
 
 export default function Home() {
   const router = useRouter();
   const restored = useSyncExternalStore(subscribeToNothing, sessionInputSnapshot, serverSnapshot);
-  const restoredMode = useSyncExternalStore(subscribeToNothing, sessionModeSnapshot, serverModeSnapshot);
 
   const [draft, setDraft] = useState<string | null>(null);
   const input = draft ?? restored?.rawInput ?? "";
   const setInput = useCallback((v: string) => setDraft(v), []);
-  const [modeDraft, setModeDraft] = useState<"formulate" | "gap" | null>(null);
-  const mode = modeDraft ?? restoredMode;
-  const setMode = useCallback((v: "formulate" | "gap") => setModeDraft(v), []);
   const [tagError, setTagError] = useState<string | null>(null);
+
+  // Manual PICO role overrides decided by the user, keyed by normalized word
+  const [userRoles, setUserRoles] = useState<Record<string, PicoRole>>({});
 
   // Input style: Quick tag words (free-text) vs Structured labeled fields (P, I, C, O)
   const [entryStyle, setEntryStyle] = useState<"tags" | "structured">("tags");
@@ -109,8 +127,8 @@ export default function Home() {
     if (!structC.trim() && !structO.trim()) {
       return "Please specify a Comparator / Control (C) or a Target Outcome (O) (or both).";
     }
-    if (parsed.logicalCount > 6) {
-      return `${parsed.logicalCount} keywords detected — maximum is 6.`;
+    if (parsed.logicalCount > 5) {
+      return `${parsed.logicalCount} keywords detected — maximum is 5.`;
     }
     return null;
   }, [entryStyle, structP, structI, structC, structO, parsed.logicalCount]);
@@ -122,7 +140,7 @@ export default function Home() {
       const filled = [structP, structI, structC, structO].filter(s => s.trim().length > 0).length;
       return structuredValidationError === null && filled >= 3;
     }
-    return tokens.length >= 4 && validationMessage === null;
+    return tokens.length >= 3 && validationMessage === null;
   }, [entryStyle, structP, structI, structC, structO, structuredValidationError, tokens.length, validationMessage]);
 
   const countHint = useMemo(() => {
@@ -135,12 +153,49 @@ export default function Home() {
       return `${filled} structured PICO field${filled === 1 ? "" : "s"} entered.`;
     }
     if (tokens.length === 0) return "";
-    if (tokens.length < 4) {
-      const needed = 4 - tokens.length;
-      return `${tokens.length} keyword${tokens.length === 1 ? "" : "s"} detected — add ${needed} more keyword${needed > 1 ? "s" : ""} (4 required minimum).`;
+    if (tokens.length < 3) {
+      const needed = 3 - tokens.length;
+      return `${tokens.length} keyword${tokens.length === 1 ? "" : "s"} detected — add ${needed} more keyword${needed > 1 ? "s" : ""} (3 required minimum).`;
     }
     return keywordCountHint(parsed);
   }, [entryStyle, structP, structI, structC, structO, tokens.length, parsed]);
+
+  // Dynamic PICO words list reflecting user overrides over auto-classification
+  const picoWordsList = useMemo(() => {
+    return parsed.normalizedTokens.map(w => {
+      const key = w.toLowerCase().trim();
+      const autoRole = classifyWordRole(w).role;
+      const role = userRoles[key] ?? autoRole;
+      return { word: w, role };
+    });
+  }, [parsed.normalizedTokens, userRoles]);
+
+  // One-line summary and soft advisory
+  const { summaryLine, showMissingAdvisory } = useMemo(() => {
+    if (picoWordsList.length === 0) return { summaryLine: "", showMissingAdvisory: false };
+    const p = picoWordsList.filter(item => item.role === "population").map(item => item.word);
+    const i = picoWordsList.filter(item => item.role === "intervention").map(item => item.word);
+    const c = picoWordsList.filter(item => item.role === "comparator").map(item => item.word);
+    const o = picoWordsList.filter(item => item.role === "outcome").map(item => item.word);
+
+    const parts: string[] = [];
+    if (p.length) parts.push(`P: ${p.join(", ")}`);
+    if (i.length) parts.push(`I: ${i.join(", ")}`);
+    if (c.length) parts.push(`C: ${c.join(", ")}`);
+    if (o.length) parts.push(`O: ${o.join(", ")}`);
+
+    return {
+      summaryLine: parts.join(" · "),
+      showMissingAdvisory: (p.length === 0 || i.length === 0) && picoWordsList.length >= 3
+    };
+  }, [picoWordsList]);
+
+  const handleRoleChange = useCallback((term: string, newRole: PicoRole) => {
+    setUserRoles(prev => ({
+      ...prev,
+      [term.toLowerCase().trim()]: newRole
+    }));
+  }, []);
 
   const liveMessage = input.trim() ? validationMessage : null;
   const alertMessage = tagError || liveMessage;
@@ -161,6 +216,7 @@ export default function Home() {
     setStructC(preset.c);
     setStructO(preset.o);
     setInput(preset.raw);
+    setUserRoles({});
     setTagError(null);
   };
 
@@ -209,8 +265,20 @@ export default function Home() {
     setTagError(null);
     sset(KEYS.input, toSessionInput(current, input));
     sset(KEYS.inputText, sessionSearchText(toSessionInput(current, input)));
-    sset(KEYS.mode, mode);
-    router.push("/gap");
+    const finalWords: PicoWord[] = entryStyle === "structured"
+      ? [
+          structP.trim() ? { word: structP.trim(), role: "population" as const } : null,
+          structI.trim() ? { word: structI.trim(), role: "intervention" as const } : null,
+          structC.trim() ? { word: structC.trim(), role: "comparator" as const } : null,
+          structO.trim() ? { word: structO.trim(), role: "outcome" as const } : null,
+        ].filter((x): x is PicoWord => x !== null)
+      : current.normalizedTokens.map(w => ({
+          word: w,
+          role: userRoles[w.toLowerCase().trim()] ?? classifyWordRole(w).role
+        }));
+    sset(KEYS.picoWords, finalWords);
+
+    router.push("/screen");
   };
 
   return (
@@ -243,41 +311,11 @@ export default function Home() {
         </div>
       </header>
 
+      <WorkflowStepper currentStep={1} />
+
       <main id="main" className="solo">
         <section className="card">
           <form onSubmit={(e) => { e.preventDefault(); start(); }}>
-            <div className="modes">
-              <button
-                type="button"
-                className={`mode-tab ${mode === "formulate" ? "active" : ""}`}
-                aria-pressed={mode === "formulate"}
-                onClick={() => setMode("formulate")}
-              >
-                <svg className="mode-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 17v4" />
-                  <path d="M9 20h6" />
-                  <path d="M14 11V3" />
-                  <path d="M11 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6" />
-                  <path d="M16 8h-5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h5a1 1 0 0 1 1 1v3" />
-                </svg>
-                <span>Formulate Question</span>
-              </button>
-              <button
-                type="button"
-                className={`mode-tab ${mode === "gap" ? "active" : ""}`}
-                aria-pressed={mode === "gap"}
-                onClick={() => setMode("gap")}
-              >
-                <svg className="mode-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="11" cy="11" r="8" />
-                  <path d="M21 21l-4.3-4.3" />
-                  <path d="M11 8v6" />
-                  <path d="M11 16h.01" />
-                </svg>
-                <span>Find Gap</span>
-              </button>
-            </div>
-
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
               <span className="pill">📝 Step 1 · Clinical Input</span>
               <div style={{ display: "flex", gap: 6, background: "#f1f5f9", padding: 3, borderRadius: 8, flexWrap: "wrap" }}>
@@ -321,7 +359,7 @@ export default function Home() {
             {entryStyle === "tags" ? (
               <>
                 <p className="hint">
-                  Enter 4–6 clinically meaningful keywords or phrases. Multi-word phrases count as one keyword. Separate terms with commas, dashes, semicolons, or new lines.
+                  Enter 3–5 clinically meaningful keywords or phrases. Multi-word phrases count as one keyword. Separate terms with commas, dashes, semicolons, or new lines.
                 </p>
                 <label htmlFor="clinicalKeywords" className="sr-only">Clinical keywords</label>
                 <textarea
@@ -330,9 +368,103 @@ export default function Home() {
                   value={input}
                   onChange={(e) => { setInput(e.target.value); setTagError(null); }}
                   onInput={(e) => { setInput((e.target as HTMLTextAreaElement).value); setTagError(null); }}
-                  placeholder="e.g., poor responders, ivf, growth hormone, co enzyme q10, pregnancy rate"
+                  placeholder="e.g., poor responders, ivf, growth hormone, pregnancy rate"
                   rows={4}
                 />
+
+                {/* PICO Role Tags Strip */}
+                {parsed.normalizedTokens.length > 0 && (
+                  <fieldset
+                    aria-label="PICO role assignments"
+                    style={{
+                      marginTop: 12,
+                      padding: "12px 14px",
+                      background: "#f8fafc",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: 8
+                    }}
+                  >
+                    <legend className="sr-only">PICO role assignments</legend>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                      <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                        🏷️ PICO Roles (Auto-suggested · Editable)
+                      </span>
+                      <span style={{ fontSize: "0.75rem", color: "var(--muted)" }}>
+                        {parsed.normalizedTokens.length} term{parsed.normalizedTokens.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {parsed.normalizedTokens.map(term => {
+                        const key = term.toLowerCase().trim();
+                        const autoRole = classifyWordRole(term).role;
+                        const currentRole = userRoles[key] ?? autoRole;
+                        const conf = ROLE_CONFIG[currentRole];
+
+                        return (
+                          <div
+                            key={term}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 6,
+                              background: conf.bg,
+                              border: `1px solid ${conf.border}`,
+                              padding: "4px 8px",
+                              borderRadius: 6,
+                              fontSize: "0.82rem"
+                            }}
+                          >
+                            <span
+                              style={{
+                                background: conf.badgeBg,
+                                color: "#fff",
+                                fontWeight: 700,
+                                fontSize: "0.7rem",
+                                padding: "2px 6px",
+                                borderRadius: 4
+                              }}
+                            >
+                              {conf.badge}
+                            </span>
+                            <span style={{ fontWeight: 600, color: conf.text }}>{term}</span>
+                            <select
+                              aria-label={`Role for keyword "${term}"`}
+                              value={currentRole}
+                              onChange={(e) => handleRoleChange(term, e.target.value as PicoRole)}
+                              style={{
+                                fontSize: "0.75rem",
+                                padding: "2px 4px",
+                                borderRadius: 4,
+                                border: "1px solid #cbd5e1",
+                                background: "#fff",
+                                color: "#334155",
+                                cursor: "pointer"
+                              }}
+                            >
+                              <option value="population">Population (P)</option>
+                              <option value="intervention">Intervention (I)</option>
+                              <option value="comparator">Comparator (C)</option>
+                              <option value="outcome">Outcome (O)</option>
+                            </select>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {summaryLine && (
+                      <div style={{ marginTop: 10, fontSize: "0.8rem", color: "#334155", fontWeight: 500 }}>
+                        📋 <b>PICO Summary:</b> {summaryLine}
+                      </div>
+                    )}
+
+                    {showMissingAdvisory && (
+                      <div style={{ marginTop: 6, fontSize: "0.78rem", color: "#b45309", background: "#fef3c7", padding: "4px 8px", borderRadius: 4, display: "inline-block" }}>
+                        ⚠️ At least one Population and one Intervention word are recommended for screening.
+                      </div>
+                    )}
+                  </fieldset>
+                )}
               </>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 12 }}>
@@ -526,7 +658,7 @@ export default function Home() {
 
             <div className="row" style={{ marginTop: 16 }}>
               <button className="primary" onClick={start} type="submit" disabled={!canSubmit} aria-disabled={!canSubmit} style={{ padding: "12px 28px", fontSize: "1rem" }}>
-                {mode === "formulate" ? "🔍 Map the evidence & Formulate PICO →" : "🗺 Map the evidence →"}
+                🔍 Screen literature & Map evidence →
               </button>
             </div>
           </form>

@@ -31,8 +31,39 @@ export interface DocxSection {
   blocks: string[];
 }
 
-export interface DocxPayload {
+export interface WorkflowWord {
+  word: string;
+  role: "population" | "intervention" | "comparator" | "outcome";
+}
+
+export interface WorkflowScreeningStats {
+  retrieved: number;
+  screened: number;
+  relaxationLevel: number;
+  excludedCount: number;
+}
+
+export interface WorkflowPaper {
+  rank: number;
+  relevancePct: number;
   title: string;
+  authors: string;
+  journal: string;
+  year: string;
+  design: string;
+  matchedElements: string[];
+}
+
+export interface WorkflowExportData {
+  words: WorkflowWord[];
+  category: "established" | "conflicting" | "gap";
+  phrase: string;
+  screeningStats: WorkflowScreeningStats;
+  papers: WorkflowPaper[];
+}
+
+export interface DocxPayload {
+  title?: string | null;
   meta?: string | null;
   citationStyle?: "vancouver" | "apa" | "harvard" | null;
   pico?: PicoRow[] | null;
@@ -42,6 +73,7 @@ export interface DocxPayload {
   references?: string[] | null;
   retainedReferences?: Array<Record<string, unknown>> | null;
   provenance?: ProvenanceMetadata | null;
+  workflow?: WorkflowExportData | null;
 }
 
 /**
@@ -249,7 +281,7 @@ export async function buildDocxBuffer(body: DocxPayload): Promise<Buffer> {
       spacing: { before: 200, after: 100 },
       children: [
         new TextRun({
-          text: body.title,
+          text: body.title || "Clinical Commentary",
           font: "Arial",
           size: 44, // 22pt
           bold: true,
@@ -599,6 +631,521 @@ export async function buildDocxBuffer(body: DocxPayload): Promise<Buffer> {
                     text: "AI PICO v3.1 · Clinical Evidence Commentary · Obstetrics & Gynecology",
                     font: "Arial",
                     size: 18, // 9pt
+                    color: "64748B"
+                  })
+                ]
+              })
+            ]
+          })
+        },
+        footers: {
+          default: new Footer({
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.BOTH,
+                children: [
+                  new TextRun({
+                    text: "Confidential · Clinical Question Assistant",
+                    font: "Arial",
+                    size: 18,
+                    color: "64748B"
+                  }),
+                  new TextRun({
+                    text: "    |    Page ",
+                    font: "Arial",
+                    size: 18,
+                    color: "64748B"
+                  }),
+                  new TextRun({
+                    children: [PageNumber.CURRENT],
+                    font: "Arial",
+                    size: 18,
+                    color: "64748B"
+                  }),
+                  new TextRun({
+                    text: " of ",
+                    font: "Arial",
+                    size: 18,
+                    color: "64748B"
+                  }),
+                  new TextRun({
+                    children: [PageNumber.TOTAL_PAGES],
+                    font: "Arial",
+                    size: 18,
+                    color: "64748B"
+                  }),
+                  new TextRun({
+                    text: "    |    © Raouf Roshdy 2026",
+                    font: "Arial",
+                    size: 18,
+                    color: "64748B"
+                  })
+                ]
+              })
+            ]
+          })
+        },
+        children: docChildren
+      }
+    ]
+  });
+
+  return await Packer.toBuffer(doc);
+}
+
+export async function buildWorkflowDocx(workflow: WorkflowExportData): Promise<Buffer> {
+  const docChildren: (Paragraph | Table)[] = [];
+
+  // Title
+  docChildren.push(
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 200, after: 100 },
+      children: [
+        new TextRun({
+          text: workflow.phrase,
+          font: "Arial",
+          size: 40,
+          bold: true,
+          color: "0F172A"
+        })
+      ]
+    })
+  );
+
+  // Subtitle
+  const categoryLabel =
+    workflow.category === "established"
+      ? "established"
+      : workflow.category === "conflicting"
+      ? "conflicting"
+      : "gap";
+
+  docChildren.push(
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 240 },
+      children: [
+        new TextRun({
+          text: `AIPICO workflow summary — ${categoryLabel} evidence focus`,
+          font: "Arial",
+          size: 20,
+          italics: true,
+          color: "64748B"
+        })
+      ]
+    })
+  );
+
+  // Clinical Disclaimer Banner
+  docChildren.push(
+    new Table({
+      width: { size: 9360, type: WidthType.DXA },
+      borders: {
+        top: { style: BorderStyle.NONE },
+        bottom: { style: BorderStyle.NONE },
+        right: { style: BorderStyle.NONE },
+        left: { style: BorderStyle.SINGLE, size: 24, color: "0F766E" },
+        insideHorizontal: { style: BorderStyle.NONE },
+        insideVertical: { style: BorderStyle.NONE }
+      },
+      rows: [
+        new TableRow({
+          children: [
+            new TableCell({
+              width: { size: 9360, type: WidthType.DXA },
+              shading: { fill: "F0FDFA" },
+              margins: { top: 120, bottom: 120, left: 200, right: 160 },
+              children: [
+                new Paragraph({
+                  children: [
+                    new TextRun({
+                      text: "EDUCATIONAL & CLINICAL DECISION-SUPPORT DISCLAIMER: ",
+                      font: "Arial",
+                      size: 18,
+                      bold: true,
+                      color: "0F766E"
+                    }),
+                    new TextRun({
+                      text: "AI PICO is an assistive tool designed for inquiry formulation. Synthesized claims, outcomes, and proposed questions require independent clinician verification against original peer-reviewed primary literature.",
+                      font: "Arial",
+                      size: 18,
+                      color: "334155"
+                    })
+                  ]
+                })
+              ]
+            })
+          ]
+        })
+      ]
+    })
+  );
+
+  // 1. Clinical words (PICO) section
+  docChildren.push(
+    new Paragraph({
+      spacing: { before: 280, after: 120 },
+      children: [
+        new TextRun({
+          text: "Clinical words (PICO)",
+          font: "Arial",
+          size: 26,
+          bold: true,
+          color: "0F766E"
+        })
+      ]
+    })
+  );
+
+  const roleNameMap: Record<string, string> = {
+    population: "Population [P]",
+    intervention: "Intervention [I]",
+    comparator: "Comparator [C]",
+    outcome: "Outcome [O]"
+  };
+
+  const wordRows: TableRow[] = [
+    new TableRow({
+      tableHeader: true,
+      children: [
+        new TableCell({
+          width: { size: 4680, type: WidthType.DXA },
+          shading: { fill: "E6FFFA" },
+          margins: { top: 120, bottom: 120, left: 160, right: 160 },
+          children: [
+            new Paragraph({
+              children: [
+                new TextRun({ text: "Clinical Word", bold: true, font: "Arial", size: 20, color: "0F766E" })
+              ]
+            })
+          ]
+        }),
+        new TableCell({
+          width: { size: 4680, type: WidthType.DXA },
+          shading: { fill: "E6FFFA" },
+          margins: { top: 120, bottom: 120, left: 160, right: 160 },
+          children: [
+            new Paragraph({
+              children: [
+                new TextRun({ text: "PICO Role", bold: true, font: "Arial", size: 20, color: "0F766E" })
+              ]
+            })
+          ]
+        })
+      ]
+    })
+  ];
+
+  workflow.words.forEach((w, idx) => {
+    const bg = idx % 2 === 0 ? "F8FAFC" : "FFFFFF";
+    wordRows.push(
+      new TableRow({
+        children: [
+          new TableCell({
+            width: { size: 4680, type: WidthType.DXA },
+            shading: { fill: bg },
+            margins: { top: 100, bottom: 100, left: 160, right: 160 },
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({ text: w.word, bold: true, font: "Arial", size: 20, color: "1E293B" })
+                ]
+              })
+            ]
+          }),
+          new TableCell({
+            width: { size: 4680, type: WidthType.DXA },
+            shading: { fill: bg },
+            margins: { top: 100, bottom: 100, left: 160, right: 160 },
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({ text: roleNameMap[w.role] || w.role, font: "Arial", size: 20, color: "0F766E" })
+                ]
+              })
+            ]
+          })
+        ]
+      })
+    );
+  });
+
+  docChildren.push(
+    new Table({
+      width: { size: 9360, type: WidthType.DXA },
+      borders: {
+        top: { style: BorderStyle.SINGLE, size: 6, color: "CBD5E1" },
+        bottom: { style: BorderStyle.SINGLE, size: 8, color: "0F766E" },
+        left: { style: BorderStyle.NONE },
+        right: { style: BorderStyle.NONE },
+        insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: "E2E8F0" },
+        insideVertical: { style: BorderStyle.NONE }
+      },
+      rows: wordRows
+    })
+  );
+
+  // 2. Screening section
+  docChildren.push(
+    new Paragraph({
+      spacing: { before: 280, after: 120 },
+      children: [
+        new TextRun({
+          text: "Screening",
+          font: "Arial",
+          size: 26,
+          bold: true,
+          color: "0F766E"
+        })
+      ]
+    })
+  );
+
+  docChildren.push(
+    new Paragraph({
+      spacing: { after: 200 },
+      children: [
+        new TextRun({
+          text: `Retrieved: ${workflow.screeningStats.retrieved} records. Screened: ${workflow.screeningStats.screened} records. Search relaxation level: ${workflow.screeningStats.relaxationLevel}. Excluded during exploration: ${workflow.screeningStats.excludedCount}.`,
+          font: "Arial",
+          size: 20,
+          color: "334155"
+        })
+      ]
+    })
+  );
+
+  // 3. Papers under consideration section
+  docChildren.push(
+    new Paragraph({
+      spacing: { before: 280, after: 120 },
+      children: [
+        new TextRun({
+          text: "Papers under consideration",
+          font: "Arial",
+          size: 26,
+          bold: true,
+          color: "0F766E"
+        })
+      ]
+    })
+  );
+
+  const paperRows: TableRow[] = [
+    new TableRow({
+      tableHeader: true,
+      children: [
+        new TableCell({
+          width: { size: 800, type: WidthType.DXA },
+          shading: { fill: "E6FFFA" },
+          margins: { top: 120, bottom: 120, left: 100, right: 100 },
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [new TextRun({ text: "Rank", bold: true, font: "Arial", size: 18, color: "0F766E" })]
+            })
+          ]
+        }),
+        new TableCell({
+          width: { size: 1200, type: WidthType.DXA },
+          shading: { fill: "E6FFFA" },
+          margins: { top: 120, bottom: 120, left: 100, right: 100 },
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [new TextRun({ text: "Relevance", bold: true, font: "Arial", size: 18, color: "0F766E" })]
+            })
+          ]
+        }),
+        new TableCell({
+          width: { size: 3960, type: WidthType.DXA },
+          shading: { fill: "E6FFFA" },
+          margins: { top: 120, bottom: 120, left: 120, right: 120 },
+          children: [
+            new Paragraph({
+              children: [new TextRun({ text: "Title", bold: true, font: "Arial", size: 18, color: "0F766E" })]
+            })
+          ]
+        }),
+        new TableCell({
+          width: { size: 1400, type: WidthType.DXA },
+          shading: { fill: "E6FFFA" },
+          margins: { top: 120, bottom: 120, left: 100, right: 100 },
+          children: [
+            new Paragraph({
+              children: [new TextRun({ text: "Journal / Year", bold: true, font: "Arial", size: 18, color: "0F766E" })]
+            })
+          ]
+        }),
+        new TableCell({
+          width: { size: 1000, type: WidthType.DXA },
+          shading: { fill: "E6FFFA" },
+          margins: { top: 120, bottom: 120, left: 100, right: 100 },
+          children: [
+            new Paragraph({
+              children: [new TextRun({ text: "Design", bold: true, font: "Arial", size: 18, color: "0F766E" })]
+            })
+          ]
+        }),
+        new TableCell({
+          width: { size: 1000, type: WidthType.DXA },
+          shading: { fill: "E6FFFA" },
+          margins: { top: 120, bottom: 120, left: 100, right: 100 },
+          children: [
+            new Paragraph({
+              children: [new TextRun({ text: "Matched", bold: true, font: "Arial", size: 18, color: "0F766E" })]
+            })
+          ]
+        })
+      ]
+    })
+  ];
+
+  workflow.papers.forEach((p, idx) => {
+    const bg = idx % 2 === 0 ? "F8FAFC" : "FFFFFF";
+    const jYear = `${p.journal || ""}${p.journal && p.year ? ` (${p.year})` : p.year || ""}`;
+
+    paperRows.push(
+      new TableRow({
+        children: [
+          new TableCell({
+            width: { size: 800, type: WidthType.DXA },
+            shading: { fill: bg },
+            margins: { top: 100, bottom: 100, left: 100, right: 100 },
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [new TextRun({ text: String(p.rank), bold: true, font: "Arial", size: 18, color: "334155" })]
+              })
+            ]
+          }),
+          new TableCell({
+            width: { size: 1200, type: WidthType.DXA },
+            shading: { fill: bg },
+            margins: { top: 100, bottom: 100, left: 100, right: 100 },
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [new TextRun({ text: `${p.relevancePct}%`, bold: true, font: "Arial", size: 18, color: "0F766E" })]
+              })
+            ]
+          }),
+          new TableCell({
+            width: { size: 3960, type: WidthType.DXA },
+            shading: { fill: bg },
+            margins: { top: 100, bottom: 100, left: 120, right: 120 },
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: p.title, bold: true, font: "Arial", size: 18, color: "0F172A" })]
+              }),
+              ...(p.authors
+                ? [
+                    new Paragraph({
+                      children: [new TextRun({ text: p.authors, italics: true, font: "Arial", size: 16, color: "64748B" })]
+                    })
+                  ]
+                : [])
+            ]
+          }),
+          new TableCell({
+            width: { size: 1400, type: WidthType.DXA },
+            shading: { fill: bg },
+            margins: { top: 100, bottom: 100, left: 100, right: 100 },
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: jYear, font: "Arial", size: 18, color: "475569" })]
+              })
+            ]
+          }),
+          new TableCell({
+            width: { size: 1000, type: WidthType.DXA },
+            shading: { fill: bg },
+            margins: { top: 100, bottom: 100, left: 100, right: 100 },
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: p.design || "Study", font: "Arial", size: 18, color: "475569" })]
+              })
+            ]
+          }),
+          new TableCell({
+            width: { size: 1000, type: WidthType.DXA },
+            shading: { fill: bg },
+            margins: { top: 100, bottom: 100, left: 100, right: 100 },
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: p.matchedElements.join(", ") || "Broad", font: "Arial", size: 18, color: "0F766E" })]
+              })
+            ]
+          })
+        ]
+      })
+    );
+  });
+
+  docChildren.push(
+    new Table({
+      width: { size: 9360, type: WidthType.DXA },
+      borders: {
+        top: { style: BorderStyle.SINGLE, size: 6, color: "CBD5E1" },
+        bottom: { style: BorderStyle.SINGLE, size: 8, color: "0F766E" },
+        left: { style: BorderStyle.NONE },
+        right: { style: BorderStyle.NONE },
+        insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: "E2E8F0" },
+        insideVertical: { style: BorderStyle.NONE }
+      },
+      rows: paperRows
+    })
+  );
+
+  // 4. Excluded during exploration section
+  docChildren.push(
+    new Paragraph({
+      spacing: { before: 280, after: 120 },
+      children: [
+        new TextRun({
+          text: "Excluded during exploration",
+          font: "Arial",
+          size: 26,
+          bold: true,
+          color: "0F766E"
+        })
+      ]
+    })
+  );
+
+  docChildren.push(
+    new Paragraph({
+      spacing: { after: 240 },
+      children: [
+        new TextRun({
+          text: `${workflow.screeningStats.excludedCount} paper(s) excluded by researcher during exploration.`,
+          font: "Arial",
+          size: 20,
+          color: "475569"
+        })
+      ]
+    })
+  );
+
+  const doc = new Document({
+    sections: [
+      {
+        properties: {
+          page: {
+            margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
+          }
+        },
+        headers: {
+          default: new Header({
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.RIGHT,
+                children: [
+                  new TextRun({
+                    text: "AI PICO v4 · Workflow Summary · Evidence-Based Medicine",
+                    font: "Arial",
+                    size: 18,
                     color: "64748B"
                   })
                 ]

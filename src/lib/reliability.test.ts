@@ -47,19 +47,31 @@ test("P3-3. layout.tsx configures font fallbacks for build reproducibility", asy
 test("P3-4. UI and generator text reflects accurate Vancouver description and outcome guidance", async () => {
   const fs = await import("fs");
   const path = await import("path");
-  const gapPage = fs.readFileSync(path.resolve(process.cwd(), "src/app/gap/page.tsx"), "utf8");
-  const questionPage = fs.readFileSync(path.resolve(process.cwd(), "src/app/question/page.tsx"), "utf8");
   const pdfGen = fs.readFileSync(path.resolve(process.cwd(), "src/lib/pdf-generator.ts"), "utf8");
-
-  assert.ok(!gapPage.includes("🕳️"), "Step 2 gap page must not use black hole emoji");
-  assert.ok(gapPage.includes("🗺️ Step 2"), "Step 2 must use map emoji");
-  assert.ok(gapPage.includes("🔍 Research gaps"), "Research gaps must use search emoji");
-
-  assert.ok(!questionPage.includes("Uppercase / No Brackets"), "Question page must not use old Vancouver phrasing");
-  assert.ok(questionPage.includes("Vancouver (superscript numerals)"), "Question page must label Vancouver accurately");
-  assert.ok(questionPage.includes("suggested outcomes — verify against the relevant published core outcome set"), "Step 3 guidance must be accurate");
+  const docxGen = fs.readFileSync(path.resolve(process.cwd(), "src/lib/docx-generator.ts"), "utf8");
 
   assert.ok(pdfGen.includes("Vancouver (superscript numerals)"), "PDF generator must use accurate Vancouver label");
+  assert.ok(docxGen.includes("Vancouver (superscript numerals)"), "DOCX generator must use accurate Vancouver label");
+
+  const gapPath = path.resolve(process.cwd(), "src/app/gap/page.tsx");
+  const questionPath = path.resolve(process.cwd(), "src/app/question/page.tsx");
+
+  if (fs.existsSync(gapPath) && fs.existsSync(questionPath)) {
+    const gapPage = fs.readFileSync(gapPath, "utf8");
+    const questionPage = fs.readFileSync(questionPath, "utf8");
+
+    assert.ok(!gapPage.includes("🕳️"), "Step 2 gap page must not use black hole emoji");
+    assert.ok(gapPage.includes("🗺️ Step 2"), "Step 2 must use map emoji");
+    assert.ok(gapPage.includes("🔍 Research gaps"), "Research gaps must use search emoji");
+
+    assert.ok(!questionPage.includes("Uppercase / No Brackets"), "Question page must not use old Vancouver phrasing");
+    assert.ok(questionPage.includes("Vancouver (superscript numerals)"), "Question page must label Vancouver accurately");
+    assert.ok(questionPage.includes("suggested outcomes — verify against the relevant published core outcome set"), "Step 3 guidance must be accurate");
+  } else {
+    // Legacy flow pages retired in v4 workflow redesign
+    assert.ok(!fs.existsSync(gapPath), "Legacy gap page must be removed in v4");
+    assert.ok(!fs.existsSync(questionPath), "Legacy question page must be removed in v4");
+  }
 });
 
 

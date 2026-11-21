@@ -23,21 +23,21 @@ test("1. four comma-separated terms are valid", () => {
   assert.equal(validateKeywords(p), null);
 });
 
-test("2. six comma-separated terms are valid", () => {
-  const p = parseClinicalKeywords("short cervix, progesterone, cerclage, preterm birth, cervical length, gestational age");
-  assert.equal(p.logicalCount, 6);
+test("2. five comma-separated terms are valid", () => {
+  const p = parseClinicalKeywords("short cervix, progesterone, cerclage, preterm birth, cervical length");
+  assert.equal(p.logicalCount, 5);
   assert.equal(validateKeywords(p), null);
 });
 
-test("3. three terms are rejected", () => {
-  const p = parseClinicalKeywords("short cervix, progesterone, cerclage");
-  assert.equal(p.logicalCount, 3);
+test("3. two terms are rejected", () => {
+  const p = parseClinicalKeywords("short cervix, progesterone");
+  assert.equal(p.logicalCount, 2);
   assert.ok(validateKeywords(p));
 });
 
-test("4. seven terms are rejected", () => {
-  const p = parseClinicalKeywords("short cervix, progesterone, cerclage, preterm birth, cervical length, singleton pregnancy, gestational age");
-  assert.equal(p.logicalCount, 7);
+test("4. six terms are rejected", () => {
+  const p = parseClinicalKeywords("short cervix, progesterone, cerclage, preterm birth, cervical length, singleton pregnancy");
+  assert.equal(p.logicalCount, 6);
   assert.ok(validateKeywords(p));
 });
 
@@ -200,34 +200,36 @@ test("11f. decisions for terms absent from the input are inert", () => {
   assert.ok(p.normalizedTokens.includes("cerclage"));
 });
 
-test("12. invalid-entry message states detected count and the 4-6 range", () => {
-  const msg3 = validateKeywords(parseClinicalKeywords("short cervix, progesterone, cerclage"))!;
-  assert.match(msg3, /3 logical keywords/);
-  assert.match(msg3, /4 required minimum/);
-  assert.match(msg3, new RegExp(`${MIN_KEYWORDS}[–-]${MAX_KEYWORDS}`));
+test("12. invalid-entry message states detected count and the 3-5 range", () => {
+  const msg2 = validateKeywords(parseClinicalKeywords("short cervix, progesterone"))!;
+  assert.match(msg2, /2 logical keywords/);
+  assert.match(msg2, /3 required minimum/);
+  assert.match(msg2, new RegExp(`${MIN_KEYWORDS}[–-]${MAX_KEYWORDS}`));
 
-  const msg7 = validateKeywords(
-    parseClinicalKeywords("short cervix, progesterone, cerclage, preterm birth, cervical length, singleton pregnancy, gestational age")
+  const msg6 = validateKeywords(
+    parseClinicalKeywords("short cervix, progesterone, cerclage, preterm birth, cervical length, singleton pregnancy")
   )!;
-  assert.match(msg7, /7 logical keywords/);
-  assert.match(msg7, /maximum is 6/);
+  assert.match(msg6, /6 logical keywords/);
+  assert.match(msg6, /maximum is 5/);
 
   // explanatory content required by the brief
-  assert.match(msg3, /count as one keyword each/);
-  assert.match(msg3, /commas, dashes, semicolons, or new lines/);
-  assert.match(msg3, /condition or population, intervention, comparator, and outcome/);
-  assert.match(msg3, /short cervix, progesterone, cerclage, preterm birth/);
+  assert.match(msg2, /count as one keyword each/);
+  assert.match(msg2, /commas, dashes, semicolons, or new lines/);
+  assert.match(msg2, /condition or population, intervention, comparator, and outcome/);
+  assert.match(msg2, /short cervix, progesterone, cerclage, preterm birth/);
 });
 
 test("live count hint reads correctly in and out of range", () => {
+  assert.equal(keywordCountHint(parseClinicalKeywords("short cervix, progesterone")),
+    "2 logical keywords detected — 3 required minimum.");
   assert.equal(keywordCountHint(parseClinicalKeywords("short cervix, progesterone, cerclage")),
-    "3 logical keywords detected — 4 required minimum.");
+    "3 logical keywords detected.");
   assert.equal(keywordCountHint(parseClinicalKeywords("short cervix, progesterone, cerclage, preterm birth")),
     "4 logical keywords detected.");
   assert.equal(keywordCountHint(parseClinicalKeywords("")), "");
   assert.match(
-    keywordCountHint(parseClinicalKeywords("endometriosis, metformin, aspirin, cerclage, hypertension, diabetes, anemia")),
-    /7 logical keywords detected — maximum is 6/
+    keywordCountHint(parseClinicalKeywords("endometriosis, metformin, aspirin, cerclage, hypertension, diabetes")),
+    /6 logical keywords detected — maximum is 5/
   );
 });
 

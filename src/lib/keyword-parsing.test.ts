@@ -94,7 +94,7 @@ test("OBGYN-10. 'co-enzyme Q10' compound hyphen preserved intact", () => {
 });
 
 test("VAL-01. validateKeywords copy includes conjunction explanation", () => {
-  const parsed = parseClinicalKeywords("short cervix, progesterone, cerclage");
+  const parsed = parseClinicalKeywords("short cervix, progesterone");
   const msg = validateKeywords(parsed);
   assert.ok(msg);
   assert.match(msg, /Conjunctions such as “and” or “or” do not split a phrase/);
