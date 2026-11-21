@@ -34,7 +34,8 @@ export const KEYS = {
   screen: "cq_screen",
   choice: "cq_choice",
   explore: "cq_explore",
-  excluded: "cq_excluded"
+  excluded: "cq_excluded",
+  style: "cq_style"
 };
 
 export interface ExcludedState {

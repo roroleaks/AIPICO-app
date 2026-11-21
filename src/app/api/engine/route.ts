@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import type { AuditableRef } from "@/lib/relevance";
+import { designOf, type AuditableRef } from "@/lib/relevance";
 import { sanitizePhrase, HUMAN_SUBJECT_FILTER } from "@/lib/pubmed-query";
 import { generateDeterministicScreen, type ScreenPayload } from "@/lib/deterministic-screen";
-import { scoreRecords, parsePhraseElements } from "@/lib/explore-scoring";
+import { scoreRecords, parsePhraseElements, type ExploreRecord } from "@/lib/explore-scoring";
+import { composeManuscript, validateEnrichedManuscript } from "@/lib/manuscript-composer";
+import type { CitationStyle } from "@/lib/citation-formatter";
 import type { PicoWord } from "@/lib/pico-roles";
 import { isAllowedOrigin, corsHeaders } from "@/lib/security-headers";
 import { checkRateLimit } from "@/lib/rate-limiter";
@@ -790,7 +792,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   const stageSchema = z.object({
-    stage: z.enum(["screen", "explore"]),
+    stage: z.enum(["screen", "explore", "compose"]),
   });
 
   const baseResult = stageSchema.safeParse(body);
@@ -828,6 +830,31 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       seen: z.array(z.string()).optional()
     });
     const res = exploreZodSchema.safeParse(body);
+    if (!res.success) {
+      return NextResponse.json({ error: "Invalid parameters: " + res.error.issues.map(e => e.message).join(", ") }, { status: 422 });
+    }
+  } else if (stage === "compose") {
+    const composeZodSchema = z.object({
+      stage: z.literal("compose"),
+      words: z.array(
+        z.object({
+          word: z.string().trim().min(1).max(80),
+          role: z.enum(["population", "intervention", "comparator", "outcome"])
+        })
+      ).min(3).max(5),
+      category: z.enum(["established", "conflicting", "gap"]),
+      phrase: z.string().trim().min(1).max(240),
+      screeningStats: z.object({
+        retrieved: z.number().int().nonnegative(),
+        screened: z.number().int().nonnegative(),
+        relaxationLevel: z.number().int().min(0).max(2),
+        excludedCount: z.number().int().nonnegative()
+      }),
+      records: z.array(z.any()).max(50),
+      userExcluded: z.array(z.string()).optional(),
+      style: z.enum(["vancouver", "apa", "harvard"]).default("vancouver")
+    });
+    const res = composeZodSchema.safeParse(body);
     if (!res.success) {
       return NextResponse.json({ error: "Invalid parameters: " + res.error.issues.map(e => e.message).join(", ") }, { status: 422 });
     }
@@ -993,6 +1020,101 @@ HARD RULES:
 
       return NextResponse.json(payload, {
         headers: { "x-aipico-source": "deterministic" }
+      });
+    }
+
+    if (stage === "compose") {
+      const {
+        words,
+        category,
+        phrase,
+        screeningStats,
+        records = [],
+        userExcluded = [],
+        style = "vancouver"
+      } = body as {
+        words: PicoWord[];
+        category: "established" | "conflicting" | "gap";
+        phrase: string;
+        screeningStats: { retrieved: number; screened: number; relaxationLevel: number; excludedCount: number };
+        records: ExploreRecord[];
+        userExcluded?: string[];
+        style?: CitationStyle;
+      };
+
+      const deterministicManuscript = composeManuscript({
+        words,
+        category,
+        phrase,
+        screeningStats,
+        records,
+        userExcluded,
+        style
+      });
+
+      let finalManuscript = deterministicManuscript;
+
+      if (hasAnyLlmKey()) {
+        try {
+          const excludedSet = new Set((userExcluded || []).map(k => k.trim().toLowerCase()));
+          const retained = records.filter(r => {
+            const pmidKey = (r.pmid || "").trim().toLowerCase();
+            const doiKey = (r.doi || "").trim().toLowerCase();
+            const titleKey = (r.title || "").trim().toLowerCase();
+            return !excludedSet.has(pmidKey) && !excludedSet.has(doiKey) && !excludedSet.has(titleKey);
+          });
+
+          const prompt = `You are an expert scientific manuscript editor for academic peer-reviewed medicine.
+TASK: Improve the narrative prose flow, scholarly transition, and readability of the provided scientific manuscript.
+
+STRICT EDITORIAL RULES:
+1. Do NOT invent or fabricate any facts, findings, authors, years, journals, DOIs, numbers, or study sources.
+2. Keep the EXACT section headings in this order:
+   - "Background"
+   - "Search strategy and screening"
+   - "Evidence synthesis"
+   - "Limitations"
+   - "Conclusion"
+3. In-text citation markers must be preserved and must point ONLY to the provided retained records.
+4. Output zero hyperlinks, zero URLs, and zero "http" or "https" occurrences.
+5. Keep length within 0.5x to 1.75x of the input word count.
+6. Return valid JSON only with this schema:
+{
+  "title": "...",
+  "abstract": ["sentence 1", "sentence 2", "sentence 3", "sentence 4"],
+  "sections": [
+    { "heading": "Background", "paragraphs": ["..."] },
+    { "heading": "Search strategy and screening", "paragraphs": ["..."] },
+    { "heading": "Evidence synthesis", "paragraphs": ["..."] },
+    { "heading": "Limitations", "paragraphs": ["..."] },
+    { "heading": "Conclusion", "paragraphs": ["..."] }
+  ]
+}`;
+
+          const userPayload = {
+            manuscript: deterministicManuscript,
+            retainedRecords: retained.map((r, idx) => ({
+              index: idx + 1,
+              title: r.title,
+              authors: r.authors,
+              year: r.year,
+              journal: r.journal,
+              design: designOf(r.title, r.journal || "") || "Observational study"
+            }))
+          };
+
+          const rawLlm = await callLLM(prompt, userPayload, { stage: "compose", timeoutMs: 15_000 });
+          const validated = validateEnrichedManuscript(rawLlm, deterministicManuscript, retained, style);
+          if (validated) {
+            finalManuscript = validated;
+          }
+        } catch (llmErr) {
+          console.warn("[engine] LLM compose enrichment failed, using deterministic fallback:", llmErr);
+        }
+      }
+
+      return NextResponse.json(finalManuscript, {
+        headers: { "x-aipico-source": finalManuscript.aiEnriched ? "ai" : "deterministic" }
       });
     }
 

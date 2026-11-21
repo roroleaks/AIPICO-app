@@ -3,6 +3,7 @@ import type { ScreenPayload } from "./deterministic-screen";
 import type { ExploreRecord } from "./explore-scoring";
 import type { ExcludedState } from "./session";
 import type { WorkflowExportData } from "./docx-generator";
+import type { ManuscriptData } from "./manuscript-composer";
 import { designOf } from "./relevance.ts";
 
 export interface ExploreSnapshot {
@@ -39,7 +40,8 @@ export function buildSummaryPayload(
   choice: ChoiceState,
   screenSnapshot: ScreenPayload | null,
   exploreSnapshot: ExploreSnapshot | null,
-  excludedState: ExcludedState | null
+  excludedState: ExcludedState | null,
+  manuscript?: ManuscriptData | null
 ): WorkflowExportData {
   const records = exploreSnapshot?.records || [];
   const papers = records.map((r, idx) => ({
@@ -58,7 +60,7 @@ export function buildSummaryPayload(
   const relaxationLevel = screenSnapshot?.corpusStats?.relaxationLevel ?? 0;
   const excludedCount = excludedState?.userExcluded?.length ?? 0;
 
-  return {
+  const base: WorkflowExportData = {
     words: words.map(w => ({
       word: w.word,
       role: w.role
@@ -73,4 +75,15 @@ export function buildSummaryPayload(
     },
     papers
   };
+
+  if (manuscript) {
+    base.title = manuscript.title;
+    base.abstract = manuscript.abstract;
+    base.sections = manuscript.sections;
+    base.references = manuscript.references;
+    base.citationStyle = manuscript.citationStyle;
+    base.aiEnriched = manuscript.aiEnriched;
+  }
+
+  return base;
 }

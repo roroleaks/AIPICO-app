@@ -63,7 +63,16 @@ const workflowSchema = z.object({
   category: z.enum(["established", "conflicting", "gap"]),
   phrase: z.string().min(1).max(240),
   screeningStats: workflowScreeningStatsSchema,
-  papers: z.array(workflowPaperSchema).max(50)
+  papers: z.array(workflowPaperSchema).max(50),
+  title: z.string().max(240).optional(),
+  abstract: z.array(z.string()).max(8).optional(),
+  sections: z.array(z.object({
+    heading: z.string().max(120),
+    paragraphs: z.array(z.string()).min(1)
+  })).max(10).optional(),
+  references: z.array(z.string().max(2000)).max(50).optional(),
+  citationStyle: z.enum(["vancouver", "apa", "harvard"]).optional(),
+  aiEnriched: z.boolean().optional()
 });
 
 const pdfPayloadSchema = z.object({

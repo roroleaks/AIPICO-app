@@ -60,6 +60,12 @@ export interface WorkflowExportData {
   phrase: string;
   screeningStats: WorkflowScreeningStats;
   papers: WorkflowPaper[];
+  title?: string;
+  abstract?: string[];
+  sections?: Array<{ heading: string; paragraphs: string[] }>;
+  references?: string[];
+  citationStyle?: "vancouver" | "apa" | "harvard";
+  aiEnriched?: boolean;
 }
 
 export interface DocxPayload {
@@ -782,7 +788,125 @@ export async function buildWorkflowDocx(workflow: WorkflowExportData): Promise<B
     })
   );
 
-  // 1. Clinical words (PICO) section
+  // If manuscript sections are present, render manuscript narrative structure
+  if (workflow.sections && workflow.sections.length > 0) {
+    // Abstract Section
+    if (workflow.abstract && workflow.abstract.length > 0) {
+      docChildren.push(
+        new Paragraph({
+          spacing: { before: 280, after: 120 },
+          children: [
+            new TextRun({
+              text: "Abstract",
+              font: "Arial",
+              size: 26,
+              bold: true,
+              color: "0F766E"
+            })
+          ]
+        })
+      );
+      for (const absSent of workflow.abstract) {
+        docChildren.push(
+          new Paragraph({
+            spacing: { after: 100 },
+            children: [
+              new TextRun({
+                text: absSent,
+                font: "Arial",
+                size: 20,
+                color: "334155"
+              })
+            ]
+          })
+        );
+      }
+    }
+
+    // Manuscript Sections (Background, Search strategy and screening, Evidence synthesis, Limitations, Conclusion)
+    for (const sec of workflow.sections) {
+      docChildren.push(
+        new Paragraph({
+          spacing: { before: 280, after: 120 },
+          children: [
+            new TextRun({
+              text: sec.heading,
+              font: "Arial",
+              size: 26,
+              bold: true,
+              color: "0F766E"
+            })
+          ]
+        })
+      );
+      for (const p of sec.paragraphs) {
+        docChildren.push(
+          new Paragraph({
+            spacing: { after: 160 },
+            children: [
+              new TextRun({
+                text: p,
+                font: "Arial",
+                size: 20,
+                color: "334155"
+              })
+            ]
+          })
+        );
+      }
+    }
+
+    // References Section
+    const styleLabel = (workflow.citationStyle || "vancouver").toUpperCase();
+    docChildren.push(
+      new Paragraph({
+        spacing: { before: 320, after: 140 },
+        children: [
+          new TextRun({
+            text: `References (${styleLabel})`,
+            font: "Arial",
+            size: 26,
+            bold: true,
+            color: "0F766E"
+          })
+        ]
+      })
+    );
+
+    if (workflow.references && workflow.references.length > 0) {
+      for (const refLine of workflow.references) {
+        docChildren.push(
+          new Paragraph({
+            spacing: { after: 120 },
+            children: [
+              new TextRun({
+                text: refLine,
+                font: "Arial",
+                size: 18,
+                color: "1E293B"
+              })
+            ]
+          })
+        );
+      }
+    } else {
+      docChildren.push(
+        new Paragraph({
+          spacing: { after: 120 },
+          children: [
+            new TextRun({
+              text: "No references retained for synthesis.",
+              font: "Arial",
+              size: 18,
+              italics: true,
+              color: "64748B"
+            })
+          ]
+        })
+      );
+    }
+  } else {
+    // 1. Clinical words (PICO) section
   docChildren.push(
     new Paragraph({
       spacing: { before: 280, after: 120 },
@@ -1127,6 +1251,7 @@ export async function buildWorkflowDocx(workflow: WorkflowExportData): Promise<B
       ]
     })
   );
+  }
 
   const doc = new Document({
     sections: [

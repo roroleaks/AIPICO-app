@@ -443,7 +443,69 @@ export async function buildWorkflowPdf(workflow: WorkflowExportData): Promise<Bu
   );
   doc.y = discTop + 46;
 
-  // Section 1: Clinical Words (PICO)
+  if (workflow.sections && workflow.sections.length > 0) {
+    // Abstract Section
+    if (workflow.abstract && workflow.abstract.length > 0) {
+      reserveSpace(36);
+      doc.font(FONT_B).fontSize(12).fillColor(teal).text("Abstract");
+      doc.moveDown(0.12);
+      doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).strokeColor(teal).lineWidth(1.2).stroke();
+      doc.moveDown(0.35);
+      doc.font(FONT).fontSize(9.5).fillColor(ink);
+      for (const absSent of workflow.abstract) {
+        reserveSpace(24);
+        doc.text(absSent, doc.page.margins.left, doc.y, {
+          width: doc.page.width - doc.page.margins.left - doc.page.margins.right,
+          lineGap: 2
+        });
+        doc.moveDown(0.25);
+      }
+      doc.moveDown(0.3);
+    }
+
+    // Manuscript Sections
+    const contentW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    for (const sec of workflow.sections) {
+      reserveSpace(36);
+      doc.font(FONT_B).fontSize(12).fillColor(teal).text(sec.heading);
+      doc.moveDown(0.12);
+      doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).strokeColor(teal).lineWidth(1.2).stroke();
+      doc.moveDown(0.35);
+      doc.font(FONT).fontSize(9.5).fillColor(ink);
+      for (const p of sec.paragraphs) {
+        reserveSpace(28);
+        doc.text(p, doc.page.margins.left, doc.y, {
+          width: contentW,
+          lineGap: 2.5
+        });
+        doc.moveDown(0.35);
+      }
+      doc.moveDown(0.2);
+    }
+
+    // References Section
+    const styleLabel = (workflow.citationStyle || "vancouver").toUpperCase();
+    reserveSpace(36);
+    doc.font(FONT_B).fontSize(12).fillColor(teal).text(`References (${styleLabel})`);
+    doc.moveDown(0.12);
+    doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).strokeColor(teal).lineWidth(1.2).stroke();
+    doc.moveDown(0.35);
+    doc.font(FONT).fontSize(8.5).fillColor(ink);
+
+    if (workflow.references && workflow.references.length > 0) {
+      for (const refLine of workflow.references) {
+        reserveSpace(28);
+        doc.text(refLine, doc.page.margins.left, doc.y, {
+          width: contentW,
+          lineGap: 2
+        });
+        doc.moveDown(0.3);
+      }
+    } else {
+      doc.font(FONT_O).fontSize(8.5).fillColor(muted).text("No references retained for synthesis.");
+    }
+  } else {
+    // Section 1: Clinical Words (PICO)
   reserveSpace(36);
   doc.font(FONT_B).fontSize(12.5).fillColor(teal).text("Clinical words (PICO)");
   doc.moveDown(0.12);
@@ -558,6 +620,7 @@ export async function buildWorkflowPdf(workflow: WorkflowExportData): Promise<Bu
     doc.y,
     { width: contentW }
   );
+  }
 
   // Running header and footer pass with margin suspension
   const range = doc.bufferedPageRange();

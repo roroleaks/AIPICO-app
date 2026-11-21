@@ -5,6 +5,8 @@ import JSZip from "jszip";
 import { z } from "zod";
 import { buildWorkflowPdf } from "./pdf-generator.ts";
 import { buildWorkflowDocx, type WorkflowExportData } from "./docx-generator.ts";
+import { composeManuscript } from "./manuscript-composer.ts";
+import type { ExploreRecord } from "./explore-scoring.ts";
 
 const workflowWordSchema = z.object({
   word: z.string().min(1).max(80),
@@ -34,7 +36,16 @@ const workflowSchema = z.object({
   category: z.enum(["established", "conflicting", "gap"]),
   phrase: z.string().min(1).max(240),
   screeningStats: workflowScreeningStatsSchema,
-  papers: z.array(workflowPaperSchema).max(50)
+  papers: z.array(workflowPaperSchema).max(50),
+  title: z.string().max(240).optional(),
+  abstract: z.array(z.string()).max(8).optional(),
+  sections: z.array(z.object({
+    heading: z.string().max(120),
+    paragraphs: z.array(z.string()).min(1)
+  })).max(10).optional(),
+  references: z.array(z.string().max(2000)).max(50).optional(),
+  citationStyle: z.enum(["vancouver", "apa", "harvard"]).optional(),
+  aiEnriched: z.boolean().optional()
 });
 
 const sampleWorkflow: WorkflowExportData = {
@@ -199,4 +210,170 @@ test("WF3. workflowSchema validates valid payload and rejects out-of-bounds perc
   };
   const manyRes = workflowSchema.safeParse(manyWords);
   assert.equal(manyRes.success, false, "More than 5 words must be rejected");
+});
+
+const sampleExploreRecords: ExploreRecord[] = [
+  {
+    title: "Growth hormone co-treatment in poor ovarian responders undergoing IVF: a meta-analysis",
+    authors: "Smith J, Doe A",
+    journal: "Hum Reprod",
+    year: "2023",
+    relevancePct: 95,
+    matchedElements: ["P", "I", "C", "O"],
+    pmid: "31000001",
+    doi: "10.1093/humrep/dead012"
+  },
+  {
+    title: "Clinical pregnancy outcomes with adjuvant growth hormone therapy",
+    authors: "Lee K, Chen M",
+    journal: "Fertil Steril",
+    year: "2022",
+    relevancePct: 78,
+    matchedElements: ["P", "I", "O"],
+    pmid: "31000002",
+    doi: "10.1016/j.fertnstert.2022.01.005"
+  }
+];
+
+test("WF4. Manuscript PDF export in Vancouver, APA, and Harvard with zero http occurrences", async () => {
+  for (const style of ["vancouver", "apa", "harvard"] as const) {
+    const manuscript = composeManuscript({
+      words: sampleWorkflow.words,
+      category: sampleWorkflow.category,
+      phrase: sampleWorkflow.phrase,
+      screeningStats: sampleWorkflow.screeningStats,
+      records: sampleExploreRecords,
+      style
+    });
+
+    const exportData: WorkflowExportData = {
+      ...sampleWorkflow,
+      title: manuscript.title,
+      abstract: manuscript.abstract,
+      sections: manuscript.sections,
+      references: manuscript.references,
+      citationStyle: style,
+      aiEnriched: false
+    };
+
+    const pdfBuffer = await buildWorkflowPdf(exportData);
+    assert.ok(pdfBuffer.length > 10_000, `PDF buffer in ${style} must exceed 10 KB, got ${pdfBuffer.length}`);
+    const sig = pdfBuffer.subarray(0, 4).toString("utf8");
+    assert.equal(sig, "%PDF", "PDF signature must start with %PDF");
+
+    const parsed = await extractText(new Uint8Array(pdfBuffer));
+    const fullText = parsed.text.join(" ").replace(/\s+/g, " ");
+
+    assert.ok(fullText.includes(sampleWorkflow.phrase), `PDF must include the phrase for ${style}`);
+    assert.ok(!fullText.includes("http:"), `PDF in ${style} must contain zero http: occurrences`);
+    assert.ok(!fullText.includes("https:"), `PDF in ${style} must contain zero https: occurrences`);
+
+    if (style === "vancouver") {
+      assert.ok(fullText.includes("[1]"), "Vancouver PDF must contain numeric citation [1]");
+      assert.ok(fullText.includes("1. Smith J, Doe A."), "Vancouver PDF must contain formatted reference");
+    } else if (style === "apa") {
+      assert.ok(fullText.includes("Smith & Doe, 2023"), "APA PDF must contain author-year citation");
+      assert.ok(fullText.includes("Smith, J., & Doe, A. (2023)."), "APA PDF must contain APA formatted reference");
+    } else if (style === "harvard") {
+      assert.ok(fullText.includes("Smith and Doe 2023"), "Harvard PDF must contain author-year citation");
+      assert.ok(fullText.includes("Smith, J and Doe, A, 2023."), "Harvard PDF must contain Harvard formatted reference");
+    }
+  }
+});
+
+test("WF5. Manuscript DOCX export in Vancouver, APA, and Harvard with zero http occurrences", async () => {
+  for (const style of ["vancouver", "apa", "harvard"] as const) {
+    const manuscript = composeManuscript({
+      words: sampleWorkflow.words,
+      category: sampleWorkflow.category,
+      phrase: sampleWorkflow.phrase,
+      screeningStats: sampleWorkflow.screeningStats,
+      records: sampleExploreRecords,
+      style
+    });
+
+    const exportData: WorkflowExportData = {
+      ...sampleWorkflow,
+      title: manuscript.title,
+      abstract: manuscript.abstract,
+      sections: manuscript.sections,
+      references: manuscript.references,
+      citationStyle: style,
+      aiEnriched: false
+    };
+
+    const docxBuffer = await buildWorkflowDocx(exportData);
+    assert.ok(docxBuffer.length > 10_000, `DOCX buffer in ${style} must exceed 10 KB, got ${docxBuffer.length}`);
+
+    const zip = await JSZip.loadAsync(docxBuffer);
+    const docXml = await zip.file("word/document.xml")?.async("text");
+    assert.ok(docXml, `DOCX must contain word/document.xml for ${style}`);
+
+    // Extract document prose from <w:t> tags
+    const textMatches = (docXml || "").match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
+    const extractedContent = textMatches.map(m => m.replace(/<[^>]+>/g, "")).join(" ").replace(/&amp;/g, "&");
+
+    assert.ok(extractedContent.includes(sampleWorkflow.phrase), `DOCX must include the phrase for ${style}`);
+    assert.ok(!extractedContent.includes("http:"), `DOCX content in ${style} must contain zero http: occurrences`);
+    assert.ok(!extractedContent.includes("https:"), `DOCX content in ${style} must contain zero https: occurrences`);
+
+    if (style === "vancouver") {
+      assert.ok(extractedContent.includes("[1]"), "Vancouver DOCX must contain numeric citation [1]");
+      assert.ok(extractedContent.includes("1. Smith J, Doe A."), "Vancouver DOCX must contain formatted reference");
+    } else if (style === "apa") {
+      assert.ok(extractedContent.includes("Smith & Doe, 2023"), "APA DOCX must contain author-year citation");
+      assert.ok(extractedContent.includes("Smith, J., & Doe, A. (2023)."), "APA DOCX must contain APA formatted reference");
+    } else if (style === "harvard") {
+      assert.ok(extractedContent.includes("Smith and Doe 2023"), "Harvard DOCX must contain author-year citation");
+      assert.ok(extractedContent.includes("Smith, J and Doe, A, 2023."), "Harvard DOCX must contain Harvard formatted reference");
+    }
+  }
+});
+
+test("WF6. Additive workflowSchema bounds validation", () => {
+  const manuscript = composeManuscript({
+    words: sampleWorkflow.words,
+    category: sampleWorkflow.category,
+    phrase: sampleWorkflow.phrase,
+    screeningStats: sampleWorkflow.screeningStats,
+    records: sampleExploreRecords,
+    style: "vancouver"
+  });
+
+  const fullData = {
+    ...sampleWorkflow,
+    title: manuscript.title,
+    abstract: manuscript.abstract,
+    sections: manuscript.sections,
+    references: manuscript.references,
+    citationStyle: "vancouver" as const,
+    aiEnriched: false
+  };
+
+  const validRes = workflowSchema.safeParse(fullData);
+  assert.ok(validRes.success, "Full manuscript export data must pass workflowSchema validation");
+
+  // Reject more than 10 sections
+  const excessiveSections = {
+    ...fullData,
+    sections: Array(11).fill({ heading: "H", paragraphs: ["P"] })
+  };
+  const secRes = workflowSchema.safeParse(excessiveSections);
+  assert.equal(secRes.success, false, "More than 10 sections must be rejected");
+
+  // Reject more than 50 references
+  const excessiveRefs = {
+    ...fullData,
+    references: Array(51).fill("1. Ref text")
+  };
+  const refRes = workflowSchema.safeParse(excessiveRefs);
+  assert.equal(refRes.success, false, "More than 50 references must be rejected");
+
+  // Reject more than 8 abstract sentences
+  const excessiveAbstract = {
+    ...fullData,
+    abstract: Array(9).fill("Abstract sentence.")
+  };
+  const absRes = workflowSchema.safeParse(excessiveAbstract);
+  assert.equal(absRes.success, false, "More than 8 abstract sentences must be rejected");
 });

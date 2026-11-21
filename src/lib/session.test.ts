@@ -11,6 +11,7 @@ test("SES-1. KEYS catalog contains active session keys and omits retired keys", 
   assert.equal(KEYS.choice, "cq_choice");
   assert.equal(KEYS.explore, "cq_explore");
   assert.equal(KEYS.excluded, "cq_excluded");
+  assert.equal(KEYS.style, "cq_style");
 
   // Legacy keys must be absent from KEYS
   const keysObj = KEYS as Record<string, string | undefined>;
