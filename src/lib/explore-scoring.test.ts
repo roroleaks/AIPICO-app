@@ -146,3 +146,39 @@ test("EXP-7. refCanonicalKeys derives pmid, doi, and title keys", () => {
   assert.ok(keys.includes("d:10.1000/182"));
   assert.ok(keys.some(k => k.startsWith("t:")));
 });
+
+test("EXP-8. Evidence hierarchy sorting puts SR/MA above RCT above cohort", () => {
+  const phrase = "In IVF (P), does AI (I) compared with morphology (C) affect clinical pregnancy (O)?";
+  const records: AuditableRef[] = [
+    { pmid: "1", title: "Cohort study of AI in IVF", year: "2024", evidenceType: "cohort" },
+    { pmid: "2", title: "Meta-analysis of AI in IVF", year: "2024", evidenceType: "meta_analysis" },
+    { pmid: "3", title: "Randomised trial of AI in IVF", year: "2024", evidenceType: "rct" }
+  ];
+
+  const res = scoreRecords(records, phrase, "established", []);
+  assert.equal(res.scored[0].evidenceType, "meta_analysis");
+  assert.equal(res.scored[1].evidenceType, "rct");
+  assert.equal(res.scored[2].evidenceType, "cohort");
+});
+
+test("EXP-9. PICO chips distinguish abstract match from title-only and absent", () => {
+  const phrase = "In poor responders (P), does growth hormone (I) compared with placebo (C) affect live birth rate (O)?";
+  const ref: AuditableRef = {
+    title: "Growth hormone for poor responders in assisted reproduction",
+    context: "In this randomized trial compared with placebo, live birth rate was significantly higher.",
+    year: "2024",
+    evidenceType: "rct"
+  };
+
+  const res = scoreRecords([ref], phrase, "established", []);
+  const scored = res.scored[0];
+  assert.ok(scored.picoMatches);
+  // P is in title ("poor responders")
+  assert.equal(scored.picoMatches.P.status, "title");
+  // I is in title ("Growth hormone")
+  assert.equal(scored.picoMatches.I.status, "title");
+  // C is in abstract ("placebo")
+  assert.equal(scored.picoMatches.C.status, "abstract");
+  // O is in abstract ("live birth rate")
+  assert.equal(scored.picoMatches.O.status, "abstract");
+});

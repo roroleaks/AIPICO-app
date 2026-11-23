@@ -377,127 +377,243 @@ export default function ExplorePage() {
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {records.map((r, i) => {
-                const elementsMatchedText = (r.matchedElements || [])
-                  .map(code => ELEMENT_LABELS[code] || code)
-                  .join(", ");
-                const matchSummary = elementsMatchedText ? `Matches: ${elementsMatchedText}` : "Broad clinical context match";
+              {/* Clinical / Efficacy Records */}
+              {records
+                .filter(r => r.evidenceRole !== "technical_performance")
+                .map((r, i) => {
+                  const elementsMatchedText = (r.matchedElements || [])
+                    .map(code => ELEMENT_LABELS[code] || code)
+                    .join(", ");
+                  const matchSummary = elementsMatchedText ? `Matches: ${elementsMatchedText}` : "Broad clinical context match";
 
-                return (
-                  <div
-                    key={r.pmid || r.doi || `r-${i}`}
-                    style={{
-                      border: "1px solid #e2e8f0",
-                      borderRadius: 8,
-                      padding: "16px 18px",
-                      background: "#ffffff",
-                      position: "relative",
-                      boxShadow: "0 1px 3px rgba(0,0,0,0.04)"
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8, gap: 10 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                        <span
-                          className="pill"
+                  return (
+                    <div
+                      key={r.pmid || r.doi || `r-clin-${i}`}
+                      style={{
+                        border: "1px solid #e2e8f0",
+                        borderRadius: 8,
+                        padding: "16px 18px",
+                        background: "#ffffff",
+                        position: "relative",
+                        boxShadow: "0 1px 3px rgba(0,0,0,0.04)"
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8, gap: 10 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          {/* Four P/I/C/O Chips (D-18) */}
+                          <div style={{ display: "inline-flex", gap: 4, alignItems: "center" }} aria-label="PICO element match status">
+                            {(["P", "I", "C", "O"] as const).map(role => {
+                              const detail = r.picoMatches?.[role] || {
+                                status: (r.matchedElements || []).includes(role) ? "abstract" : "absent",
+                                terms: []
+                              };
+                              const isAbstract = detail.status === "abstract";
+                              const isTitle = detail.status === "title";
+
+                              const tooltip = isAbstract
+                                ? `${role} (${ELEMENT_LABELS[role]}): Matched in abstract${detail.terms.length > 0 ? ` (${detail.terms.join(", ")})` : ""}`
+                                : isTitle
+                                ? `${role} (${ELEMENT_LABELS[role]}): Matched in title only${detail.terms.length > 0 ? ` (${detail.terms.join(", ")})` : ""}`
+                                : `${role} (${ELEMENT_LABELS[role]}): Not detected in title or abstract`;
+
+                              return (
+                                <span
+                                  key={role}
+                                  title={tooltip}
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    width: 26,
+                                    height: 24,
+                                    borderRadius: 4,
+                                    fontSize: "0.78rem",
+                                    fontWeight: 700,
+                                    cursor: "help",
+                                    backgroundColor: isAbstract ? "#0f766e" : isTitle ? "#ffffff" : "#f1f5f9",
+                                    color: isAbstract ? "#ffffff" : isTitle ? "#0f766e" : "#94a3b8",
+                                    border: isTitle ? "1.5px solid #0f766e" : isAbstract ? "1.5px solid #0f766e" : "1.5px solid #e2e8f0"
+                                  }}
+                                >
+                                  {role}
+                                </span>
+                              );
+                            })}
+                          </div>
+                          {r.year && (
+                            <span className="pill" style={{ background: "#f1f5f9", color: "#475569", fontSize: "0.82rem" }}>
+                              {r.year}
+                            </span>
+                          )}
+                          {r.source && (
+                            <span className="pill" style={{ background: "#f8fafc", color: "#64748b", fontSize: "0.78rem" }}>
+                              {r.source}
+                            </span>
+                          )}
+                          {r.evidenceType === "preprint" && (
+                            <span className="pill" style={{ background: "#fef3c7", color: "#92400e", fontSize: "0.78rem", fontWeight: 600 }}>
+                              [preprint — not peer reviewed]
+                            </span>
+                          )}
+                          {r.evidenceType === "trial_registration" && (
+                            <span className="pill" style={{ background: "#e0e7ff", color: "#3730a3", fontSize: "0.78rem", fontWeight: 600 }}>
+                              [trial registration — no results]
+                            </span>
+                          )}
+                          {r.evidenceType === "book_chapter" && (
+                            <span className="pill" style={{ background: "#f1f5f9", color: "#475569", fontSize: "0.78rem", fontWeight: 600 }}>
+                              [book chapter]
+                            </span>
+                          )}
+                          {r.evidenceType === "thesis" && (
+                            <span className="pill" style={{ background: "#f1f5f9", color: "#475569", fontSize: "0.78rem", fontWeight: 600 }}>
+                              [thesis]
+                            </span>
+                          )}
+                          {r.evidenceType && !["preprint", "trial_registration", "book_chapter", "thesis", "unclassified"].includes(r.evidenceType) && (
+                            <span className="pill" style={{ background: "#ecfdf5", color: "#065f46", fontSize: "0.78rem", fontWeight: 600 }}>
+                              {r.evidenceType.replace(/_/g, " ")}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Exclude button */}
+                        <button
+                          type="button"
+                          onClick={() => handleExcludeCard(r)}
+                          aria-label={`Exclude paper: ${r.title}`}
                           style={{
-                            background: r.relevancePct >= 70 ? "#ecfdf5" : r.relevancePct >= 40 ? "#eff6ff" : "#f8fafc",
-                            color: r.relevancePct >= 70 ? "#065f46" : r.relevancePct >= 40 ? "#1e40af" : "#475569",
-                            fontWeight: 700,
-                            fontSize: "0.92rem",
-                            padding: "4px 10px"
+                            background: "transparent",
+                            border: "1px solid #cbd5e1",
+                            borderRadius: "50%",
+                            width: "28px",
+                            height: "28px",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            cursor: "pointer",
+                            color: "#64748b",
+                            fontSize: "1rem",
+                            lineHeight: 1,
+                            padding: 0
                           }}
+                          title="Exclude paper from exploration"
                         >
-                          {r.relevancePct}% related
-                        </span>
-                        {r.year && (
-                          <span className="pill" style={{ background: "#f1f5f9", color: "#475569", fontSize: "0.82rem" }}>
-                            {r.year}
-                          </span>
-                        )}
-                        {r.source && (
-                          <span className="pill" style={{ background: "#f8fafc", color: "#64748b", fontSize: "0.78rem" }}>
-                            {r.source}
-                          </span>
-                        )}
-                        {r.evidenceType === "preprint" && (
-                          <span className="pill" style={{ background: "#fef3c7", color: "#92400e", fontSize: "0.78rem", fontWeight: 600 }}>
-                            [preprint — not peer reviewed]
-                          </span>
-                        )}
-                        {r.evidenceType === "trial_registration" && (
-                          <span className="pill" style={{ background: "#e0e7ff", color: "#3730a3", fontSize: "0.78rem", fontWeight: 600 }}>
-                            [trial registration — no results]
-                          </span>
-                        )}
-                        {r.evidenceType === "book_chapter" && (
-                          <span className="pill" style={{ background: "#f1f5f9", color: "#475569", fontSize: "0.78rem", fontWeight: 600 }}>
-                            [book chapter]
-                          </span>
-                        )}
-                        {r.evidenceType === "thesis" && (
-                          <span className="pill" style={{ background: "#f1f5f9", color: "#475569", fontSize: "0.78rem", fontWeight: 600 }}>
-                            [thesis]
-                          </span>
-                        )}
-                        {r.evidenceType && !["preprint", "trial_registration", "book_chapter", "thesis", "unclassified"].includes(r.evidenceType) && (
-                          <span className="pill" style={{ background: "#ecfdf5", color: "#065f46", fontSize: "0.78rem", fontWeight: 600 }}>
-                            {r.evidenceType.replace(/_/g, " ")}
-                          </span>
-                        )}
+                          ×
+                        </button>
                       </div>
 
-                      {/* Exclude button */}
-                      <button
-                        type="button"
-                        onClick={() => handleExcludeCard(r)}
-                        aria-label={`Exclude paper: ${r.title}`}
-                        style={{
-                          background: "transparent",
-                          border: "1px solid #cbd5e1",
-                          borderRadius: "50%",
-                          width: "28px",
-                          height: "28px",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          cursor: "pointer",
-                          color: "#64748b",
-                          fontSize: "1rem",
-                          lineHeight: 1,
-                          padding: 0
-                        }}
-                        title="Exclude paper from exploration"
-                      >
-                        ×
-                      </button>
-                    </div>
+                      {/* Paper Title */}
+                      <h3 style={{ fontSize: "1.05rem", fontWeight: 700, margin: "6px 0 8px 0", color: "#0f172a", lineHeight: 1.4 }}>
+                        {r.title}
+                      </h3>
 
-                    {/* Paper Title (strictly without hyperlinks) */}
-                    <h3 style={{ fontSize: "1.05rem", fontWeight: 700, margin: "6px 0 8px 0", color: "#0f172a", lineHeight: 1.4 }}>
-                      {r.title}
-                    </h3>
-
-                    {/* Authors and Journal */}
-                    <p style={{ margin: "0 0 8px 0", fontSize: "0.86rem", color: "#475569", lineHeight: 1.4 }}>
-                      {r.authors ? `${r.authors}. ` : ""}
-                      {r.journal ? <em>{r.journal}</em> : ""}
-                      {r.pmid ? ` (PMID: ${r.pmid})` : r.doi ? ` (DOI: ${r.doi})` : ""}
-                    </p>
-
-                    {/* Abstract snippet */}
-                    {r.context && (
-                      <p style={{ margin: "0 0 8px 0", fontSize: "0.84rem", color: "#64748b", lineHeight: 1.45 }}>
-                        {r.context.slice(0, 240)}{r.context.length > 240 ? "…" : ""}
+                      {/* Authors and Journal */}
+                      <p style={{ margin: "0 0 8px 0", fontSize: "0.86rem", color: "#475569", lineHeight: 1.4 }}>
+                        {r.authors ? `${r.authors}. ` : ""}
+                        {r.journal ? <em>{r.journal}</em> : ""}
+                        {r.pmid ? ` (PMID: ${r.pmid})` : r.doi ? ` (DOI: ${r.doi})` : ""}
                       </p>
-                    )}
 
-                    {/* Matched Elements basis */}
-                    <div style={{ fontSize: "0.82rem", color: "#0d9488", fontWeight: 600 }}>
-                      ✓ {matchSummary}
+                      {/* Abstract snippet */}
+                      {r.context && (
+                        <p style={{ margin: "0 0 8px 0", fontSize: "0.84rem", color: "#64748b", lineHeight: 1.45 }}>
+                          {r.context.slice(0, 240)}{r.context.length > 240 ? "…" : ""}
+                        </p>
+                      )}
+
+                      {/* Matched Elements basis */}
+                      <div style={{ fontSize: "0.82rem", color: "#0d9488", fontWeight: 600 }}>
+                        {matchSummary}
+                      </div>
                     </div>
+                  );
+                })}
+
+              {/* Technical Performance Evidence Section (D-02 / D-18) */}
+              {records.some(r => r.evidenceRole === "technical_performance") && (
+                <div style={{ marginTop: 24, borderTop: "2px dashed #cbd5e1", paddingTop: 16 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontWeight: 700, fontSize: "1rem", color: "#1e293b" }}>
+                      ⚙️ Technical Performance Evidence ({records.filter(r => r.evidenceRole === "technical_performance").length})
+                    </span>
+                    <span className="pill" style={{ background: "#fef3c7", color: "#92400e", fontSize: "0.75rem", fontWeight: 600 }}>
+                      AUC / Model Accuracy — Not Patient Clinical Outcomes
+                    </span>
                   </div>
-                );
-              })}
+                  <p style={{ fontSize: "0.84rem", color: "#64748b", margin: "0 0 14px 0" }}>
+                    These records evaluate prediction metrics (e.g. AUC, accuracy, sensitivity) rather than clinical patient efficacy endpoints. They are separated from primary outcome synthesis.
+                  </p>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                    {records
+                      .filter(r => r.evidenceRole === "technical_performance")
+                      .map((r, i) => {
+                        return (
+                          <div
+                            key={r.pmid || r.doi || `r-tech-${i}`}
+                            style={{
+                              border: "1px solid #e2e8f0",
+                              borderRadius: 8,
+                              padding: "14px 16px",
+                              background: "#f8fafc",
+                              position: "relative"
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6, gap: 10 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <span className="pill" style={{ background: "#fef3c7", color: "#92400e", fontSize: "0.78rem", fontWeight: 600 }}>
+                                  [technical performance]
+                                </span>
+                                {r.year && (
+                                  <span className="pill" style={{ background: "#ffffff", color: "#475569", fontSize: "0.82rem" }}>
+                                    {r.year}
+                                  </span>
+                                )}
+                                {r.evidenceType && (
+                                  <span className="pill" style={{ background: "#ffffff", color: "#475569", fontSize: "0.78rem" }}>
+                                    {r.evidenceType.replace(/_/g, " ")}
+                                  </span>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleExcludeCard(r)}
+                                aria-label={`Exclude paper: ${r.title}`}
+                                style={{
+                                  background: "transparent",
+                                  border: "1px solid #cbd5e1",
+                                  borderRadius: "50%",
+                                  width: "28px",
+                                  height: "28px",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  cursor: "pointer",
+                                  color: "#64748b",
+                                  fontSize: "1rem",
+                                  lineHeight: 1,
+                                  padding: 0
+                                }}
+                                title="Exclude paper from exploration"
+                              >
+                                ×
+                              </button>
+                            </div>
+                            <h4 style={{ fontSize: "0.98rem", fontWeight: 700, margin: "4px 0 6px 0", color: "#0f172a" }}>
+                              {r.title}
+                            </h4>
+                            {r.context && (
+                              <p style={{ margin: 0, fontSize: "0.82rem", color: "#64748b" }}>
+                                {r.context.slice(0, 200)}{r.context.length > 200 ? "…" : ""}
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="row" style={{ marginTop: 20, justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>

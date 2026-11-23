@@ -1,18 +1,36 @@
 /**
- * Deterministic scoring module for AIPICO v4 Step 3 (Evidence Explorer).
+ * Deterministic scoring module for AIPICO v5 Step 3 (Evidence Explorer).
  * Computes per-record percentage relevance to a selected PICO phrase,
- * applies category-specific evidence bonuses (capped at +10),
- * filters blocked/seen records, and sorts deterministically.
+ * extracts per-element (P, I, C, O) match status (abstract vs title vs absent),
+ * removes the +15 metadata/design bonus from percentage (D-18),
+ * filters blocked/seen records, and sorts by evidenceType rank > concept coverage > year.
  * Pure, synchronous, zero AI/network calls.
  */
 
-import { auditRef, designOf } from "./relevance.ts";
-import type { AuditableRef, PicoElement } from "./relevance.ts";
+import { auditRef, designOf, sigTokens, synonymize } from "./relevance.ts";
+import type { AuditableRef, PicoElement, EvidenceType } from "./relevance.ts";
 import { extractPicoFromQuestion } from "./pico-parser.ts";
+import { extractRecordClaim } from "./claim-extraction.ts";
+
+export type MatchStatus = "abstract" | "title" | "absent";
+
+export interface ElementMatchDetail {
+  status: MatchStatus;
+  terms: string[];
+}
+
+export interface PicoMatchDetails {
+  P: ElementMatchDetail;
+  I: ElementMatchDetail;
+  C: ElementMatchDetail;
+  O: ElementMatchDetail;
+}
 
 export interface ExploreRecord extends AuditableRef {
   relevancePct: number;
   matchedElements: string[];
+  picoMatches?: PicoMatchDetails;
+  evidenceRole?: "clinical_efficacy" | "technical_performance";
 }
 
 export interface ScoreRecordsResult {
@@ -24,6 +42,42 @@ const ESTABLISHED_BONUS_WORDS = /\b(reduces|improves|first-line|recommended)\b/i
 const CONFLICTING_BONUS_WORDS = /\b(no significant difference|heterogeneous|inconsistent|controversial|conflicting)\b/i;
 const CONFLICTING_SMALL_SAMPLE = /\b(case series|case report|pilot study|small sample|preliminary report)\b/i;
 const GAP_BONUS_WORDS = /\b(limited data|further research|scarcity|unresolved|need for well-designed)\b/i;
+
+/**
+ * Ranks evidence types according to the hierarchy of evidence (D-18).
+ * SR/MA > RCT > cohort > case-control > observational > narrative review > preprint > trial registration > book chapter / thesis > unclassified.
+ */
+export function getEvidenceTypeRank(evidenceType?: EvidenceType): number {
+  switch (evidenceType) {
+    case "meta_analysis":
+      return 10;
+    case "systematic_review":
+      return 9;
+    case "rct":
+      return 8;
+    case "cohort":
+      return 7;
+    case "case_control":
+      return 6;
+    case "cross_sectional":
+    case "case_series":
+      return 5;
+    case "guideline":
+    case "narrative_review":
+      return 4;
+    case "preprint":
+      return 3;
+    case "trial_registration":
+      return 2;
+    case "book_chapter":
+    case "thesis":
+    case "editorial_commentary":
+      return 1;
+    case "unclassified":
+    default:
+      return 0;
+  }
+}
 
 /**
  * Derives canonical identifier keys for an auditable reference.
@@ -69,8 +123,64 @@ export function parsePhraseElements(phrase: string): PicoElement[] {
 }
 
 /**
+ * Checks whether an element's concept matches in title vs abstract vs absent.
+ */
+function checkElementMatch(
+  element: PicoElement | undefined,
+  title: string,
+  abstractText: string
+): ElementMatchDetail {
+  if (!element || !element.value || element.value.replace(/[^a-zA-Z]/g, "").length < 2) {
+    return { status: "absent", terms: [] };
+  }
+
+  const toks = sigTokens(element.value);
+  if (toks.length === 0) {
+    return { status: "absent", terms: [] };
+  }
+
+  const normTitle = synonymize(title || "").toLowerCase();
+  const normAbstract = synonymize(abstractText || "").toLowerCase();
+
+  const titleHits = toks.filter(t => normTitle.includes(t.toLowerCase()));
+  const abstractHits = toks.filter(t => normAbstract.includes(t.toLowerCase()));
+
+  const minHits = toks.length === 1 ? 1 : 2;
+
+  if (abstractHits.length >= minHits) {
+    return { status: "abstract", terms: abstractHits };
+  }
+  if (titleHits.length >= minHits) {
+    return { status: "title", terms: titleHits };
+  }
+
+  // Also check if entire element phrase is present
+  const normVal = synonymize(element.value).toLowerCase();
+  if (normVal.length >= 5) {
+    if (normAbstract.includes(normVal)) {
+      return { status: "abstract", terms: [element.value] };
+    }
+    if (normTitle.includes(normVal)) {
+      return { status: "title", terms: [element.value] };
+    }
+  }
+
+  // Check 1 hit for multi-word if title or abstract matched
+  if (abstractHits.length >= 1 && toks.length > 1) {
+    return { status: "abstract", terms: abstractHits };
+  }
+  if (titleHits.length >= 1 && toks.length > 1) {
+    return { status: "title", terms: titleHits };
+  }
+
+  return { status: "absent", terms: [] };
+}
+
+/**
  * Computes deterministic relevance percentages and filters blocked keys.
- * Category bonuses are additive and strictly capped at +10 total.
+ * Removes the +15 metadata/design bonus (D-18).
+ * Assigns P/I/C/O match details.
+ * Sorts by evidenceType rank > relevancePct > year > title.
  */
 export function scoreRecords(
   records: AuditableRef[],
@@ -85,7 +195,12 @@ export function scoreRecords(
   const blockedSet = new Set(blockedKeys.map(k => k.trim()).filter(Boolean));
   const elements = parsePhraseElements(phrase);
 
-  // 1. Filter out blocked records and calculate element coverage counts across surviving records
+  const elP = elements.find(e => e.label.startsWith("P"));
+  const elI = elements.find(e => e.label.startsWith("I"));
+  const elC = elements.find(e => e.label.startsWith("C"));
+  const elO = elements.find(e => e.label.startsWith("O"));
+
+  // 1. Filter out blocked records
   const unblocked: AuditableRef[] = [];
   let removedByBlock = 0;
 
@@ -131,42 +246,48 @@ export function scoreRecords(
     const audit = item.audit;
     const matchedElements: string[] = [];
 
+    // Detailed P/I/C/O match check for chips
+    const pMatch = checkElementMatch(elP, r.title, r.context || "");
+    const iMatch = checkElementMatch(elI, r.title, r.context || "");
+    const cMatch = checkElementMatch(elC, r.title, r.context || "");
+    const oMatch = checkElementMatch(elO, r.title, r.context || "");
+
+    const picoMatches: PicoMatchDetails = {
+      P: pMatch,
+      I: iMatch,
+      C: cMatch,
+      O: oMatch
+    };
+
     if (audit) {
-      if (audit.population) matchedElements.push("P");
-      if (audit.intervention) matchedElements.push("I");
-      if (audit.comparator) matchedElements.push("C");
-      if (audit.outcome) matchedElements.push("O");
+      if (audit.population || pMatch.status !== "absent") matchedElements.push("P");
+      if (audit.intervention || iMatch.status !== "absent") matchedElements.push("I");
+      if (audit.comparator || cMatch.status !== "absent") matchedElements.push("C");
+      if (audit.outcome || oMatch.status !== "absent") matchedElements.push("O");
     }
 
-    // Base score calculation (0–75 from matched elements, +15 from metadata completeness/design)
+    // Base score calculation: strictly from concept matches (0–90).
+    // The +15 metadata/design bonus is removed (D-18); design is rendered as an evidence badge.
     const elementRatio = elements.length > 0 ? matchedElements.length / elements.length : 0;
-    let baseScore = Math.round(elementRatio * 75);
-
-    if (audit?.metadataCompleteness?.hasAbstract) baseScore += 5;
-    if (audit?.doiOk || audit?.pmidResolved) baseScore += 5;
-    const design = designOf(r.title || "", r.journal || "");
-    if (design !== "unclassified") baseScore += 5;
+    const baseScore = Math.round(elementRatio * 90);
 
     // Category bonus calculation (additive, capped at +10)
     let rawCategoryBonus = 0;
     const fullText = `${r.title || ""} ${r.journal || ""} ${r.context || ""}`;
+    const design = designOf(r.title || "", r.journal || "");
 
     if (category === "established") {
-      // Systematic review / meta-analysis design: +5
-      if (design === "systematic review / meta-analysis") rawCategoryBonus += 5;
-      // Consensus wording: +3
+      if (design === "systematic review / meta-analysis" || r.evidenceType === "meta_analysis" || r.evidenceType === "systematic_review") {
+        rawCategoryBonus += 5;
+      }
       if (ESTABLISHED_BONUS_WORDS.test(fullText)) rawCategoryBonus += 3;
     } else if (category === "conflicting") {
-      // Disagreement wording: +5
       if (CONFLICTING_BONUS_WORDS.test(fullText)) rawCategoryBonus += 5;
-      // Small sample designs: +2
       if (CONFLICTING_SMALL_SAMPLE.test(fullText) || /case|pilot/i.test(design)) rawCategoryBonus += 2;
     } else if (category === "gap") {
-      // Record matches the lowest-coverage element in the corpus: +5
       if (lowestCoverageElement && matchedElements.includes(lowestCoverageElement)) {
         rawCategoryBonus += 5;
       }
-      // Research hurdle wording: +3
       if (GAP_BONUS_WORDS.test(fullText)) rawCategoryBonus += 3;
     }
 
@@ -174,15 +295,25 @@ export function scoreRecords(
     const totalScore = Math.max(0, Math.min(100, Math.round(baseScore + categoryBonus)));
     const relevancePct = Number.isFinite(totalScore) ? totalScore : 0;
 
+    const claim = extractRecordClaim(r);
+
     scored.push({
       ...r,
       relevancePct,
-      matchedElements
+      matchedElements,
+      picoMatches,
+      evidenceRole: claim.evidenceRole
     });
   }
 
-  // 3. Sort deterministically: relevancePct desc -> year desc -> title asc
+  // 3. Sort deterministically:
+  // evidenceType rank desc -> relevancePct desc -> year desc -> title asc
   scored.sort((a, b) => {
+    const rankA = getEvidenceTypeRank(a.evidenceType);
+    const rankB = getEvidenceTypeRank(b.evidenceType);
+    if (rankB !== rankA) {
+      return rankB - rankA;
+    }
     if (b.relevancePct !== a.relevancePct) {
       return b.relevancePct - a.relevancePct;
     }

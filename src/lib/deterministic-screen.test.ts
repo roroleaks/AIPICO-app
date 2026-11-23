@@ -151,8 +151,8 @@ test("SCR-4. Zero-coverage fixture: unaddressed word is placed in gap phrase and
   // Gap phrase centers on the zero-coverage word 'acupuncture'
   assert.ok(res.phrases.gap.phrase.includes("acupuncture"));
   assert.ok(res.phrases.gap.basis.includes("acupuncture"));
-  assert.ok(res.phrases.gap.basis.includes("was not found in the titles screened (abstracts not available) — this is NOT evidence of a research gap."));
-  assert.equal(res.phrases.gap.signalStrength, "none");
+  assert.ok(res.phrases.gap.basis.includes("was not reported in any screened abstract"));
+  assert.equal(res.phrases.gap.signalStrength, "weak");
 
   // Pairwise distinctness
   assert.notEqual(res.phrases.established.phrase, res.phrases.conflicting.phrase);

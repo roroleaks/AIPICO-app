@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { designOf, type AuditableRef } from "@/lib/relevance";
-import { generateDeterministicScreen, type ScreenPayload } from "@/lib/deterministic-screen";
+import { generateDeterministicScreen, getRecordKey, type ScreenPayload } from "@/lib/deterministic-screen";
 import { scoreRecords, parsePhraseElements, type ExploreRecord } from "@/lib/explore-scoring";
 import { composeManuscript, validateEnrichedManuscript } from "@/lib/manuscript-composer";
 import type { CitationStyle } from "@/lib/citation-formatter";
@@ -335,7 +335,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     if (stage === "screen") {
       const { words } = body as { words: PicoWord[] };
-      const { corpus, totalRetrieved, relaxationLevel } = await screenQueryLadder(words, 25_000);
+      const { corpus, totalRetrieved, relaxationLevel, runLog } = await screenQueryLadder(words, 25_000);
 
       let screenPayload: ScreenPayload | null = null;
 
@@ -416,6 +416,26 @@ HARD RULES:
       if (!screenPayload) {
         screenPayload = generateDeterministicScreen(words, corpus, relaxationLevel, totalRetrieved);
       }
+
+      if (!screenPayload.records || screenPayload.records.length === 0) {
+        screenPayload.records = corpus.map(r => ({
+          key: getRecordKey(r),
+          title: r.title,
+          year: r.year,
+          evidenceType: r.evidenceType,
+          abstractAvailable: Boolean(r.context && r.context.trim().length > 30)
+        }));
+      }
+
+      screenPayload.runLog = {
+        timestamp: new Date().toISOString(),
+        queries: (runLog?.queries || []).map(q => ({
+          source: q.source,
+          query: q.query,
+          count: q.hits
+        })),
+        abstractCoverage: runLog?.abstractCoverage?.pct || 0
+      };
 
       return NextResponse.json(screenPayload, {
         headers: { "x-aipico-source": screenPayload.source }

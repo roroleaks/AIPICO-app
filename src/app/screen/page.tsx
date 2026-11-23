@@ -15,6 +15,7 @@ export default function ScreenPage() {
   const [screenData, setScreenData] = useState<ScreenPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<ScreenCategory | null>(null);
+  const [expandedCategory, setExpandedCategory] = useState<Record<string, boolean>>({});
 
   const fetchScreen = useCallback(async (force = false) => {
     const rawWords = sget<PicoWord[]>(KEYS.picoWords);
@@ -194,9 +195,63 @@ export default function ScreenPage() {
                       {item.basis}
                     </p>
                     {item.supportingRecordKeys && item.supportingRecordKeys.length > 0 && (
-                      <p style={{ fontSize: "0.8rem", color: "#047857", margin: "6px 0 0 0", fontWeight: 500 }}>
-                        Supporting records ({item.supportingRecordKeys.length}): {item.supportingRecordKeys.slice(0, 4).join(", ")}{item.supportingRecordKeys.length > 4 ? "…" : ""}
-                      </p>
+                      <div style={{ marginTop: 8 }} onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedCategory(prev => ({ ...prev, established: !prev.established }))}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            color: "#059669",
+                            cursor: "pointer",
+                            padding: "4px 0",
+                            fontSize: "0.84rem",
+                            fontWeight: 600,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 5
+                          }}
+                          aria-expanded={Boolean(expandedCategory.established)}
+                        >
+                          <span>{expandedCategory.established ? "▼" : "▶"}</span>
+                          <span>View the {item.supportingRecordKeys.length} records behind this statement</span>
+                        </button>
+                        {expandedCategory.established && (
+                          <div
+                            style={{
+                              marginTop: 8,
+                              padding: "10px 12px",
+                              background: "#f8fafc",
+                              borderRadius: 6,
+                              border: "1px solid #e2e8f0",
+                              fontSize: "0.82rem",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: 6,
+                              maxHeight: 220,
+                              overflowY: "auto"
+                            }}
+                          >
+                            {item.supportingRecordKeys.map(k => {
+                              const rec = screenData.records?.find(r => r.key === k);
+                              return (
+                                <div key={k} style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap", lineHeight: 1.4 }}>
+                                  <code style={{ fontSize: "0.75rem", background: "#e2e8f0", color: "#334155", padding: "1px 5px", borderRadius: 3, fontWeight: 600 }}>
+                                    {k}
+                                  </code>
+                                  {rec ? (
+                                    <span style={{ color: "#1e293b" }}>
+                                      <strong>{rec.title}</strong> {rec.year ? `(${rec.year})` : ""} {rec.evidenceType ? <span style={{ color: "#64748b", fontStyle: "italic" }}>[{rec.evidenceType.replace(/_/g, " ")}]</span> : null}
+                                    </span>
+                                  ) : (
+                                    <span style={{ color: "#64748b" }}>Record ID {k}</span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 );
@@ -244,9 +299,63 @@ export default function ScreenPage() {
                       {item.basis}
                     </p>
                     {item.supportingRecordKeys && item.supportingRecordKeys.length > 0 && (
-                      <p style={{ fontSize: "0.8rem", color: "#b45309", margin: "6px 0 0 0", fontWeight: 500 }}>
-                        Supporting records ({item.supportingRecordKeys.length}): {item.supportingRecordKeys.slice(0, 4).join(", ")}{item.supportingRecordKeys.length > 4 ? "…" : ""}
-                      </p>
+                      <div style={{ marginTop: 8 }} onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedCategory(prev => ({ ...prev, conflicting: !prev.conflicting }))}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            color: "#d97706",
+                            cursor: "pointer",
+                            padding: "4px 0",
+                            fontSize: "0.84rem",
+                            fontWeight: 600,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 5
+                          }}
+                          aria-expanded={Boolean(expandedCategory.conflicting)}
+                        >
+                          <span>{expandedCategory.conflicting ? "▼" : "▶"}</span>
+                          <span>View the {item.supportingRecordKeys.length} records behind this statement</span>
+                        </button>
+                        {expandedCategory.conflicting && (
+                          <div
+                            style={{
+                              marginTop: 8,
+                              padding: "10px 12px",
+                              background: "#f8fafc",
+                              borderRadius: 6,
+                              border: "1px solid #e2e8f0",
+                              fontSize: "0.82rem",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: 6,
+                              maxHeight: 220,
+                              overflowY: "auto"
+                            }}
+                          >
+                            {item.supportingRecordKeys.map(k => {
+                              const rec = screenData.records?.find(r => r.key === k);
+                              return (
+                                <div key={k} style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap", lineHeight: 1.4 }}>
+                                  <code style={{ fontSize: "0.75rem", background: "#e2e8f0", color: "#334155", padding: "1px 5px", borderRadius: 3, fontWeight: 600 }}>
+                                    {k}
+                                  </code>
+                                  {rec ? (
+                                    <span style={{ color: "#1e293b" }}>
+                                      <strong>{rec.title}</strong> {rec.year ? `(${rec.year})` : ""} {rec.evidenceType ? <span style={{ color: "#64748b", fontStyle: "italic" }}>[{rec.evidenceType.replace(/_/g, " ")}]</span> : null}
+                                    </span>
+                                  ) : (
+                                    <span style={{ color: "#64748b" }}>Record ID {k}</span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 );
@@ -294,9 +403,63 @@ export default function ScreenPage() {
                       {item.basis}
                     </p>
                     {item.supportingRecordKeys && item.supportingRecordKeys.length > 0 && (
-                      <p style={{ fontSize: "0.8rem", color: "#7e22ce", margin: "6px 0 0 0", fontWeight: 500 }}>
-                        Supporting records ({item.supportingRecordKeys.length}): {item.supportingRecordKeys.slice(0, 4).join(", ")}{item.supportingRecordKeys.length > 4 ? "…" : ""}
-                      </p>
+                      <div style={{ marginTop: 8 }} onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedCategory(prev => ({ ...prev, gap: !prev.gap }))}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            color: "#7c3aed",
+                            cursor: "pointer",
+                            padding: "4px 0",
+                            fontSize: "0.84rem",
+                            fontWeight: 600,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 5
+                          }}
+                          aria-expanded={Boolean(expandedCategory.gap)}
+                        >
+                          <span>{expandedCategory.gap ? "▼" : "▶"}</span>
+                          <span>View the {item.supportingRecordKeys.length} records behind this statement</span>
+                        </button>
+                        {expandedCategory.gap && (
+                          <div
+                            style={{
+                              marginTop: 8,
+                              padding: "10px 12px",
+                              background: "#f8fafc",
+                              borderRadius: 6,
+                              border: "1px solid #e2e8f0",
+                              fontSize: "0.82rem",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: 6,
+                              maxHeight: 220,
+                              overflowY: "auto"
+                            }}
+                          >
+                            {item.supportingRecordKeys.map(k => {
+                              const rec = screenData.records?.find(r => r.key === k);
+                              return (
+                                <div key={k} style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap", lineHeight: 1.4 }}>
+                                  <code style={{ fontSize: "0.75rem", background: "#e2e8f0", color: "#334155", padding: "1px 5px", borderRadius: 3, fontWeight: 600 }}>
+                                    {k}
+                                  </code>
+                                  {rec ? (
+                                    <span style={{ color: "#1e293b" }}>
+                                      <strong>{rec.title}</strong> {rec.year ? `(${rec.year})` : ""} {rec.evidenceType ? <span style={{ color: "#64748b", fontStyle: "italic" }}>[{rec.evidenceType.replace(/_/g, " ")}]</span> : null}
+                                    </span>
+                                  ) : (
+                                    <span style={{ color: "#64748b" }}>Record ID {k}</span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 );
