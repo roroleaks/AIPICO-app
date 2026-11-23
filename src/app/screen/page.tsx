@@ -83,7 +83,7 @@ export default function ScreenPage() {
     <div className="wrap">
       <header className="hdr">
         <h1>🧭 Step 2 · Literature Screening</h1>
-        <p>Three PICO phrases from the screened literature — established, conflicting, or a gap</p>
+        <p>Three PICO question framings from the screened literature — established, conflicting, or a gap</p>
       </header>
 
       <WorkflowStepper currentStep={2} />
@@ -175,11 +175,16 @@ export default function ScreenPage() {
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                      <span style={{ fontWeight: 700, color: "#065f46", fontSize: "0.95rem" }}>
-                        ✅ i — Established knowledge
-                      </span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontWeight: 700, color: "#065f46", fontSize: "0.95rem" }}>
+                          ✅ i — Established knowledge framing
+                        </span>
+                        <span className="pill" style={{ fontSize: "0.75rem", fontWeight: 600, background: item.signalStrength === "none" ? "#f1f5f9" : "#dcfce7", color: item.signalStrength === "none" ? "#64748b" : "#166534" }}>
+                          Signal: {item.signalStrength || "none"}
+                        </span>
+                      </div>
                       <span className={`v-sel${isSel ? "" : " muted"}`}>
-                        {isSel ? "✓ Selected" : "○ Select this phrase"}
+                        {isSel ? "✓ Selected" : "○ Select this framing"}
                       </span>
                     </div>
                     <p style={{ fontWeight: 700, fontSize: "1.05rem", lineHeight: 1.45, margin: "4px 0 8px 0", color: "#0f172a" }}>
@@ -188,6 +193,11 @@ export default function ScreenPage() {
                     <p style={{ fontSize: "0.88rem", color: "#64748b", margin: 0, lineHeight: 1.4 }}>
                       {item.basis}
                     </p>
+                    {item.supportingRecordKeys && item.supportingRecordKeys.length > 0 && (
+                      <p style={{ fontSize: "0.8rem", color: "#047857", margin: "6px 0 0 0", fontWeight: 500 }}>
+                        Supporting records ({item.supportingRecordKeys.length}): {item.supportingRecordKeys.slice(0, 4).join(", ")}{item.supportingRecordKeys.length > 4 ? "…" : ""}
+                      </p>
+                    )}
                   </div>
                 );
               })()}
@@ -215,11 +225,16 @@ export default function ScreenPage() {
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                      <span style={{ fontWeight: 700, color: "#92400e", fontSize: "0.95rem" }}>
-                        ⚖️ ii — Conflicting evidence
-                      </span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontWeight: 700, color: "#92400e", fontSize: "0.95rem" }}>
+                          ⚖️ ii — Conflicting evidence framing
+                        </span>
+                        <span className="pill" style={{ fontSize: "0.75rem", fontWeight: 600, background: item.signalStrength === "none" ? "#f1f5f9" : "#fef3c7", color: item.signalStrength === "none" ? "#64748b" : "#92400e" }}>
+                          Signal: {item.signalStrength || "none"}
+                        </span>
+                      </div>
                       <span className={`v-sel${isSel ? "" : " muted"}`}>
-                        {isSel ? "✓ Selected" : "○ Select this phrase"}
+                        {isSel ? "✓ Selected" : "○ Select this framing"}
                       </span>
                     </div>
                     <p style={{ fontWeight: 700, fontSize: "1.05rem", lineHeight: 1.45, margin: "4px 0 8px 0", color: "#0f172a" }}>
@@ -228,6 +243,11 @@ export default function ScreenPage() {
                     <p style={{ fontSize: "0.88rem", color: "#64748b", margin: 0, lineHeight: 1.4 }}>
                       {item.basis}
                     </p>
+                    {item.supportingRecordKeys && item.supportingRecordKeys.length > 0 && (
+                      <p style={{ fontSize: "0.8rem", color: "#b45309", margin: "6px 0 0 0", fontWeight: 500 }}>
+                        Supporting records ({item.supportingRecordKeys.length}): {item.supportingRecordKeys.slice(0, 4).join(", ")}{item.supportingRecordKeys.length > 4 ? "…" : ""}
+                      </p>
+                    )}
                   </div>
                 );
               })()}
@@ -255,11 +275,16 @@ export default function ScreenPage() {
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                      <span style={{ fontWeight: 700, color: "#5b21b6", fontSize: "0.95rem" }}>
-                        🔍 iii — Research gap
-                      </span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontWeight: 700, color: "#5b21b6", fontSize: "0.95rem" }}>
+                          🔍 iii — Research gap framing
+                        </span>
+                        <span className="pill" style={{ fontSize: "0.75rem", fontWeight: 600, background: item.signalStrength === "none" ? "#f1f5f9" : "#f3e8ff", color: item.signalStrength === "none" ? "#64748b" : "#6b21a8" }}>
+                          Signal: {item.signalStrength || "none"}
+                        </span>
+                      </div>
                       <span className={`v-sel${isSel ? "" : " muted"}`}>
-                        {isSel ? "✓ Selected" : "○ Select this phrase"}
+                        {isSel ? "✓ Selected" : "○ Select this framing"}
                       </span>
                     </div>
                     <p style={{ fontWeight: 700, fontSize: "1.05rem", lineHeight: 1.45, margin: "4px 0 8px 0", color: "#0f172a" }}>
@@ -268,6 +293,11 @@ export default function ScreenPage() {
                     <p style={{ fontSize: "0.88rem", color: "#64748b", margin: 0, lineHeight: 1.4 }}>
                       {item.basis}
                     </p>
+                    {item.supportingRecordKeys && item.supportingRecordKeys.length > 0 && (
+                      <p style={{ fontSize: "0.8rem", color: "#7e22ce", margin: "6px 0 0 0", fontWeight: 500 }}>
+                        Supporting records ({item.supportingRecordKeys.length}): {item.supportingRecordKeys.slice(0, 4).join(", ")}{item.supportingRecordKeys.length > 4 ? "…" : ""}
+                      </p>
+                    )}
                   </div>
                 );
               })()}

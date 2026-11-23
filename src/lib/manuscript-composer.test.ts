@@ -123,19 +123,19 @@ test("MC3. Excluded records are NEVER cited in synthesis or reference list", () 
 
 test("MC4. Category framing switches properly across established, conflicting, and gap", () => {
   const est = composeManuscript({ ...baseInput, category: "established" });
-  assert.ok(est.title.includes("Established Clinical Knowledge"));
-  assert.ok(est.sections[0].paragraphs[0].includes("reinforce evidence-based guidelines"));
-  assert.ok(est.abstract[3].includes("established clinical alignment"));
+  assert.ok(est.title.includes("evidence map and research framing (established knowledge)"));
+  assert.ok(est.sections[0].paragraphs[0].includes("The category 'established knowledge' was selected by the user as a framing; it is not a conclusion of this analysis."));
+  assert.ok(est.abstract[3].includes("AIPICO has not extracted or appraised study findings in this run."));
 
   const conf = composeManuscript({ ...baseInput, category: "conflicting" });
-  assert.ok(conf.title.includes("Conflicting Clinical Findings"));
-  assert.ok(conf.sections[0].paragraphs[0].includes("heterogeneous and discordant"));
-  assert.ok(conf.abstract[3].includes("conflicting clinical results"));
+  assert.ok(conf.title.includes("evidence map and research framing (conflicting evidence)"));
+  assert.ok(conf.sections[0].paragraphs[0].includes("The category 'conflicting evidence' was selected by the user as a framing; it is not a conclusion of this analysis."));
+  assert.ok(conf.abstract[3].includes("AIPICO has not extracted or appraised study findings in this run."));
 
   const gap = composeManuscript({ ...baseInput, category: "gap" });
-  assert.ok(gap.title.includes("Identified Clinical Literature Gaps"));
-  assert.ok(gap.sections[0].paragraphs[0].includes("Significant uncertainty persists"));
-  assert.ok(gap.abstract[3].includes("literature gap exists"));
+  assert.ok(gap.title.includes("evidence map and research framing (literature gap)"));
+  assert.ok(gap.sections[0].paragraphs[0].includes("The category 'literature gap' was selected by the user as a framing; it is not a conclusion of this analysis."));
+  assert.ok(gap.abstract[3].includes("AIPICO has not extracted or appraised study findings in this run."));
 });
 
 test("MC5. Graceful empty state when zero records are retained", () => {
@@ -146,9 +146,9 @@ test("MC5. Graceful empty state when zero records are retained", () => {
   });
 
   assert.equal(empty.references.length, 0);
-  assert.ok(empty.abstract[2].includes("Zero records met final eligibility"));
+  assert.ok(empty.abstract[2].includes("Zero records met the search criteria in this run."));
   const synthP = empty.sections.find(s => s.heading === "Evidence synthesis")?.paragraphs[0];
-  assert.ok(synthP?.includes("zero records met the eligibility criteria"));
+  assert.ok(synthP?.includes("zero records were retained for evidence mapping in this run."));
 });
 
 test("MC6. Strict plain text: ZERO http occurrences in references and document body", () => {

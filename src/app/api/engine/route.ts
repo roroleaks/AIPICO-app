@@ -910,17 +910,23 @@ HARD RULES:
                 established: {
                   category: "established",
                   phrase: validated.established.phrase,
-                  basis: validated.established.basis
+                  basis: validated.established.basis,
+                  signalStrength: "moderate",
+                  supportingRecordKeys: []
                 },
                 conflicting: {
                   category: "conflicting",
                   phrase: validated.conflicting.phrase,
-                  basis: validated.conflicting.basis
+                  basis: validated.conflicting.basis,
+                  signalStrength: "moderate",
+                  supportingRecordKeys: []
                 },
                 gap: {
                   category: "gap",
                   phrase: validated.gap.phrase,
-                  basis: validated.gap.basis
+                  basis: validated.gap.basis,
+                  signalStrength: "weak",
+                  supportingRecordKeys: []
                 }
               },
               corpusStats: {

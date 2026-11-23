@@ -11,10 +11,14 @@ import type { PicoWord } from "./pico-roles.ts";
 
 export type ScreenCategory = "established" | "conflicting" | "gap";
 
+export type SignalStrength = "none" | "weak" | "moderate";
+
 export interface ScreenPhrase {
   category: ScreenCategory;
   phrase: string;
   basis: string;
+  signalStrength: SignalStrength;
+  supportingRecordKeys: string[];
 }
 
 export interface ScreenCorpusStats {
@@ -113,6 +117,12 @@ export function classifyCorpus(
   return { established, conflicting, gap };
 }
 
+export function getRecordKey(r: AuditableRef): string {
+  if (r.pmid) return `p:${r.pmid}`;
+  if (r.doi) return `d:${r.doi}`;
+  return `t:${r.title.slice(0, 40)}`;
+}
+
 /**
  * Builds deterministic screening payload with exactly 3 differentiated PICO phrases and evidence bases.
  */
@@ -122,7 +132,8 @@ export function generateDeterministicScreen(
   relaxationLevel: 0 | 1 | 2 = 0,
   retrievedCount?: number
 ): ScreenPayload {
-  const counts = classifyCorpus(corpus, words);
+  const _counts = classifyCorpus(corpus, words);
+  void _counts;
   const totalRetrieved = retrievedCount !== undefined ? retrievedCount : corpus.length;
   const totalScreened = corpus.length;
 
@@ -157,122 +168,150 @@ export function generateDeterministicScreen(
   }
 
   const zeroCoverageWords = words.filter(w => (wordCoverage.get(w.word) ?? 0) === 0);
-  const oCoverage = O ? (wordCoverage.get(O) ?? 0) : 0;
 
-  // Systematic review count for established basis
-  const metaReviewCount = corpus.filter(
-    r => designOf(r.title, r.journal || "") === "systematic review / meta-analysis"
-  ).length;
+  // Check mention of I and O in records
+  const iTokens = sigTokens(I1);
+  const oTokens = O ? sigTokens(O) : [];
+  const mentionsIAndO = (r: AuditableRef) => {
+    const text = `${r.title} ${r.journal || ""} ${r.context || ""}`.toLowerCase();
+    const hasI = iTokens.length > 0 ? iTokens.some(t => text.includes(t.toLowerCase())) : true;
+    const hasO = oTokens.length > 0 ? oTokens.some(t => text.includes(t.toLowerCase())) : true;
+    return hasI && hasO;
+  };
 
-  // 1. Established phrase: the single best-supported efficacy claim
-  // In [P] (P), does [I1] (I) compared with [C if present, else "usual care"] (C) improve [O if present, else "clinical outcomes"] (O)?
-  // When an explicit O word was submitted but has 0 coverage in the corpus, the established efficacy claim
-  // uses "clinical outcomes" so the unstudied term is not stated as established.
+  const srMaRecords = corpus.filter(
+    r => designOf(r.title, r.journal || "") === "systematic review / meta-analysis" && mentionsIAndO(r)
+  );
+  const rctRecords = corpus.filter(
+    r => designOf(r.title, r.journal || "") === "randomized controlled trial" && mentionsIAndO(r)
+  );
+
+  // 1. Established phrase & basis
+  // Stated as declarative evidence statement ONLY when supported (>=1 SR/MA or >=2 RCTs mentioning both I and O)
+  const isEstSupported = srMaRecords.length >= 1 || rctRecords.length >= 2;
+  const estSupportingRecords = [...srMaRecords, ...rctRecords];
+  const estSupportingKeys = estSupportingRecords.map(getRecordKey);
+
   const estC = C ? C : "usual care";
   const estO = O && (wordCoverage.get(O) ?? 0) > 0 ? O : (O && totalScreened === 0 ? O : "clinical outcomes");
-  const establishedPhrase = `In ${P} (P), does ${I1} (I) compared with ${estC} (C) improve ${estO} (O)?`;
 
+  let establishedPhrase = "";
   let establishedBasis = "";
-  if (metaReviewCount > 0) {
-    establishedBasis = `Screened literature contains ${metaReviewCount} systematic review / meta-analysis publication(s) and consensus data evaluating this comparison.`;
-  } else if (counts.established > 0) {
-    establishedBasis = `Synthesized from ${counts.established} established clinical effectiveness signal(s) identified across screened records.`;
-  } else if (totalScreened > 0) {
-    establishedBasis = `Derived from baseline clinical guidance across ${totalScreened} retrieved and screened records.`;
+  let establishedStrength: SignalStrength = "none";
+
+  if (isEstSupported) {
+    establishedPhrase = `In ${P} (P), evidence from ${estSupportingKeys.length} systematic review(s)/trial(s) addresses ${I1} (I) compared with ${estC} (C) for ${estO} (O).`;
+    establishedBasis = `${estSupportingKeys.length} records are titled/typed as systematic review or meta-analysis/RCT evaluating this comparison (record IDs: ${estSupportingKeys.join(", ")}).`;
+    establishedStrength = "moderate";
   } else {
-    establishedBasis = `Baseline clinical formulation derived from input parameters (no records retrieved during exact literature query).`;
+    establishedPhrase = "No established finding could be identified from the screened records.";
+    establishedStrength = "none";
+    if (totalScreened > 0) {
+      establishedBasis = `0 records met the threshold of systematic review/meta-analysis or multiple randomized trials evaluating both intervention and outcome among ${totalScreened} screened records.`;
+    } else {
+      establishedBasis = "0 records were retrieved during screening; no established evidence could be identified.";
+    }
   }
 
-  // 2. Conflicting phrase: head-to-head comparison whose evidence disagrees
-  // - If C is present: In [P] (P), is [I1] (I) superior to [C] (C) for [O] (O)?
-  // - Else if I2 is present: In [P] (P), does [I1] (I) compared with [I2] (C) improve [O] (O)?
-  // - Else (single I only): In [P] (P), does [I1] (I) compared with [C-default "usual care"] (C) consistently improve [O] (O) across study designs?
+  // 2. Conflicting phrase & basis
+  const conflictRecords = corpus.filter(r => {
+    const text = `${r.title} ${r.journal || ""} ${r.context || ""}`;
+    return CONFLICTING_REGEX.test(text) || SMALL_SAMPLE_REGEX.test(text);
+  });
+  const conflictKeys = conflictRecords.map(getRecordKey);
+
   const confO = O ? O : "clinical outcomes";
   let conflictingPhrase = "";
-  if (C) {
-    conflictingPhrase = `In ${P} (P), is ${I1} (I) superior to ${C} (C) for ${confO} (O)?`;
-  } else if (I2) {
-    conflictingPhrase = `In ${P} (P), does ${I1} (I) compared with ${I2} (C) improve ${confO} (O)?`;
-  } else {
-    conflictingPhrase = `In ${P} (P), does ${I1} (I) compared with usual care (C) consistently improve ${confO} (O) across study designs?`;
-  }
-
   let conflictingBasis = "";
-  if (counts.conflicting > 0) {
-    conflictingBasis = `Screened records demonstrate conflicting clinical evidence, heterogeneous outcomes, or neutral findings ('no significant difference') across trials.`;
-  } else if (totalScreened > 0) {
-    conflictingBasis = `Evidence across ${totalScreened} screened studies exhibits protocol variability and heterogeneous patient response.`;
+  let conflictingStrength: SignalStrength = "none";
+
+  if (conflictKeys.length > 0) {
+    if (C) {
+      conflictingPhrase = `In ${P} (P), is ${I1} (I) superior to ${C} (C) for ${confO} (O)?`;
+    } else if (I2) {
+      conflictingPhrase = `In ${P} (P), does ${I1} (I) compared with ${I2} (C) improve ${confO} (O)?`;
+    } else {
+      conflictingPhrase = `In ${P} (P), does ${I1} (I) compared with usual care (C) consistently improve ${confO} (O) across study designs?`;
+    }
+    conflictingBasis = `${conflictKeys.length} record(s) contain disagreement wording (record IDs: ${conflictKeys.join(", ")}).`;
+    conflictingStrength = conflictKeys.length >= 2 ? "moderate" : "weak";
   } else {
-    conflictingBasis = `Comparative trial literature lacks conclusive consensus across evaluated clinical parameters.`;
+    conflictingPhrase = "No conflict signal detected among the screened records.";
+    conflictingBasis = "0 records contain disagreement wording; no conflict signal was detected.";
+    conflictingStrength = "none";
   }
 
-  // 3. Gap phrase: built around the LEAST-covered role word
-  // - If some role word has ZERO coverage -> put that word in its PICO slot and center the phrase on it.
-  // - Else if all words are covered but O is covered only weakly (<= 1 matching record) -> targets patient-important endpoints:
-  //   In [P] (P), does [I1] (I) compared with [C-or-I2-or-default] (C) improve long-term safety and quality-of-life outcomes (O)?
-  // - Else (everything well covered) -> subgroup/long-horizon variant:
-  //   In high-risk subgroups of [P] (P), does [I1] (I) compared with [C-or-I2-or-default] (C) improve [O] (O) without additional adverse events (O)?
+  // 3. Gap phrase & basis
   const cOrI2OrDefault = C ? C : (I2 ? I2 : "usual care");
   let gapPhrase = "";
   let gapBasis = "";
+  let gapStrength: SignalStrength = "none";
+  let gapSupportingKeys: string[] = [];
 
   if (zeroCoverageWords.length > 0 && totalScreened > 0) {
-    // Prioritize uncovered outcome, then comparator, then intervention, then population
     const zeroOutcome = zeroCoverageWords.find(w => w.role === "outcome");
     const zeroComparator = zeroCoverageWords.find(w => w.role === "comparator");
     const zeroIntervention = zeroCoverageWords.find(w => w.role === "intervention");
     const zeroPopulation = zeroCoverageWords.find(w => w.role === "population");
+    const missing = zeroOutcome || zeroComparator || zeroIntervention || zeroPopulation || zeroCoverageWords[0];
+    const missingWord = missing.word;
 
-    if (zeroOutcome) {
-      gapPhrase = `In ${P} (P), does ${I1} (I) compared with ${cOrI2OrDefault} (C) improve ${zeroOutcome.word} (O)?`;
-      gapBasis = `No screened record addresses '${zeroOutcome.word}' — comparative evidence for this element is missing.`;
-    } else if (zeroComparator) {
-      gapPhrase = `In ${P} (P), does ${I1} (I) compared with ${zeroComparator.word} (C) improve ${O || "clinical outcomes"} (O)?`;
-      gapBasis = `No screened record addresses '${zeroComparator.word}' — comparative evidence for this element is missing.`;
-    } else if (zeroIntervention) {
-      const targetI = zeroIntervention.word;
-      const comp = targetI === I1 ? (I2 ? I2 : "usual care") : (I1 ? I1 : "usual care");
-      gapPhrase = `In ${P} (P), does ${targetI} (I) compared with ${comp} (C) improve ${O || "clinical outcomes"} (O)?`;
-      gapBasis = `No screened record addresses '${targetI}' — comparative evidence for this element is missing.`;
-    } else if (zeroPopulation) {
-      gapPhrase = `In unstudied cohorts of ${zeroPopulation.word} (P), does ${I1} (I) compared with ${cOrI2OrDefault} (C) improve ${O || "clinical outcomes"} (O)?`;
-      gapBasis = `No screened record addresses '${zeroPopulation.word}' — comparative evidence for this element is missing.`;
-    }
-  } else if (totalScreened > 0 && oCoverage <= 1) {
-    gapPhrase = `In ${P} (P), does ${I1} (I) compared with ${cOrI2OrDefault} (C) improve long-term safety and quality-of-life outcomes (O)?`;
-    gapBasis = `Screened literature provides sparse coverage (${oCoverage} record(s)) for clinical outcomes, leaving long-term safety and patient-reported endpoints unaddressed.`;
+    gapPhrase = missing.role === "outcome"
+      ? `In ${P} (P), does ${I1} (I) compared with ${cOrI2OrDefault} (C) improve ${missingWord} (O)?`
+      : missing.role === "comparator"
+      ? `In ${P} (P), does ${I1} (I) compared with ${missingWord} (C) improve ${O || "clinical outcomes"} (O)?`
+      : missing.role === "intervention"
+      ? `In ${P} (P), does ${missingWord} (I) compared with ${(missingWord === I1 ? (I2 ? I2 : "usual care") : (I1 ? I1 : "usual care"))} (C) improve ${O || "clinical outcomes"} (O)?`
+      : `In unstudied cohorts of ${missingWord} (P), does ${I1} (I) compared with ${cOrI2OrDefault} (C) improve ${O || "clinical outcomes"} (O)?`;
+
+    gapBasis = `'${missingWord}' was not found in the titles screened (abstracts not available) — this is NOT evidence of a research gap.`;
+    gapStrength = "none";
+    gapSupportingKeys = [];
   } else if (totalScreened > 0) {
-    gapPhrase = `In high-risk subgroups of ${P} (P), does ${I1} (I) compared with ${cOrI2OrDefault} (C) improve ${O || "clinical outcomes"} (O) without additional adverse events (O)?`;
-    gapBasis = `While overall efficacy has ${oCoverage} matching records, high-risk subgroup stratification and long-term adverse event profiles remain unaddressed in screened evidence.`;
+    const gapRecords = corpus.filter(r => {
+      const text = `${r.title} ${r.journal || ""} ${r.context || ""}`;
+      return GAP_REGEX.test(text);
+    });
+    if (gapRecords.length > 0) {
+      gapSupportingKeys = gapRecords.map(getRecordKey);
+      gapStrength = "weak";
+      gapPhrase = `In ${P} (P), does ${I1} (I) compared with ${cOrI2OrDefault} (C) address identified uncertainty in ${O || "clinical outcomes"} (O)?`;
+      gapBasis = `${gapSupportingKeys.length} record(s) contain explicit gap or uncertainty wording (record IDs: ${gapSupportingKeys.join(", ")}).`;
+    } else {
+      gapPhrase = `In high-risk subgroups of ${P} (P), does ${I1} (I) compared with ${cOrI2OrDefault} (C) improve ${O || "clinical outcomes"} (O) without additional adverse events (O)?`;
+      gapBasis = `All submitted words were identified at least once in screened titles (${totalScreened} records); full-text appraisal is required to evaluate evidence gaps.`;
+      gapStrength = "none";
+      gapSupportingKeys = [];
+    }
   } else {
     // Zero-corpus edge case
     const zeroC = C ? C : (I2 ? I2 : "an optimal control regimen");
     gapPhrase = `In ${P} (P), does ${I1} (I) compared with ${zeroC} (C) improve long-term safety and quality-of-life outcomes (O)?`;
-    gapBasis = `Uncovered research territory with no indexed records matching all submitted parameters simultaneously.`;
+    gapBasis = "0 records were retrieved during screening (abstracts not available) — this is NOT evidence of a research gap.";
+    gapStrength = "none";
+    gapSupportingKeys = [];
   }
 
   // Safety differentiation check to ensure pairwise distinctness
-  if (gapPhrase === establishedPhrase) {
+  if (gapPhrase === establishedPhrase && establishedPhrase !== "No established finding could be identified from the screened records.") {
     if (!C) {
       gapPhrase = gapPhrase.replace("compared with usual care (C)", "compared with an optimal control regimen (C)");
     } else {
       gapPhrase = gapPhrase.replace(`In ${P} (P)`, `In high-risk subgroups of ${P} (P)`);
     }
   }
-  if (conflictingPhrase === establishedPhrase) {
+  if (conflictingPhrase === establishedPhrase && establishedPhrase !== "No established finding could be identified from the screened records.") {
     conflictingPhrase = `In ${P} (P), does ${I1} (I) compared with ${estC} (C) consistently improve ${confO} (O) across study designs?`;
   }
 
   // Word coverage check across phrases and bases:
-  // Every submitted word must appear in at least one of the three phrases.
-  // Exception: For 5-word inputs where all standard PICO slots are full, any extra submitted
-  // word not appearing in the phrases is named verbatim in the basis text.
+  // Every submitted word must appear in at least one of the three phrases or bases.
   const allPhrasesText = `${establishedPhrase} ${conflictingPhrase} ${gapPhrase}`.toLowerCase();
   for (const w of words) {
     if (!allPhrasesText.includes(w.word.toLowerCase())) {
       const allBasesText = `${establishedBasis} ${conflictingBasis} ${gapBasis}`.toLowerCase();
       if (!allBasesText.includes(w.word.toLowerCase())) {
-        gapBasis += ` Additional evaluation warranted for submitted parameter '${w.word}'.`;
+        gapBasis += ` Parameter '${w.word}' was not assigned to a primary PICO slot.`;
       }
     }
   }
@@ -284,17 +323,23 @@ export function generateDeterministicScreen(
       established: {
         category: "established",
         phrase: establishedPhrase,
-        basis: establishedBasis
+        basis: establishedBasis,
+        signalStrength: establishedStrength,
+        supportingRecordKeys: estSupportingKeys
       },
       conflicting: {
         category: "conflicting",
         phrase: conflictingPhrase,
-        basis: conflictingBasis
+        basis: conflictingBasis,
+        signalStrength: conflictingStrength,
+        supportingRecordKeys: conflictKeys
       },
       gap: {
         category: "gap",
         phrase: gapPhrase,
-        basis: gapBasis
+        basis: gapBasis,
+        signalStrength: gapStrength,
+        supportingRecordKeys: gapSupportingKeys
       }
     },
     corpusStats: {

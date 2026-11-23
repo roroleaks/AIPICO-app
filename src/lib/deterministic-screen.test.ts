@@ -58,22 +58,29 @@ test("SCR-2. Smoke fixture: 2 interventions assign I2 to conflicting comparator 
 
   const smallCorpus: AuditableRef[] = [
     {
-      title: "IVF outcomes in poor responders: systematic review",
+      title: "IVF outcomes in poor responders: systematic review and meta-analysis",
       journal: "Hum Reprod",
       context: "IVF with adjuvant growth hormone improves clinical pregnancy rate in poor responders."
+    },
+    {
+      title: "Adjuvant growth hormone in poor responders: randomized trial",
+      journal: "Fertil Steril",
+      context: "There was no significant difference between groups; conflicting results across trials."
     }
   ];
 
-  const res = generateDeterministicScreen(words, smallCorpus, 0, 1);
+  const res = generateDeterministicScreen(words, smallCorpus, 0, 2);
 
   // Established keeps usual care in (C)
   assert.ok(res.phrases.established.phrase.includes("usual care (C)"));
   assert.ok(res.phrases.established.phrase.includes("ivf (I)"));
   assert.ok(res.phrases.established.phrase.includes("poor responders (P)"));
+  assert.equal(res.phrases.established.signalStrength, "moderate");
 
   // Conflicting uses I2 (growth hormone) in (C) slot
   assert.ok(res.phrases.conflicting.phrase.includes("growth hormone (C)"));
   assert.ok(res.phrases.conflicting.phrase.includes("ivf (I)"));
+  assert.equal(res.phrases.conflicting.signalStrength, "weak");
 
   // All 3 phrases must be pairwise distinct
   assert.notEqual(res.phrases.established.phrase, res.phrases.conflicting.phrase);
@@ -97,17 +104,22 @@ test("SCR-3. Comparator word fixture: uses submitted comparator with distinct te
 
   const corpus: AuditableRef[] = [
     {
-      title: "Vaginal progesterone versus cervical cerclage for women with short cervix",
+      title: "Vaginal progesterone versus cervical cerclage for women with short cervix: a systematic review and meta-analysis",
       journal: "Ultrasound Obstet Gynecol",
       context: "Both interventions show efficacy in reducing preterm birth in short cervix."
+    },
+    {
+      title: "Cervical cerclage vs progesterone: controversial results in short cervix",
+      journal: "Am J Obstet Gynecol",
+      context: "Conflicting results and heterogeneous outcomes observed."
     }
   ];
 
-  const res = generateDeterministicScreen(words, corpus, 0, 1);
+  const res = generateDeterministicScreen(words, corpus, 0, 2);
 
   // Both use cervical cerclage in (C)
   assert.ok(res.phrases.established.phrase.includes("cervical cerclage (C)"));
-  assert.ok(res.phrases.established.phrase.includes("improve preterm birth (O)"));
+  assert.ok(res.phrases.established.phrase.includes("preterm birth (O)"));
 
   assert.ok(res.phrases.conflicting.phrase.includes("cervical cerclage (C)"));
   assert.ok(res.phrases.conflicting.phrase.includes("is vaginal progesterone (I) superior to cervical cerclage (C)"));
@@ -139,7 +151,8 @@ test("SCR-4. Zero-coverage fixture: unaddressed word is placed in gap phrase and
   // Gap phrase centers on the zero-coverage word 'acupuncture'
   assert.ok(res.phrases.gap.phrase.includes("acupuncture"));
   assert.ok(res.phrases.gap.basis.includes("acupuncture"));
-  assert.ok(res.phrases.gap.basis.toLowerCase().includes("no screened record"));
+  assert.ok(res.phrases.gap.basis.includes("was not found in the titles screened (abstracts not available) — this is NOT evidence of a research gap."));
+  assert.equal(res.phrases.gap.signalStrength, "none");
 
   // Pairwise distinctness
   assert.notEqual(res.phrases.established.phrase, res.phrases.conflicting.phrase);
@@ -182,7 +195,7 @@ test("SCR-5. All-covered fixture: gap phrase uses subgroup and adverse events va
   assert.notEqual(res.phrases.conflicting.phrase, res.phrases.gap.phrase);
 });
 
-test("SCR-6. Zero-corpus edge case returns 3 valid, pairwise-distinct phrases with defaults", () => {
+test("SCR-6. Zero-corpus edge case returns 3 valid, pairwise-distinct honest framings with defaults", () => {
   const words: PicoWord[] = [
     { word: "thin endometrium", role: "population" },
     { word: "prp", role: "intervention" }
@@ -200,14 +213,19 @@ test("SCR-6. Zero-corpus edge case returns 3 valid, pairwise-distinct phrases wi
   assert.notEqual(res.phrases.established.phrase, res.phrases.gap.phrase);
   assert.notEqual(res.phrases.conflicting.phrase, res.phrases.gap.phrase);
 
-  for (const cat of ["established", "conflicting", "gap"] as const) {
-    const item = res.phrases[cat];
-    assert.ok(item.phrase.includes("(P)"), `${cat} phrase must contain (P)`);
-    assert.ok(item.phrase.includes("(I)"), `${cat} phrase must contain (I)`);
-    assert.ok(item.phrase.includes("(C)"), `${cat} phrase must contain (C)`);
-    assert.ok(item.phrase.includes("(O)"), `${cat} phrase must contain (O)`);
-    assert.ok(item.phrase.includes("thin endometrium"));
-    assert.ok(item.phrase.includes("prp"));
-    assert.ok(item.basis.length > 5);
-  }
+  // Established reports no established finding
+  assert.equal(res.phrases.established.phrase, "No established finding could be identified from the screened records.");
+  assert.equal(res.phrases.established.signalStrength, "none");
+  assert.equal(res.phrases.established.supportingRecordKeys.length, 0);
+
+  // Conflicting reports no conflict signal detected
+  assert.equal(res.phrases.conflicting.phrase, "No conflict signal detected among the screened records.");
+  assert.equal(res.phrases.conflicting.signalStrength, "none");
+  assert.equal(res.phrases.conflicting.supportingRecordKeys.length, 0);
+
+  // Gap reports titles missing word and clarifies this is not evidence of a gap
+  assert.ok(res.phrases.gap.phrase.includes("thin endometrium"));
+  assert.ok(res.phrases.gap.phrase.includes("prp"));
+  assert.equal(res.phrases.gap.signalStrength, "none");
+  assert.ok(res.phrases.gap.basis.includes("0 records were retrieved during screening (abstracts not available) — this is NOT evidence of a research gap."));
 });
