@@ -20,6 +20,7 @@ import { parseClinicalScenario } from "@/lib/clinical-semantics";
 import { classifyWordRole, type PicoRole, type PicoWord } from "@/lib/pico-roles";
 import { PhiNotice } from "@/components/PhiNotice";
 import { WorkflowStepper } from "@/components/WorkflowStepper";
+import { AppDeployQrCode } from "@/components/AppDeployQrCode";
 
 // sessionStorage is browser-only, so it cannot be read while rendering on the server.
 let cachedRaw: string | null = null;
@@ -314,6 +315,7 @@ export default function Home() {
       <WorkflowStepper currentStep={1} />
 
       <main id="main" className="solo">
+        <AppDeployQrCode />
         <section className="card">
           <form onSubmit={(e) => { e.preventDefault(); start(); }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
