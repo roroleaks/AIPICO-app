@@ -303,11 +303,12 @@ export default function Home() {
             <h1>AI PICO — From Clinical Uncertainty to Answerable Questions</h1>
             <p>AI-Assisted Clinical Question Formulation · Obs/Gyn & Reproductive Medicine</p>
           </div>
-          <div className="hdr-right">
+          <div className="hdr-right" style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <span className="author-name">
               <Image src="/dr-raouf.jpg" alt="Dr Raouf Roshdy" className="author-photo" width={72} height={72} />
               Dr Raouf Roshdy
             </span>
+            <AppDeployQrCode size={56} />
           </div>
         </div>
       </header>
@@ -315,7 +316,6 @@ export default function Home() {
       <WorkflowStepper currentStep={1} />
 
       <main id="main" className="solo">
-        <AppDeployQrCode />
         <section className="card">
           <form onSubmit={(e) => { e.preventDefault(); start(); }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
