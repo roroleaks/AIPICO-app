@@ -419,6 +419,31 @@ export default function ExplorePage() {
                             {r.source}
                           </span>
                         )}
+                        {r.evidenceType === "preprint" && (
+                          <span className="pill" style={{ background: "#fef3c7", color: "#92400e", fontSize: "0.78rem", fontWeight: 600 }}>
+                            [preprint — not peer reviewed]
+                          </span>
+                        )}
+                        {r.evidenceType === "trial_registration" && (
+                          <span className="pill" style={{ background: "#e0e7ff", color: "#3730a3", fontSize: "0.78rem", fontWeight: 600 }}>
+                            [trial registration — no results]
+                          </span>
+                        )}
+                        {r.evidenceType === "book_chapter" && (
+                          <span className="pill" style={{ background: "#f1f5f9", color: "#475569", fontSize: "0.78rem", fontWeight: 600 }}>
+                            [book chapter]
+                          </span>
+                        )}
+                        {r.evidenceType === "thesis" && (
+                          <span className="pill" style={{ background: "#f1f5f9", color: "#475569", fontSize: "0.78rem", fontWeight: 600 }}>
+                            [thesis]
+                          </span>
+                        )}
+                        {r.evidenceType && !["preprint", "trial_registration", "book_chapter", "thesis", "unclassified"].includes(r.evidenceType) && (
+                          <span className="pill" style={{ background: "#ecfdf5", color: "#065f46", fontSize: "0.78rem", fontWeight: 600 }}>
+                            {r.evidenceType.replace(/_/g, " ")}
+                          </span>
+                        )}
                       </div>
 
                       {/* Exclude button */}
@@ -458,6 +483,13 @@ export default function ExplorePage() {
                       {r.journal ? <em>{r.journal}</em> : ""}
                       {r.pmid ? ` (PMID: ${r.pmid})` : r.doi ? ` (DOI: ${r.doi})` : ""}
                     </p>
+
+                    {/* Abstract snippet */}
+                    {r.context && (
+                      <p style={{ margin: "0 0 8px 0", fontSize: "0.84rem", color: "#64748b", lineHeight: 1.45 }}>
+                        {r.context.slice(0, 240)}{r.context.length > 240 ? "…" : ""}
+                      </p>
+                    )}
 
                     {/* Matched Elements basis */}
                     <div style={{ fontSize: "0.82rem", color: "#0d9488", fontWeight: 600 }}>

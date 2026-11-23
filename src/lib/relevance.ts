@@ -12,6 +12,23 @@
 
 export interface PicoElement { label: string; value: string }
 
+export type EvidenceType =
+  | "rct"
+  | "systematic_review"
+  | "meta_analysis"
+  | "cohort"
+  | "case_control"
+  | "cross_sectional"
+  | "case_series"
+  | "narrative_review"
+  | "guideline"
+  | "preprint"
+  | "trial_registration"
+  | "book_chapter"
+  | "thesis"
+  | "editorial_commentary"
+  | "unclassified";
+
 export interface AuditableRef {
   /** PubMed identifier. Absent for records that only a DOI or another provider knows about. */
   pmid?: string;
@@ -26,6 +43,12 @@ export interface AuditableRef {
   /** Provider identifiers, kept so cross-provider deduplication can compare provenance. */
   crossrefId?: string;
   openAlexId?: string;
+  abstractAvailable?: boolean;
+  pubTypes?: string[];
+  mesh?: string[];
+  evidenceType?: EvidenceType;
+  relatedIds?: string[];
+  rawType?: string;
 }
 
 export interface MetadataCompleteness {

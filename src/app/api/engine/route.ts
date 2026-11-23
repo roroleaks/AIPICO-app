@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { designOf, type AuditableRef } from "@/lib/relevance";
-import { sanitizePhrase, HUMAN_SUBJECT_FILTER } from "@/lib/pubmed-query";
 import { generateDeterministicScreen, type ScreenPayload } from "@/lib/deterministic-screen";
 import { scoreRecords, parsePhraseElements, type ExploreRecord } from "@/lib/explore-scoring";
 import { composeManuscript, validateEnrichedManuscript } from "@/lib/manuscript-composer";
@@ -9,6 +8,11 @@ import type { CitationStyle } from "@/lib/citation-formatter";
 import type { PicoWord } from "@/lib/pico-roles";
 import { isAllowedOrigin, corsHeaders } from "@/lib/security-headers";
 import { checkRateLimit } from "@/lib/rate-limiter";
+import {
+  screenQueryLadder,
+  retrieveLiterature,
+  dedupeRefs
+} from "@/lib/retrieval";
 
 export const maxDuration = 60;
 
@@ -24,7 +28,6 @@ function hasAnyLlmKey(): boolean {
 
 // Bounded timeouts so dependencies degrade gracefully within request budget
 const LLM_TIMEOUT_MS = 6_000;
-const API_TIMEOUT_MS = 3_500;
 
 class LlmFatal extends Error {}
 class LlmTransient extends Error {
@@ -192,537 +195,6 @@ function cleanJsonResponse(text: string): string {
     cleaned = cleaned.slice(0, -3);
   }
   return cleaned.trim();
-}
-
-const EMPTY_REF_SET = new Set<string>();
-
-interface PubMedRef {
-  pmid: string;
-  title: string;
-  authors: string;
-  journal: string;
-  year: string;
-  doi?: string;
-  context?: string;
-  source?: string;
-}
-
-async function fetchPubMedReferences(
-  query: string,
-  maxResults = 3,
-  excluded: Set<string> = EMPTY_REF_SET
-): Promise<PubMedRef[]> {
-  try {
-    const esearchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(query)}&retmode=json&retmax=${maxResults + excluded.size + 2}&sort=relevance`;
-    const searchRes = await fetch(esearchUrl, {
-      signal: AbortSignal.timeout(API_TIMEOUT_MS)
-    });
-    if (!searchRes.ok) return [];
-
-    const searchData = await searchRes.json();
-    const idList: string[] = searchData?.esearchresult?.idlist || [];
-    const filteredIds = idList.filter(id => !excluded.has(`p:${id}`)).slice(0, maxResults);
-    if (!filteredIds.length) return [];
-
-    const esummaryUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${filteredIds.join(",")}&retmode=json`;
-    const summaryRes = await fetch(esummaryUrl, {
-      signal: AbortSignal.timeout(API_TIMEOUT_MS)
-    });
-    if (!summaryRes.ok) return [];
-
-    const summaryData = await summaryRes.json();
-    const result = summaryData?.result || {};
-
-    const rawList: (PubMedRef | null)[] = filteredIds.map(id => {
-      const item = result[id];
-      if (!item || !item.title) return null;
-
-      const articleIds: Array<{ idtype: string; value: string }> = item.articleids || [];
-      const doiObj = articleIds.find(a => a.idtype === "doi");
-
-      const authorsArr = Array.isArray(item.authors)
-        ? item.authors.map((a: { name?: string }) => a.name).filter(Boolean)
-        : [];
-      const authors =
-        authorsArr.length > 2
-          ? `${authorsArr[0]} et al.`
-          : authorsArr.join(", ");
-
-      const ref: PubMedRef = {
-        pmid: id,
-        title: String(item.title).replace(/\.$/, "").trim(),
-        authors,
-        journal: String(item.source || item.fulljournalname || "").trim(),
-        year: String(item.pubdate || "").match(/\b(19\d\d|20\d\d)\b/)?.[1] || "",
-        doi: doiObj?.value,
-        source: "PubMed"
-      };
-      return ref;
-    });
-
-    return rawList.filter((r): r is PubMedRef => Boolean(r && r.title));
-  } catch {
-    return [];
-  }
-}
-
-async function fetchEuropePMC(query: string, maxResults = 4): Promise<PubMedRef[]> {
-  try {
-    const terms = sanitizeQuery(query).split(" ").filter(Boolean).slice(0, 5).map(t => `"${t}"`).join(" AND ");
-    const url = `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(terms)}&format=json&pageSize=${Math.min(maxResults + 4, 15)}&resultType=lite`;
-    const res = await fetch(url, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(API_TIMEOUT_MS)
-    });
-    if (!res.ok) return [];
-
-    const data = await res.json();
-    const list: Array<Record<string, unknown>> = data?.resultList?.result || [];
-    const out: PubMedRef[] = [];
-
-    for (const item of list) {
-      const title = String(item.title || "").replace(/\.$/, "").trim();
-      if (!title || title.length < 15) continue;
-      const authors = String(item.authorString || "").replace(/\.$/, "").trim();
-      const journal = String(item.journalTitle || item.journalInfo && (item.journalInfo as Record<string, unknown>).journal && ((item.journalInfo as Record<string, unknown>).journal as Record<string, unknown>).title || "").trim();
-      const year = String(item.pubYear || "").match(/\b(19\d\d|20\d\d)\b/)?.[1] || "";
-      const doi = typeof item.doi === "string" ? item.doi : undefined;
-      const pmid = typeof item.pmid === "string" && /^\d+$/.test(item.pmid) ? item.pmid : "";
-
-      out.push({
-        pmid,
-        title,
-        authors: authors.length > 80 ? authors.slice(0, 77) + "..." : authors,
-        journal,
-        year,
-        doi,
-        source: "Europe PMC"
-      });
-      if (out.length >= maxResults) break;
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-async function fetchOpenAlex(query: string, maxResults = 4): Promise<PubMedRef[]> {
-  try {
-    const terms = sanitizeQuery(query).split(" ").filter(Boolean).slice(0, 8).join(" ");
-    const url = `https://api.openalex.org/works?search=${encodeURIComponent(terms)}&per-page=${Math.min(maxResults + 4, 15)}&mailto=aipico@drraouf.com`;
-    const res = await fetch(url, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(API_TIMEOUT_MS)
-    });
-    if (!res.ok) return [];
-
-    const data = await res.json();
-    const results: Array<Record<string, unknown>> = data?.results || [];
-    const out: PubMedRef[] = [];
-
-    for (const item of results) {
-      const title = String(item.display_name || item.title || "").replace(/\.$/, "").trim();
-      if (!title || title.length < 15) continue;
-      const year = String(item.publication_year || "");
-      const doiRaw = typeof item.doi === "string" ? item.doi : "";
-      const doi = doiRaw.replace(/^https?:\/\/doi\.org\//i, "");
-
-      const pmidRaw = (item.ids as Record<string, unknown>)?.pmid;
-      const pmid = typeof pmidRaw === "string" ? pmidRaw.replace(/^https?:\/\/pubmed\.ncbi\.nlm\.nih\.gov\//, "").replace(/\//g, "") : "";
-
-      const primaryLoc = item.primary_location as Record<string, unknown> | undefined;
-      const sourceObj = primaryLoc?.source as Record<string, unknown> | undefined;
-      const journal = String(sourceObj?.display_name || "").trim();
-
-      const authorships = (item.authorships || []) as Array<{ author?: { display_name?: string } }>;
-      const authorsArr = authorships.map(a => a.author?.display_name).filter(Boolean);
-      const authors = authorsArr.length > 2 ? `${authorsArr[0]} et al.` : authorsArr.join(", ");
-
-      out.push({
-        pmid,
-        title,
-        authors,
-        journal,
-        year,
-        doi,
-        source: "OpenAlex"
-      });
-      if (out.length >= maxResults) break;
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-async function fetchCochraneCentral(query: string, maxResults = 4): Promise<PubMedRef[]> {
-  try {
-    const terms = sanitizeQuery(query).split(" ").filter(Boolean).slice(0, 5).map(t => `"${t}"`).join(" AND ");
-    const cochraneQuery = `(${terms}) AND (SRC:"Cochrane Central Register of Controlled Trials" OR SRC:"CENTRAL")`;
-    const url = `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(cochraneQuery)}&format=json&pageSize=${Math.min(maxResults + 4, 12)}&resultType=lite`;
-
-    const res = await fetch(url, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(API_TIMEOUT_MS)
-    });
-    if (!res.ok) return [];
-
-    const data = await res.json();
-    const list: Array<Record<string, unknown>> = data?.resultList?.result || [];
-    const out: PubMedRef[] = [];
-
-    for (const item of list) {
-      const title = String(item.title || "").replace(/\.$/, "").trim();
-      if (!title || title.length < 15) continue;
-      const authors = String(item.authorString || "").replace(/\.$/, "").trim();
-      const year = String(item.pubYear || "").match(/\b(19\d\d|20\d\d)\b/)?.[1] || "";
-      const doi = typeof item.doi === "string" ? item.doi : undefined;
-      const pmid = typeof item.pmid === "string" && /^\d+$/.test(item.pmid) ? item.pmid : "";
-
-      out.push({
-        pmid,
-        title,
-        authors: authors.length > 80 ? authors.slice(0, 77) + "..." : authors,
-        journal: "Cochrane CENTRAL",
-        year,
-        doi,
-        source: "Cochrane CENTRAL"
-      });
-      if (out.length >= maxResults) break;
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-async function fetchClinicalTrials(query: string, maxResults = 4): Promise<PubMedRef[]> {
-  try {
-    const terms = sanitizeQuery(query).split(" ").filter(Boolean).slice(0, 6).join(" ");
-    const url = `https://clinicaltrials.gov/api/v2/studies?query.term=${encodeURIComponent(terms)}&pageSize=${Math.min(maxResults + 2, 10)}&format=json`;
-    const res = await fetch(url, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(API_TIMEOUT_MS)
-    });
-    if (!res.ok) return [];
-
-    const data = await res.json();
-    const studies: Array<Record<string, unknown>> = data?.studies || [];
-    const out: PubMedRef[] = [];
-
-    for (const study of studies) {
-      const protocol = study.protocolSection as Record<string, unknown> | undefined;
-      const idModule = protocol?.identificationModule as Record<string, unknown> | undefined;
-      const nctId = String(idModule?.nctId || "");
-      const briefTitle = String(idModule?.briefTitle || "").trim();
-      if (!nctId || !briefTitle) continue;
-
-      const statusModule = protocol?.statusModule as Record<string, unknown> | undefined;
-      const startDate = String(statusModule?.startDateStruct && (statusModule.startDateStruct as Record<string, unknown>).date || "");
-      const year = startDate.match(/\b(20\d\d|19\d\d)\b/)?.[1] || "";
-
-      const sponsorModule = protocol?.sponsorCollaboratorsModule as Record<string, unknown> | undefined;
-      const leadSponsor = sponsorModule?.leadSponsor as Record<string, unknown> | undefined;
-      const sponsor = String(leadSponsor?.name || "").trim();
-
-      out.push({
-        pmid: "",
-        title: briefTitle,
-        authors: sponsor,
-        journal: `ClinicalTrials.gov ${nctId}`,
-        year,
-        source: "ClinicalTrials.gov"
-      });
-      if (out.length >= maxResults) break;
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-async function fetchSemanticScholar(query: string, maxResults = 4): Promise<PubMedRef[]> {
-  try {
-    const terms = sanitizeQuery(query).split(" ").filter(Boolean).slice(0, 6).join(" ");
-    const fields = "title,authors,year,journal,externalIds,openAccessPdf";
-    const endpoint = ["https://api.semanticscholar.org/graph/v1", "paper", "search"].join("/");
-    const url = `${endpoint}?query=${encodeURIComponent(terms)}&fields=${fields}&limit=${Math.min(Math.max(maxResults + 4, 8), 20)}`;
-    const res = await fetch(url, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(API_TIMEOUT_MS)
-    });
-    if (!res.ok) return [];
-
-    const data = await res.json();
-    const papers: Array<Record<string, unknown>> = data?.data || [];
-    const out: PubMedRef[] = [];
-
-    for (const p of papers) {
-      const title = String(p.title || "").replace(/\.$/, "").trim();
-      if (!title || title.length < 15) continue;
-      const year = p.year ? String(p.year) : "";
-      const externalIds = (p.externalIds || {}) as Record<string, unknown>;
-      const doi = typeof externalIds.DOI === "string" ? externalIds.DOI : undefined;
-      const pmid = typeof externalIds.PubMed === "string" ? externalIds.PubMed : "";
-
-      const journalObj = p.journal as Record<string, unknown> | undefined;
-      const journal = String(journalObj?.name || "").trim();
-
-      const authorsArr = Array.isArray(p.authors)
-        ? p.authors.map((a: { name?: string }) => a.name).filter(Boolean)
-        : [];
-      const authors = authorsArr.length > 2 ? `${authorsArr[0]} et al.` : authorsArr.join(", ");
-
-      out.push({
-        pmid,
-        title,
-        authors,
-        journal,
-        year,
-        doi,
-        source: "Semantic Scholar"
-      });
-      if (out.length >= maxResults) break;
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-async function fetchPreprints(query: string, maxResults = 4): Promise<PubMedRef[]> {
-  try {
-    const terms = sanitizeQuery(query).split(" ").filter(Boolean).slice(0, 6).join(" ");
-    const preprintQuery = `(${terms}) AND (SRC:"medrxiv" OR SRC:"biorxiv" OR PUBLISHER:"Cold Spring Harbor Laboratory")`;
-    const url = `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(preprintQuery)}&format=json&pageSize=${Math.min(maxResults + 4, 12)}&resultType=lite`;
-
-    const res = await fetch(url, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(API_TIMEOUT_MS)
-    });
-    if (!res.ok) return [];
-
-    const data = await res.json();
-    const list: Array<Record<string, unknown>> = data?.resultList?.result || [];
-    const out: PubMedRef[] = [];
-
-    for (const item of list) {
-      const title = String(item.title || "").replace(/\.$/, "").trim();
-      if (!title || title.length < 15) continue;
-      const authors = String(item.authorString || "").replace(/\.$/, "").trim();
-      const year = String(item.pubYear || "").match(/\b(20\d\d|19\d\d)\b/)?.[1] || "";
-      const doi = typeof item.doi === "string" ? item.doi : undefined;
-      const pmid = typeof item.pmid === "string" && /^\d+$/.test(item.pmid) ? item.pmid : "";
-
-      const bookOrJournal = String(item.bookTitle || item.journalTitle || "").toLowerCase();
-      const journal = bookOrJournal.includes("biorxiv")
-        ? "bioRxiv"
-        : bookOrJournal.includes("medrxiv")
-        ? "medRxiv"
-        : "Preprint (medRxiv/bioRxiv)";
-
-      out.push({
-        pmid,
-        title,
-        authors: authors.length > 80 ? authors.slice(0, 77) + "..." : authors,
-        journal,
-        year,
-        doi,
-        source: "Preprint"
-      });
-      if (out.length >= maxResults) break;
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-async function fetchCrossref(query: string, maxResults = 4): Promise<PubMedRef[]> {
-  try {
-    const terms = sanitizeQuery(query).split(" ").filter(Boolean).slice(0, 8).join(" ");
-    const url = `https://api.crossref.org/works?query.bibliographic=${encodeURIComponent(terms)}&rows=${Math.min(maxResults + 4, 15)}&mailto=aipico@drraouf.com`;
-    const res = await fetch(url, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(API_TIMEOUT_MS)
-    });
-    if (!res.ok) return [];
-
-    const data = await res.json();
-    const items: Array<Record<string, unknown>> = data?.message?.items || [];
-    const out: PubMedRef[] = [];
-
-    for (const item of items) {
-      const titleArr = item.title as string[] | undefined;
-      const title = (titleArr?.[0] || "").replace(/\.$/, "").trim();
-      if (!title || title.length < 15) continue;
-
-      const doi = typeof item.DOI === "string" ? item.DOI : undefined;
-      const containerArr = item["container-title"] as string[] | undefined;
-      const journal = containerArr?.[0] || "";
-
-      const issued = item.issued as Record<string, unknown> | undefined;
-      const dateParts = issued?.["date-parts"] as number[][] | undefined;
-      const year = dateParts?.[0]?.[0] ? String(dateParts[0][0]) : "";
-
-      const authorsArr = Array.isArray(item.author)
-        ? (item.author as Array<{ family?: string; given?: string }>).map(a => `${a.family || ""} ${a.given || ""}`.trim()).filter(Boolean)
-        : [];
-      const authors = authorsArr.length > 2 ? `${authorsArr[0]} et al.` : authorsArr.join(", ");
-
-      out.push({
-        pmid: "",
-        title,
-        authors,
-        journal,
-        year,
-        doi,
-        source: "Crossref"
-      });
-      if (out.length >= maxResults) break;
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-async function fetchReferencesBroad(
-  query: string,
-  maxResults = 8,
-  excluded: Set<string> = EMPTY_REF_SET
-): Promise<PubMedRef[]> {
-  const [pmRefs, cochraneRefs, trialsRefs, ssRefs, preRefs, epmcRefs, alexRefs, crossRefs] = await Promise.all([
-    fetchPubMedReferences(query, maxResults, excluded),
-    fetchCochraneCentral(query, Math.max(Math.floor(maxResults / 2), 3)),
-    fetchClinicalTrials(query, Math.max(Math.floor(maxResults / 2), 3)),
-    fetchSemanticScholar(query, Math.max(Math.floor(maxResults / 2), 3)),
-    fetchPreprints(query, Math.max(Math.floor(maxResults / 2), 3)),
-    fetchEuropePMC(query, maxResults),
-    fetchOpenAlex(query, maxResults),
-    fetchCrossref(query, maxResults)
-  ]);
-
-  return dedupeRefs([
-    ...pmRefs,
-    ...cochraneRefs,
-    ...trialsRefs,
-    ...ssRefs,
-    ...preRefs,
-    ...epmcRefs,
-    ...alexRefs,
-    ...crossRefs
-  ]);
-}
-
-function dedupeRefs(refs: PubMedRef[]): PubMedRef[] {
-  const seenPmid = new Set<string>();
-  const seenDoi = new Set<string>();
-  const seenTitle = new Set<string>();
-  const out: PubMedRef[] = [];
-
-  for (const r of refs) {
-    if (r.pmid && seenPmid.has(r.pmid)) continue;
-    const cleanDoi = (r.doi || "").toLowerCase().trim();
-    if (cleanDoi && seenDoi.has(cleanDoi)) continue;
-    const cleanT = r.title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 60);
-    if (cleanT && seenTitle.has(cleanT)) continue;
-
-    if (r.pmid) seenPmid.add(r.pmid);
-    if (cleanDoi) seenDoi.add(cleanDoi);
-    if (cleanT) seenTitle.add(cleanT);
-    out.push(r);
-  }
-  return out;
-}
-
-const TERM_REPLACEMENTS: Array<[RegExp, string]> = [
-  [/\bpoor\s+responder(?:s)?\b/gi, "poor ovarian response"],
-  [/\bivf\b/gi, "in vitro fertilization"],
-  [/\bicsi\b/gi, "intracytoplasmic sperm injection"],
-  [/\bpcos\b/gi, "polycystic ovary syndrome"],
-  [/\bohss\b/gi, "ovarian hyperstimulation syndrome"],
-  [/\bdor\b/gi, "diminished ovarian reserve"],
-  [/\brpl\b/gi, "recurrent pregnancy loss"],
-  [/\brif\b/gi, "recurrent implantation failure"],
-  [/\bpgt-?a\b/gi, "preimplantation genetic testing"],
-  [/\bamh\b/gi, "anti-mullerian hormone"],
-  [/\bfsh\b/gi, "follicle stimulating hormone"],
-  [/\blh\b/gi, "luteinizing hormone"],
-  [/\bgh\b/gi, "growth hormone"],
-  [/\bcoq10\b/gi, "coenzyme Q10"],
-  [/\bdhea\b/gi, "dehydroepiandrosterone"],
-  [/\bprp\b/gi, "platelet-rich plasma"],
-  [/\bet\b/gi, "embryo transfer"],
-  [/\bfet\b/gi, "frozen embryo transfer"],
-  [/\bcpr\b/gi, "clinical pregnancy rate"],
-  [/\blbr\b/gi, "live birth rate"]
-];
-
-function cleanTerms(s: string): string {
-  return TERM_REPLACEMENTS.reduce((acc, [re, repl]) => acc.replace(re, repl), s);
-}
-
-function sanitizeQuery(q: string): string {
-  const expanded = cleanTerms(q);
-  return expanded
-    .replace(/[^\w\s-]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-async function screenQueryLadder(
-  words: PicoWord[],
-  deadlineMs = 25_000
-): Promise<{ corpus: PubMedRef[]; totalRetrieved: number; relaxationLevel: 0 | 1 | 2 }> {
-  const startTime = Date.now();
-  let relaxationLevel: 0 | 1 | 2 = 0;
-  const allRetrieved: PubMedRef[] = [];
-
-  const runQuery = async (activeWords: PicoWord[]) => {
-    const qTerms = activeWords.map(w => `"${sanitizePhrase(w.word)}"`).join(" AND ");
-    const qPubMed = `${qTerms} ${HUMAN_SUBJECT_FILTER}`;
-    const qBroad = qTerms;
-
-    const [pmRefs, broadRefs] = await Promise.all([
-      fetchPubMedReferences(qPubMed, 20).catch(() => []),
-      fetchReferencesBroad(qBroad, 10).catch(() => [])
-    ]);
-    return dedupeRefs([...pmRefs, ...broadRefs]);
-  };
-
-  // L0: all words
-  const l0Refs = await runQuery(words);
-  allRetrieved.push(...l0Refs);
-  let deduped = dedupeRefs(allRetrieved);
-
-  // L1: if < 12 records, drop outcome-role words
-  if (deduped.length < 12 && Date.now() - startTime < deadlineMs) {
-    const l1Words = words.filter(w => w.role !== "outcome");
-    if (l1Words.length > 0 && l1Words.length < words.length) {
-      relaxationLevel = 1;
-      const l1Refs = await runQuery(l1Words);
-      allRetrieved.push(...l1Refs);
-      deduped = dedupeRefs(allRetrieved);
-    }
-  }
-
-  // L2: if still < 8 records, drop comparator-role words (keep Population + Intervention words)
-  if (deduped.length < 8 && Date.now() - startTime < deadlineMs) {
-    const l2Words = words.filter(w => w.role === "population" || w.role === "intervention");
-    const pCount = l2Words.filter(w => w.role === "population").length;
-    const iCount = l2Words.filter(w => w.role === "intervention").length;
-    if (pCount > 0 && iCount > 0 && l2Words.length < words.length) {
-      relaxationLevel = 2;
-      const l2Refs = await runQuery(l2Words);
-      allRetrieved.push(...l2Refs);
-      deduped = dedupeRefs(allRetrieved);
-    }
-  }
-
-  const totalRetrieved = deduped.length;
-  const corpus = deduped.slice(0, 30);
-  return { corpus, totalRetrieved, relaxationLevel };
 }
 
 function validateScreenLlmResponse(data: unknown): {
@@ -965,22 +437,21 @@ HARD RULES:
       const popWords = elements.filter(e => e.label.startsWith("P")).map(e => e.value.trim()).filter(Boolean);
       const intWords = elements.filter(e => e.label.startsWith("I")).map(e => e.value.trim()).filter(Boolean);
       const outWords = elements.filter(e => e.label.startsWith("O")).map(e => e.value.trim()).filter(Boolean);
-      const allWords = elements.map(e => e.value.trim()).filter(Boolean);
 
-      const mainTerms = allWords.map(w => `"${sanitizePhrase(w)}"`).join(" AND ");
-      const mainPubMed = `${mainTerms} ${HUMAN_SUBJECT_FILTER}`;
-      const mainBroad = mainTerms;
+      const picoWords: PicoWord[] = [
+        ...popWords.map(w => ({ word: w, role: "population" as const })),
+        ...intWords.map(w => ({ word: w, role: "intervention" as const })),
+        ...outWords.map(w => ({ word: w, role: "outcome" as const }))
+      ];
 
-      const [r1, r2, r3, r4, r5] = await Promise.all([
-        fetchPubMedReferences(mainPubMed, 30).catch(() => []),
-        fetchReferencesBroad(mainBroad, 15).catch(() => []),
-        fetchEuropePMC(mainBroad, 10).catch(() => []),
-        fetchOpenAlex(mainBroad, 10).catch(() => []),
-        fetchCochraneCentral(mainBroad, 10).catch(() => [])
-      ]);
+      const { records: initialRecords } = await retrieveLiterature(picoWords, {
+        maxRecords: 35,
+        includeOutcomeInQuery: false,
+        includeComparatorInQuery: true
+      });
 
-      let allRetrieved: PubMedRef[] = dedupeRefs([...r1, ...r2, ...r3, ...r4, ...r5]);
-      let scoredResult = scoreRecords(allRetrieved as AuditableRef[], phrase, category, blockedKeys);
+      let allRetrieved: AuditableRef[] = initialRecords;
+      let scoredResult = scoreRecords(allRetrieved, phrase, category, blockedKeys);
       let candidates = scoredResult.scored.filter(r => r.relevancePct >= 20);
 
       let usedVariants = false;
@@ -994,17 +465,10 @@ HARD RULES:
 
         for (const vWords of variants) {
           if (Date.now() - startTime >= 22_000) break;
-          const vTerms = vWords.map(w => `"${sanitizePhrase(w)}"`).join(" AND ");
-          const varPubMed = `${vTerms} ${HUMAN_SUBJECT_FILTER}`;
-          const varBroad = vTerms;
-
-          const [vr1, vr2] = await Promise.all([
-            fetchPubMedReferences(varPubMed, 20).catch(() => []),
-            fetchReferencesBroad(varBroad, 10).catch(() => [])
-          ]);
-          const newRefs = dedupeRefs([...allRetrieved, ...vr1, ...vr2]);
-          allRetrieved = newRefs;
-          scoredResult = scoreRecords(allRetrieved as AuditableRef[], phrase, category, blockedKeys);
+          const vPico: PicoWord[] = vWords.map(w => ({ word: w, role: "intervention" as const }));
+          const { records: varRecords } = await retrieveLiterature(vPico, { maxRecords: 20 });
+          allRetrieved = dedupeRefs([...allRetrieved, ...varRecords]);
+          scoredResult = scoreRecords(allRetrieved, phrase, category, blockedKeys);
           candidates = scoredResult.scored.filter(r => r.relevancePct >= 20);
           if (candidates.length >= 8) break;
         }

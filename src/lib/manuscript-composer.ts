@@ -43,9 +43,25 @@ export function formatPlainReference(
   style: CitationStyle,
   index?: number
 ): string {
-  const isPreprint = rec.source === "preprint" || String(rec.pmid || "").startsWith("pre:");
-  const isTrial = rec.source === "clinicaltrials" || String(rec.pmid || "").startsWith("ctg:");
-  const badge = isPreprint ? " [preprint — not peer reviewed]" : isTrial ? " [trial registration — not evidence of effect]" : "";
+  let badge = "";
+  if (
+    rec.evidenceType === "preprint" ||
+    rec.source?.toLowerCase() === "preprint" ||
+    String(rec.pmid || "").startsWith("pre:") ||
+    (rec.doi && (rec.doi.includes("10.21203/") || rec.doi.includes("10.1101/")))
+  ) {
+    badge = " [preprint — not peer reviewed]";
+  } else if (
+    rec.evidenceType === "trial_registration" ||
+    rec.source?.toLowerCase().includes("clinicaltrials") ||
+    String(rec.pmid || "").startsWith("ctg:")
+  ) {
+    badge = " [trial registration — no results]";
+  } else if (rec.evidenceType === "book_chapter" || rec.rawType === "book-chapter" || rec.rawType === "book_chapter") {
+    badge = " [book chapter]";
+  } else if (rec.evidenceType === "thesis" || rec.rawType === "dissertation") {
+    badge = " [thesis]";
+  }
 
   const title = rec.title ? `${rec.title.trim().replace(/\.$/, "")}${badge}.` : "Untitled study.";
   const journal = rec.journal ? `${rec.journal.trim().replace(/\.$/, "")}.` : "";
